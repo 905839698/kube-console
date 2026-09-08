@@ -1,0 +1,17 @@
+{
+  "type": "harbor-scan",
+  "properties": [
+    { "name": "image", "type": "string", "required": true, "description": "待扫描镜像（完整引用 registry/project/app:tag，可引用上游 build-image 的 $(tasks.xxx.results.imageRef)）" },
+    { "name": "credential", "type": "credential", "required": true, "description": "Harbor 凭证（用户名/密码或机器人账号，需该项目扫描权限）" },
+    { "name": "failSeverity", "type": "select", "required": false, "default": "high",
+      "options": [
+        { "value": "none", "label": "不阻断（仅记录）" },
+        { "value": "critical", "label": "Critical" },
+        { "value": "high", "label": "High 及以上" },
+        { "value": "medium", "label": "Medium 及以上" },
+        { "value": "low", "label": "Low 及以上" }
+      ], "description": "漏洞达到该等级即阻断流水线" },
+    { "name": "timeoutSeconds", "type": "number", "required": false, "default": 900, "description": "扫描等待超时（秒）" },
+    { "name": "preShell", "type": "text", "required": false, "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行" }
+  ]
+}

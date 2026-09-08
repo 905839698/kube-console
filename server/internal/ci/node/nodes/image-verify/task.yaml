@@ -1,0 +1,52 @@
+# image-verify Tekton Task 模板
+# 用 cosign 公钥验证镜像签名（PSK 模式，配合 Tekton Chains 或 cosign sign）。
+# 公钥来自 credential（type=cosign，data key: cosign_pub），
+# 由运行时统一经 envFrom.secretRef 注入为环境变量 cosign_pub，脚本用 env:// 直接引用。
+# 私有 registry：可选 registry 参数 + credential 需同时含 username/password
+# （envFrom 注入；注意 registry 类型凭证只存 dockerconfigjson，envFrom 不暴露，
+#  私有仓库验签请用 generic 类型凭证带 username/password）。
+name: image-verify
+description: "cosign verify {{image}}"
+params:
+  - name: image
+    type: string
+    default: "{{image}}"
+  - name: checkProvenance
+    type: string
+    default: "{{checkProvenance}}"
+  - name: registry
+    type: string
+    default: "{{registry}}"
+results:
+  - name: verify_result
+    description: "verified / failed"
+steps:
+  - name: verify
+    image: harbor.cqyxpt.site:8443/library/cosign:2.2.3
+    env:
+      # 非交互环境，避免 cosign 回退到 keyless（Fulcio/Rekor）
+      - name: COSIGN_EXPERIMENTAL
+        value: "false"
+    script: |
+      #!/bin/sh
+      set -e
+      IMAGE="{{image}}"
+      # 私有 registry 登录：生成 docker config 供 cosign 拉取签名附件
+      if [ -n "{{registry}}" ] && [ -n "$username" ] && [ -n "$password" ]; then
+        mkdir -p "$HOME/.docker"
+        printf '{"auths":{"%s":{"auth":"%s"}}}' "{{registry}}" \
+          "$(printf '%s:%s' "$username" "$password" | base64)" > "$HOME/.docker/config.json"
+        export DOCKER_CONFIG="$HOME/.docker"
+      fi
+      if [ "{{checkProvenance}}" = "true" ]; then
+        # cosign 2.x：--check-provenance 校验 SLSA provenance blob。
+        # 前提：Chains PSK 以 bundle 模式签名（signers.cosign.bundle=true），
+        # 公钥随 sigstore bundle 存放，--key 指向的公钥即可完成 provenance 校验。
+        echo "验证签名 + SLSA provenance: $IMAGE"
+        cosign verify --key "env://cosign_pub" --check-provenance "$IMAGE"
+      else
+        echo "验证签名: $IMAGE"
+        cosign verify --key "env://cosign_pub" "$IMAGE"
+      fi
+      printf '%s' "verified" > $(results.verify_result.path)
+      echo "image-verify: OK"

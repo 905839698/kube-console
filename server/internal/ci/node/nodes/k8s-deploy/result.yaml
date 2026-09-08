@@ -1,0 +1,3 @@
+artifacts: []
+outputs:
+  - deploy_status

@@ -1,0 +1,6 @@
+type: gradle-build
+name: Gradle 编译
+category: build
+icon: java
+version: "1.0"
+description: Gradle 构建（Java/Kotlin 等 JVM 项目）

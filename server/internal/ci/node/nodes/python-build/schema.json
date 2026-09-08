@@ -1,0 +1,63 @@
+{
+  "type": "python-build",
+  "properties": [
+    {
+      "name": "pythonVersion",
+      "type": "select",
+      "required": false,
+      "default": "3.11",
+      "options": [
+        {
+          "value": "3.9",
+          "label": "Python 3.9"
+        },
+        {
+          "value": "3.10",
+          "label": "Python 3.10"
+        },
+        {
+          "value": "3.11",
+          "label": "Python 3.11"
+        },
+        {
+          "value": "3.12",
+          "label": "Python 3.12"
+        }
+      ]
+    },
+    {
+      "name": "installCommand",
+      "type": "string",
+      "required": false,
+      "default": "pip install -r requirements.txt",
+      "description": "依赖安装命令"
+    },
+    {
+      "name": "testCommand",
+      "type": "string",
+      "required": false,
+      "default": "pytest",
+      "description": "测试命令（留空跳过）"
+    },
+    {
+      "name": "buildCommand",
+      "type": "text",
+      "required": false,
+      "default": "pip install build && python -m build",
+      "description": "打包命令（留空跳过）"
+    },
+    {
+      "name": "preShell",
+      "type": "text",
+      "required": false,
+      "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行"
+    },
+    {
+      "name": "cache",
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "启用项目级依赖缓存（挂载缓存 PVC，依赖包不再每次重新下载；同项目并发运行时可能因 RWO 卷排队，建议错峰或使用 RWX 存储）"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "type": "k8s-deploy",
+  "properties": [
+    { "name": "namespace", "type": "string", "required": false, "default": "default", "optionsSource": "k8s-ns", "description": "目标 namespace（下拉可选，也可手输；外部集群 kubeconfig 模式可任意填）" },
+    { "name": "deployTarget", "type": "string", "required": false, "optionsSource": "k8s-deployments", "description": "set image 目标 workload 名（下拉按 namespace 加载；填了即 set image 模式）" },
+    { "name": "deployTargetKind", "type": "select", "required": false, "default": "deployment", "options": [
+      { "value": "deployment", "label": "deployment" },
+      { "value": "statefulset", "label": "statefulset" },
+      { "value": "daemonset", "label": "daemonset" }
+    ], "description": "目标 workload 类型（跟随下拉选择自动设置）" },
+    { "name": "container", "type": "string", "required": false, "optionsSource": "k8s-container", "description": "set image 目标容器名（下拉按 workload 加载）" },
+    { "name": "manifests", "type": "text", "required": false, "description": "清单路径（workspace 内），多个逗号分隔，如 deploy/deployment.yaml（apply -f 模式使用；set image 模式留空）" },
+    { "name": "kubectlArgs", "type": "string", "required": false, "default": "apply -f", "description": "kubectl 子命令：apply -f 模式填 apply -f；set image 模式优先用上方 deployment/container 下拉，kubectlArgs 留作高级覆盖" },
+    { "name": "image", "type": "string", "required": false, "description": "set image 时的镜像（通常为上游 build-image 的 $(tasks.xxx.results.imageRef)）" },
+    { "name": "waitFor", "type": "string", "required": false, "description": "等待就绪，如 deployment/app（留空时按选中的 workload 自动等待；apply 模式留空跳过）" },
+    { "name": "credential", "type": "credential", "required": false, "description": "目标集群凭证（kubeconfig form 部署到外部集群；留空用 in-cluster ServiceAccount）" },
+    { "name": "preShell", "type": "text", "required": false, "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行" }
+  ]
+}

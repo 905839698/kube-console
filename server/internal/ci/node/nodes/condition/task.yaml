@@ -1,0 +1,10 @@
+# condition 是控制节点，不编译为 Tekton Task。
+# 本文件仅为满足 loader 的存在性检查；编译器对 condition 走 when 表达式分支逻辑。
+name: condition
+description: "control node (no-op)"
+steps:
+  - name: noop
+    image: harbor.cqyxpt.site:8443/library/alpine:3.19
+    script: |
+      #!/bin/sh
+      true

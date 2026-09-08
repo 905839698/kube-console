@@ -1,0 +1,20 @@
+{
+  "type": "sonar-scan",
+  "properties": [
+    { "name": "sonarHost", "type": "string", "required": true, "description": "SonarQube 地址，如 http://sonar.example.com" },
+    { "name": "token", "type": "credential", "required": false, "description": "SonarQube 分析令牌（credential）" },
+    { "name": "projectKey", "type": "string", "required": true, "description": "Sonar 项目 Key" },
+    { "name": "projectName", "type": "string", "required": false, "description": "Sonar 项目名（默认取 projectKey）" },
+    { "name": "language", "type": "select", "required": false, "default": "auto",
+      "options": [
+        { "value": "auto", "label": "自动检测" },
+        { "value": "java", "label": "Java" },
+        { "value": "js", "label": "JavaScript/TS" },
+        { "value": "py", "label": "Python" },
+        { "value": "go", "label": "Go" }
+      ] },
+    { "name": "qualityGate", "type": "boolean", "required": false, "default": false, "description": "等待质量门（阻断）" },
+    { "name": "args", "type": "text", "required": false, "description": "额外 sonar.* 参数（每行一个）" },
+    { "name": "preShell", "type": "text", "required": false, "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行" }
+  ]
+}

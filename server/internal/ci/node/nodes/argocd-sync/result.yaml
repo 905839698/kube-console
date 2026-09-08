@@ -1,0 +1,4 @@
+artifacts: []
+outputs:
+  - sync_status
+  - health_status

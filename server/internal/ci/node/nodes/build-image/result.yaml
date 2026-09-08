@@ -1,0 +1,6 @@
+artifacts:
+  - image
+  - sbom
+outputs:
+  - imageRef
+  - imageDigest

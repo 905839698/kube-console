@@ -1,0 +1,10 @@
+{
+  "type": "image-verify",
+  "properties": [
+    { "name": "image", "type": "string", "required": true, "description": "待验证镜像（可引用上游 imageRef）" },
+    { "name": "credential", "type": "credential", "required": true, "description": "含 cosign 公钥的凭证（data key: cosign_pub）" },
+    { "name": "registry", "type": "string", "required": false, "description": "私有仓库需登录（可选，credential 需含 registry 登录）" },
+    { "name": "checkProvenance", "type": "boolean", "required": false, "default": false, "description": "同时验证 SLSA provenance（需 Chains 启用）" },
+    { "name": "preShell", "type": "text", "required": false, "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行" }
+  ]
+}

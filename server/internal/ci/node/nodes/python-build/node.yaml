@@ -1,0 +1,6 @@
+type: python-build
+name: Python 编译
+category: build
+icon: python
+version: "1.0"
+description: Python 依赖安装 / 测试 / 打包

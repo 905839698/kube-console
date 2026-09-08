@@ -1,0 +1,6 @@
+type: sonar-scan
+name: SonarQube 扫描
+category: security
+icon: code
+version: "1.0"
+description: SonarQube 代码质量 / 安全扫描

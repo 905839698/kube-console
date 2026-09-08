@@ -1,0 +1,11 @@
+{
+  "type": "argocd-sync",
+  "properties": [
+    { "name": "appName", "type": "string", "required": true, "description": "ArgoCD Application 名称" },
+    { "name": "appNamespace", "type": "string", "required": false, "default": "argocd", "description": "Application 所在命名空间（默认 argocd）" },
+    { "name": "refresh", "type": "boolean", "required": false, "default": true, "description": "打 refresh 注解触发 ArgoCD 立即比对（自动同步策略下随即自动同步）" },
+    { "name": "wait", "type": "boolean", "required": false, "default": true, "description": "等待应用 Synced + Healthy" },
+    { "name": "timeoutSeconds", "type": "number", "required": false, "default": 600, "description": "等待超时（秒）" },
+    { "name": "credential", "type": "credential", "required": false, "description": "kubeconfig 凭证（可选）：ArgoCD 与 CI 不在同一集群时，填目标集群 kubeconfig；同集群留空走 in-cluster" }
+  ]
+}

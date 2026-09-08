@@ -1,0 +1,13 @@
+{
+  "type": "git-clone",
+  "properties": [
+    { "name": "url", "type": "string", "required": true, "description": "代码地址，如 https://git.example.com/demo.git" },
+    { "name": "branch", "type": "string", "required": false, "default": "main", "optionsSource": "git-branch", "description": "分支（下拉自动加载，可直接输入）" },
+    { "name": "tag", "type": "string", "required": false, "default": "", "optionsSource": "git-tag", "description": "Tag（优先于 branch，下拉自动加载，可直接输入）" },
+    { "name": "commit", "type": "string", "required": false, "default": "", "description": "指定 Commit（优先于 tag/branch）" },
+    { "name": "credential", "type": "credential", "required": false, "description": "Git 凭证（credential_id）" },
+    { "name": "shallow", "type": "boolean", "required": false, "default": true, "description": "浅克隆" },
+    { "name": "submodules", "type": "boolean", "required": false, "default": false, "description": "拉取 Submodule" },
+    { "name": "preShell", "type": "text", "required": false, "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行" }
+  ]
+}

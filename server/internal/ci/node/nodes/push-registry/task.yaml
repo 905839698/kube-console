@@ -1,0 +1,58 @@
+# push-registry Tekton Task 模板（skopeo，OCI 镜像复制）
+# 说明：BuildKit 构建即推送（build-image 的 buildctl --output type=image,push=true）；
+# 独立「重推」场景 BuildKit 无单独 push 命令，这里用 skopeo copy（OCI 标准，兼容自签名 TLS）。
+name: push-registry
+description: "skopeo copy -> {{image}}"
+params:
+  - name: image
+    type: string
+    default: "{{image}}"
+  - name: registry
+    type: string
+    default: "{{registry}}"
+results:
+  - name: imageRef
+    description: "完整镜像地址 registry/repo:tag"
+  - name: imageDigest
+    description: "镜像 digest（sha256:...）"
+steps:
+  - name: push
+    image: harbor.cqyxpt.site:8443/library/skopeo:latest
+    script: |
+      #!/bin/sh
+      set -e
+      IMAGE=$(printf '%s' "{{image}}" | tr -d '[:space:]')
+      # 目标地址：显式 registry 时重拼（取 image 最后一段 repo:tag）；否则原样
+      DEST="$IMAGE"
+      REG=$(printf '%s' "{{registry}}" | tr -d '[:space:]')
+      if [ -n "$REG" ]; then
+        case "$IMAGE" in
+          *:*) DEST="$REG/${IMAGE##*/}" ;;
+          *) DEST="$REG/$IMAGE" ;;
+        esac
+      fi
+      # Registry 认证：优先 dockerconfig 凭证文件（$DOCKER_CONFIG/config.json，skopeo --authfile），
+      # 回退 basic username/password 拼临时 config
+      AUTHFILE=""
+      if [ -n "$DOCKER_CONFIG" ] && [ -f "$DOCKER_CONFIG/config.json" ]; then
+        AUTHFILE="$DOCKER_CONFIG/config.json"
+      elif [ -n "$username" ] && [ -n "$password" ]; then
+        mkdir -p /tmp/docker-cfg
+        AUTH=$(printf '%s:%s' "$username" "$password" | base64)
+        cat > /tmp/docker-cfg/config.json <<EOF
+      {"auths":{"${DEST%%/*}":{"username":"$username","password":"$password","auth":"$AUTH"}}}
+      EOF
+        AUTHFILE=/tmp/docker-cfg/config.json
+      else
+        echo "WARN: 未注入 registry 凭证；仅匿名可推送的仓库能成功"
+      fi
+      # 自签名镜像仓库：跳过 TLS 校验（与 buildkitd 的 insecure 配置一致）
+      SKOPEO_AUTH=""
+      [ -n "$AUTHFILE" ] && SKOPEO_AUTH="--authfile $AUTHFILE"
+      # shellcheck disable=SC2086
+      skopeo copy --src-tls-verify=false --dest-tls-verify=false $SKOPEO_AUTH \
+        docker://"$IMAGE" docker://"$DEST"
+      printf '%s' "$DEST" > $(results.imageRef.path)
+      DIGEST=$(skopeo inspect --tls-verify=false $SKOPEO_AUTH --format '{{.Digest}}' docker://"$DEST" 2>/dev/null || true)
+      printf '%s' "${DIGEST:-}" > $(results.imageDigest.path)
+      echo "pushed $DEST"

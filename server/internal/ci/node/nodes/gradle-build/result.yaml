@@ -1,0 +1,4 @@
+artifacts:
+  - maven
+outputs:
+  - build_output

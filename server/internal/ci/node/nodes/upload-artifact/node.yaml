@@ -1,0 +1,6 @@
+type: upload-artifact
+name: 上传制品
+category: artifact
+icon: box
+version: "1.0"
+description: 上传制品到 Nexus / MinIO（jar/zip/apk/sbom 等）

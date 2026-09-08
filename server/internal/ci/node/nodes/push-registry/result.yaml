@@ -1,0 +1,5 @@
+artifacts:
+  - image
+outputs:
+  - imageRef
+  - imageDigest

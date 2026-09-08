@@ -1,0 +1,4 @@
+artifacts:
+  - vulnerability-report
+outputs:
+  - vuln_summary

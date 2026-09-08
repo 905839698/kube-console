@@ -1,0 +1,6 @@
+type: harbor-scan
+name: Harbor 镜像扫描（Trivy）
+category: security
+icon: harbor
+version: "1.0"
+description: 触发 Harbor 内置 Trivy 扫描并等待结果，按严重等级阻断流水线（无需独立 trivy 镜像）

@@ -1,0 +1,4 @@
+artifacts: []
+outputs:
+  - vuln_summary
+  - scan_status

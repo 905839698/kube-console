@@ -1,0 +1,6 @@
+type: maven-build
+name: Maven 编译
+category: build
+icon: java
+version: "1.0"
+description: Maven / Gradle 系 Java 编译

@@ -1,0 +1,4 @@
+artifacts: []
+outputs:
+  - commit_sha
+  - bumped

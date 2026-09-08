@@ -1,0 +1,10 @@
+{
+  "type": "push-registry",
+  "properties": [
+    { "name": "image", "type": "string", "required": true, "description": "待推送镜像（可引用上游 imageRef 输出）" },
+    { "name": "registry", "type": "string", "required": false, "description": "目标 Registry（默认取 image 前缀）" },
+    { "name": "credential", "type": "credential", "required": true, "description": "Registry 凭证（credential_id）" },
+    { "name": "sign", "type": "boolean", "required": false, "default": false, "description": "Cosign 签名（MVP-3）" },
+    { "name": "preShell", "type": "text", "required": false, "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行" }
+  ]
+}

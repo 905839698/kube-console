@@ -1,0 +1,94 @@
+# kube-console 后端 Deployment
+# 说明：本应用采用 kubeconfig 注册制管理集群（在界面中粘贴 kubeconfig 即可）。
+# 若部署在集群内并希望管理该集群自身，可通过 ConfigMap 挂载 kubeconfig，或在界面中粘贴本集群的 kubeconfig。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-console-server
+  namespace: kube-console
+  labels:
+    app: kube-console
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-console
+  template:
+    metadata:
+      labels:
+        app: kube-console
+    spec:
+      containers:
+        - name: server
+          # TODO: 替换为你自己的镜像（参考 server/Dockerfile）
+          image: harbor.example.com/library/kube-console-server:latest
+          ports:
+            - containerPort: 8080
+          env:
+            # 生产环境建议使用 PostgreSQL 或 MySQL（先创建数据库）
+            - name: KC_DB_DRIVER
+              value: sqlite
+            - name: KC_DB_DSN
+              value: /data/kube-console.db
+            - name: KC_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: kube-console-secrets
+                  key: jwt-secret
+            - name: KC_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kube-console-secrets
+                  key: admin-password
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /api/auth/login
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/auth/login
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: kube-console-data
+---
+# 数据持久化（sqlite 模式）
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kube-console-data
+  namespace: kube-console
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+# 密钥（先创建 Secret，或删除后直接使用明文默认值）
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kube-console-secrets
+  namespace: kube-console
+type: Opaque
+stringData:
+  jwt-secret: "change-me-to-a-long-random-string"
+  admin-password: "admin123"

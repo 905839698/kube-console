@@ -1,0 +1,135 @@
+# harbor-scan Tekton Task 模板
+# 镜像漏洞扫描直接使用 Harbor 内置 Trivy（Harbor 管理页已集成，无需独立 trivy 镜像/部署）：
+#   1) POST /v2.0/projects/{p}/repositories/{r}/artifacts/{ref}/scan   触发扫描
+#   2) GET  /v2.0/projects/{p}/repositories/{r}/artifacts/{ref}?with_scan_overview=true
+#      轮询 scan_status 直到 Success，读取 summary 各等级计数
+#   3) 达到 failSeverity 阈值即退出非 0 阻断流水线；报告详情见 Harbor UI（项目 → 制品）
+# 兼容自签证书（-k / wget --no-check-certificate）；curl 缺席时回退 busybox wget。
+# 凭证：envFrom 注入 $username/$password（Harbor 用户或机器人账号，basic auth）。
+name: harbor-scan
+description: "Harbor Trivy scan {{image}}"
+params:
+  - name: image
+    type: string
+    default: "{{image}}"
+  - name: failSeverity
+    type: string
+    default: "{{failSeverity}}"
+  - name: timeoutSeconds
+    type: string
+    default: "{{timeoutSeconds}}"
+workspaces:
+  - name: source
+results:
+  - name: vuln_summary
+    description: "漏洞摘要，如 CRITICAL=0;HIGH=2;MEDIUM=7;LOW=0"
+  - name: scan_status
+    description: "Harbor 扫描状态（Success/Error）"
+steps:
+  - name: scan
+    image: harbor.cqyxpt.site:8443/library/git:2.43.4
+    script: |
+      #!/bin/sh
+      # 不 set -e：网络调用需自行判断状态码；按 failSeverity 决定最终退出码
+      cd $(workspaces.source.path)
+
+      IMAGE="$(params.image)"
+      FAIL_SEV="$(params.failSeverity)"
+      FAIL_SEV="${FAIL_SEV:-high}"
+      TIMEOUT="$(params.timeoutSeconds)"
+      TIMEOUT="${TIMEOUT:-900}"
+
+      # ---- 解析镜像引用（兼容 :tag 与 @digest）----
+      case "$IMAGE" in
+        *@*)
+          REPO_PATH="${IMAGE%%@*}"; REFERENCE="${IMAGE##*@}" ;;
+        *:*)
+          REPO_PATH="${IMAGE%:*}";  REFERENCE="${IMAGE##*:}" ;;
+        *) echo "ERROR: 镜像引用缺少 tag/digest: $IMAGE" >&2; exit 1 ;;
+      esac
+      HOST="${REPO_PATH%%/*}"
+      REST="${REPO_PATH#*/}"
+      PROJECT="${REST%%/*}"
+      REPO="${REST#*/}"
+      [ -z "$REPO" ] || [ "$REPO" = "$REST" ] && { echo "ERROR: 镜像引用格式应为 registry/project/repo:tag" >&2; exit 1; }
+      REPO_ENC=$(printf '%s' "$REPO" | sed 's|/|%2F|g')
+      BASE="https://$HOST/v2.0/projects/$PROJECT/repositories/$REPO_ENC/artifacts"
+      echo "Harbor: project=$PROJECT repo=$REPO reference=$REFERENCE"
+
+      # ---- 认证（basic）----
+      B64=$(printf '%s' "$username:$password" | base64 | tr -d '\n')
+
+      # ---- HTTP 封装：curl 优先，busybox wget 兜底（自签证书均跳过校验）----
+      http() { # $1=method $2=url $3=bodyfile(可选)；输出 body 到 /tmp/hb_body，返回状态码
+        if command -v curl >/dev/null 2>&1; then
+          if [ -n "$3" ]; then
+            curl -sk -u "$username:$password" -X "$1" -H 'Content-Type: application/json' --data-binary @"$3" -o /tmp/hb_body -w '%{http_code}' "$2"
+          else
+            curl -sk -u "$username:$password" -X "$1" -o /tmp/hb_body -w '%{http_code}' "$2"
+          fi
+        else
+          EXTRA=""
+          [ -n "$3" ] && EXTRA="--post-data=$(cat "$3")"
+          CODE=$(wget --no-check-certificate -q -U "ci-platform" \
+            --header "Authorization: Basic $B64" --header 'Content-Type: application/json' \
+            --server-response --method "$1" $EXTRA -O /tmp/hb_body "$2" 2>&1 | grep -o 'HTTP/[0-9.]* [0-9]*' | tail -n1 | awk '{print $2}')
+          [ -n "$CODE" ] || CODE=000
+          echo "$CODE"
+        fi
+      }
+
+      # ---- 触发扫描 ----
+      CODE=$(http POST "$BASE/$REFERENCE/scan" /dev/null)
+      case "$CODE" in
+        202|200|201) echo "扫描已触发" ;;
+        409) echo "已有扫描在进行中，直接轮询结果" ;;
+        401|403) echo "ERROR: Harbor 认证/权限失败（HTTP $CODE），检查凭证与项目权限" >&2; exit 1 ;;
+        404) echo "ERROR: 制品不存在（HTTP 404）：$IMAGE" >&2; exit 1 ;;
+        *) echo "ERROR: 触发扫描返回 HTTP $CODE" >&2; head -c 300 /tmp/hb_body >&2; exit 1 ;;
+      esac
+
+      # ---- 轮询扫描结果 ----
+      DEADLINE=$(( $(date +%s) + TIMEOUT ))
+      SCAN_STATUS="NotScanned"
+      while :; do
+        CODE=$(http GET "$BASE/$REFERENCE?with_scan_overview=true" "")
+        if [ "$CODE" != "200" ]; then
+          echo "WARN: 查询制品返回 HTTP $CODE，重试..." >&2
+        else
+          SCAN_STATUS=$(grep -o '"scan_status":"[A-Za-z]*"' /tmp/hb_body | head -n1 | cut -d'"' -f4)
+          SCAN_STATUS="${SCAN_STATUS:-Unknown}"
+          case "$SCAN_STATUS" in
+            Success|Error) break ;;
+          esac
+          echo "[$(date +%H:%M:%S)] 扫描状态: $SCAN_STATUS"
+        fi
+        [ "$(date +%s)" -ge "$DEADLINE" ] && { echo "ERROR: 扫描等待超时（${TIMEOUT}s）" >&2; exit 1; }
+        sleep 10
+      done
+      if [ "$SCAN_STATUS" != "Success" ]; then
+        echo "ERROR: Harbor 扫描失败（scan_status=$SCAN_STATUS），请在 Harbor UI 查看扫描器日志" >&2
+        exit 1
+      fi
+
+      # ---- 汇总各等级计数（内层 summary 键）----
+      S=""
+      for SEV in Critical High Medium Low Unknown Negligible; do
+        C=$(grep -o "\"$SEV\":[0-9]*" /tmp/hb_body | head -n1 | cut -d: -f2)
+        C="${C:-0}"
+        S="${S:+$S;}${SEV^^}=$C"
+        eval "N_$SEV=$C" 2>/dev/null || true
+      done
+      printf '%s' "$S" > $(results.vuln_summary.path)
+      printf '%s' "Success" > $(results.scan_status.path)
+      echo "漏洞摘要: $S"
+
+      # ---- 阈值阻断 ----
+      fail() { echo "ERROR: 发现 $1 级及以上漏洞（CRITICAL=${N_Critical:-0} HIGH=${N_High:-0} MEDIUM=${N_Medium:-0} LOW=${N_Low:-0}），流水线阻断。报告详见 Harbor UI。" >&2; exit 1; }
+      case "$FAIL_SEV" in
+        critical) [ "${N_Critical:-0}" -gt 0 ] && fail Critical ;;
+        high)     [ "${N_Critical:-0}" -gt 0 -o "${N_High:-0}" -gt 0 ] && fail "High" ;;
+        medium)   [ "${N_Critical:-0}" -gt 0 -o "${N_High:-0}" -gt 0 -o "${N_Medium:-0}" -gt 0 ] && fail "Medium" ;;
+        low)      [ "${N_Critical:-0}" -gt 0 -o "${N_High:-0}" -gt 0 -o "${N_Medium:-0}" -gt 0 -o "${N_Low:-0}" -gt 0 ] && fail "Low" ;;
+        none|*)   : ;;
+      esac
+      echo "漏洞扫描通过（阈值: $FAIL_SEV）"

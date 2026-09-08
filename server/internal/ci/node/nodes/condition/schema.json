@@ -1,0 +1,28 @@
+{
+  "type": "condition",
+  "properties": [
+    { "name": "source", "type": "select", "required": true, "default": "param",
+      "options": [
+        { "value": "param", "label": "触发参数" },
+        { "value": "taskResult", "label": "上游任务结果" }
+      ], "description": "判断依据：流水线参数，或上游任务产出的 result" },
+    { "name": "param", "type": "select", "required": false, "default": "GIT_BRANCH",
+      "options": [
+        { "value": "GIT_BRANCH", "label": "Git 分支" },
+        { "value": "GIT_COMMIT", "label": "Git Commit" },
+        { "value": "GIT_REPO", "label": "Git 仓库" }
+      ], "description": "比较的流水线参数（判断依据选“触发参数”时必填）" },
+    { "name": "task", "type": "string", "optionsSource": "upstream-task",
+      "description": "产出结果的上游节点（判断依据选“上游任务结果”时必填）" },
+    { "name": "result", "type": "string", "optionsSource": "task-result",
+      "description": "比较的结果名（该节点产出的 result）" },
+    { "name": "op", "type": "select", "required": true, "default": "==",
+      "options": [
+        { "value": "==", "label": "等于" },
+        { "value": "!=", "label": "不等于" },
+        { "value": "contains", "label": "包含" },
+        { "value": "notcontains", "label": "不包含" }
+      ], "description": "比较运算符" },
+    { "name": "value", "type": "string", "required": true, "description": "比较值，如 main / dist" }
+  ]
+}

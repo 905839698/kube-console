@@ -1,0 +1,6 @@
+type: gitops-bump
+name: GitOps 更新镜像
+category: deploy
+icon: gitops
+version: "1.0"
+description: 更新 Git 配置仓库中的镜像引用并推送，交由 ArgoCD 同步（GitOps CD 推荐方式）

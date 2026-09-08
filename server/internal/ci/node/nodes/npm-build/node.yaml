@@ -1,0 +1,6 @@
+type: npm-build
+name: NPM 编译
+category: build
+icon: npm
+version: "1.0"
+description: npm / pnpm / yarn 前端或 Node 编译

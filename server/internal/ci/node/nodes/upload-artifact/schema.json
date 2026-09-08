@@ -1,0 +1,25 @@
+{
+  "type": "upload-artifact",
+  "properties": [
+    { "name": "path", "type": "string", "required": true, "description": "制品路径 / 通配，如 target/*.jar" },
+    { "name": "type", "type": "select", "required": false, "default": "generic",
+      "options": [
+        { "value": "maven", "label": "Maven" },
+        { "value": "npm", "label": "npm" },
+        { "value": "zip", "label": "ZIP/TAR" },
+        { "value": "sbom", "label": "SBOM" },
+        { "value": "generic", "label": "其它" }
+      ] },
+    { "name": "storage", "type": "select", "required": false, "default": "nexus",
+      "options": [
+        { "value": "nexus", "label": "Nexus" },
+        { "value": "minio", "label": "MinIO" }
+      ] },
+    { "name": "repository", "type": "string", "required": false, "default": "releases", "description": "目标仓库名" },
+    { "name": "version", "type": "string", "required": false, "description": "制品版本（默认取 GIT_COMMIT）" },
+    { "name": "nexusBase", "type": "string", "required": false, "default": "", "description": "Nexus 基地址（含 scheme），如 http://nexus:8081；留空取服务端 CI_NEXUS_URL 注入" },
+    { "name": "minioEndpoint", "type": "string", "required": false, "default": "", "description": "MinIO 端点 host:port（不含 scheme，供 mc alias set），如 minio:9000；留空取服务端 CI_MINIO_ENDPOINT 注入" },
+    { "name": "minioBucket", "type": "string", "required": false, "default": "", "description": "MinIO 桶名，如 ci-artifacts；留空取服务端 CI_MINIO_BUCKET 注入" },
+    { "name": "preShell", "type": "text", "required": false, "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行" }
+  ]
+}

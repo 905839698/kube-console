@@ -1,0 +1,5 @@
+artifacts:
+  - npm
+  - zip
+outputs:
+  - build_output

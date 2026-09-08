@@ -1,0 +1,6 @@
+type: argocd-sync
+name: ArgoCD 同步
+category: deploy
+icon: argocd
+version: "1.0"
+description: 触发 ArgoCD 应用刷新并等待 Healthy/Synced（GitOps CD 的收口节点）

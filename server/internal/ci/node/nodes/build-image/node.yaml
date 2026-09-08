@@ -1,0 +1,6 @@
+type: build-image
+name: 构建镜像
+category: build
+icon: docker
+version: "1.0"
+description: Buildah/Kaniko 构建容器镜像（不用 DinD）

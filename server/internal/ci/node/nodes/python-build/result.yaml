@@ -1,0 +1,4 @@
+artifacts:
+  - generic
+outputs:
+  - build_output

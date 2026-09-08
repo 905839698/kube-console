@@ -1,0 +1,6 @@
+type: image-verify
+name: 镜像签名验证
+category: security
+icon: sign
+version: "1.0"
+description: cosign 验证镜像签名（配合 Tekton Chains / cosign 签名）

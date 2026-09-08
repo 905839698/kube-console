@@ -1,0 +1,83 @@
+# git-clone Tekton Task 模板
+name: git-clone
+description: Clone {{url}}
+params:
+  - name: url
+    type: string
+    default: "{{url}}"
+  - name: branch
+    type: string
+    default: "{{branch}}"
+  - name: tag
+    type: string
+    default: "{{tag}}"
+  - name: commit
+    type: string
+    default: "{{commit}}"
+  - name: shallow
+    type: string
+    default: "{{shallow}}"
+  - name: submodules
+    type: string
+    default: "{{submodules}}"
+workspaces:
+  - name: source
+results:
+  - name: git_commit
+    description: Commit SHA
+  - name: git_branch
+    description: 分支 / revision
+  - name: git_url
+    description: 仓库地址
+steps:
+  - name: clone
+    image: harbor.cqyxpt.site:8443/library/git:2.43.4
+    script: |
+      #!/bin/sh
+      set -e
+      cd $(workspaces.source.path)
+      # revision 优先级：commit > tag > branch
+      REVISION="$(params.commit)"
+      [ -z "$REVISION" ] && REVISION="$(params.tag)"
+      [ -z "$REVISION" ] && REVISION="$(params.branch)"
+      CLONE_ARGS=""
+      # 浅克隆：shallow=true（schema 默认）传 --depth 1；false 为完整克隆
+      case "$(params.shallow)" in
+        true|True|TRUE|1) CLONE_ARGS="--depth 1" ;;
+      esac
+      [ "$(params.submodules)" = "true" ] && CLONE_ARGS="$CLONE_ARGS --recurse-submodules"
+      # 凭证注入（私有仓库）：Secret 经 envFrom 注入 username/password/token
+      # 兼容 http/https 仓库地址（保留原协议）；纯 shell 拼接，避免密码特殊字符被 sed 转义
+      URL="$(params.url)"
+      if [ -n "$token" ]; then
+        case "$URL" in
+          https://*) URL="https://oauth2:$token@${URL#https://}" ;;
+          http://*)  URL="http://oauth2:$token@${URL#http://}" ;;
+          *) echo "unsupported repo url scheme: $URL" >&2; exit 1 ;;
+        esac
+      elif [ -n "$username" ] && [ -n "$password" ]; then
+        case "$URL" in
+          https://*) URL="https://$username:$password@${URL#https://}" ;;
+          http://*)  URL="http://$username:$password@${URL#http://}" ;;
+          *) echo "unsupported repo url scheme: $URL" >&2; exit 1 ;;
+        esac
+      fi
+      git clone $CLONE_ARGS "$URL" .
+      # 切到目标 revision（commit > tag > branch）；fetch/checkout 失败即任务失败
+      if [ -n "$REVISION" ] && [ "$REVISION" != "HEAD" ]; then
+        if git rev-parse --verify --quiet "refs/heads/$REVISION" >/dev/null; then
+          # 本地分支已存在（= 默认分支），直接切换
+          git checkout -q "$REVISION"
+        elif git rev-parse --verify --quiet "refs/remotes/origin/$REVISION" >/dev/null; then
+          # 完整克隆：远端跟踪分支已在，建本地分支跟踪它
+          git checkout -q -b "$REVISION" "origin/$REVISION"
+        else
+          # 浅克隆的非默认分支 / tag / commit：拉到 FETCH_HEAD 再建本地分支
+          git fetch --depth 1 origin "$REVISION"
+          git checkout -q -b "$REVISION" FETCH_HEAD
+        fi
+      fi
+      # result 必须无尾换行（echo 会带 \n，下游任务引用该 result 做镜像 tag 等会被污染）
+      printf '%s' "$(git rev-parse HEAD)" > $(results.git_commit.path)
+      printf '%s' "$REVISION" > $(results.git_branch.path)
+      printf '%s' "$(params.url)" > $(results.git_url.path)

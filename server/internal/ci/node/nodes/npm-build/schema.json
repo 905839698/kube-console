@@ -1,0 +1,79 @@
+{
+  "type": "npm-build",
+  "properties": [
+    {
+      "name": "packageManager",
+      "type": "select",
+      "required": false,
+      "default": "npm",
+      "options": [
+        {
+          "value": "npm",
+          "label": "npm"
+        },
+        {
+          "value": "pnpm",
+          "label": "pnpm"
+        },
+        {
+          "value": "yarn",
+          "label": "yarn"
+        }
+      ]
+    },
+    {
+      "name": "nodeVersion",
+      "type": "select",
+      "required": false,
+      "default": "20",
+      "options": [
+        {
+          "value": "18",
+          "label": "Node 18"
+        },
+        {
+          "value": "20",
+          "label": "Node 20"
+        },
+        {
+          "value": "22",
+          "label": "Node 22"
+        }
+      ]
+    },
+    {
+      "name": "installCommand",
+      "type": "string",
+      "required": false,
+      "default": "install",
+      "description": "安装命令（如 ci）"
+    },
+    {
+      "name": "buildCommand",
+      "type": "text",
+      "required": false,
+      "default": "build",
+      "description": "构建命令"
+    },
+    {
+      "name": "outputDir",
+      "type": "string",
+      "required": false,
+      "default": "dist",
+      "description": "输出目录"
+    },
+    {
+      "name": "preShell",
+      "type": "text",
+      "required": false,
+      "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行"
+    },
+    {
+      "name": "cache",
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "启用项目级依赖缓存（挂载缓存 PVC，依赖包不再每次重新下载；同项目并发运行时可能因 RWO 卷排队，建议错峰或使用 RWX 存储）"
+    }
+  ]
+}

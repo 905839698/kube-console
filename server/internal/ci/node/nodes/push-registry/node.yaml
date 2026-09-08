@@ -1,0 +1,6 @@
+type: push-registry
+name: 推送镜像
+category: deploy
+icon: upload
+version: "1.0"
+description: 推送镜像到 Harbor/Registry（凭证引用，不填密码）

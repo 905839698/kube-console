@@ -1,0 +1,80 @@
+# sonar-scan Tekton Task 模板
+name: sonar-scan
+description: "SonarQube scan"
+params:
+  - name: sonarHost
+    type: string
+    default: "{{sonarHost}}"
+  - name: projectKey
+    type: string
+    default: "{{projectKey}}"
+  - name: projectName
+    type: string
+    default: "{{projectName}}"
+  - name: language
+    type: string
+    default: "{{language}}"
+  - name: qualityGate
+    type: string
+    default: "{{qualityGate}}"
+  - name: args
+    type: string
+    default: "{{args}}"
+workspaces:
+  - name: source
+results:
+  - name: sonar_webhook
+    description: "分析完成标记"
+steps:
+  - name: scan
+    image: harbor.cqyxpt.site:8443/library/sonar-scanner-cli:11
+    env:
+      - name: SONAR_HOST_URL
+        value: "{{sonarHost}}"
+    script: |
+      #!/bin/sh
+      set -e
+      cd $(workspaces.source.path)
+      # 令牌经 credential secret 注入（envFrom，key: password）
+      [ -n "$password" ] && export SONAR_TOKEN="$password"
+      ARGS="-Dsonar.projectKey={{projectKey}}"
+      [ -n "{{projectName}}" ] && ARGS="$ARGS -Dsonar.projectName={{projectName}}"
+      # 语言（auto 时交给 scanner 自动检测）
+      [ -n "{{language}}" ] && [ "{{language}}" != "auto" ] && ARGS="$ARGS -Dsonar.language={{language}}"
+      # 额外 sonar.* 参数（每行一个，允许 -D 前缀或缺省）
+      EXTRA=""
+      if [ -n "{{args}}" ]; then
+        for line in $(echo "{{args}}" | tr '\n' ' '); do
+          case "$line" in
+            -D*) EXTRA="$EXTRA $line" ;;
+            *)   EXTRA="$EXTRA -D$line" ;;
+          esac
+        done
+      fi
+      sonar-scanner $ARGS $EXTRA
+      # 质量门：true 时轮询 quality gate 状态，未通过则阻断
+      if [ "{{qualityGate}}" = "true" ]; then
+        GATE_URL="$SONAR_HOST_URL/api/qualitygates/projectStatus?projectKey={{projectKey}}"
+        STATUS=""
+        i=0
+        while [ "$i" -lt 12 ]; do
+          if command -v wget >/dev/null 2>&1; then
+            STATUS=$(wget -qO- --no-check-certificate \
+              --header="Authorization: Bearer ${SONAR_TOKEN:-}" "$GATE_URL" 2>/dev/null \
+              | tr -d '\\' | grep -o '"status":"[A-Z_]*"' | head -1 \
+              | sed 's/.*"status":"\([A-Z_]*\)".*/\1/')
+          else
+            STATUS=$(curl -fsS -H "Authorization: Bearer ${SONAR_TOKEN:-}" "$GATE_URL" 2>/dev/null \
+              | tr -d '\\' | grep -o '"status":"[A-Z_]*"' | head -1 \
+              | sed 's/.*"status":"\([A-Z_]*\)".*/\1/')
+          fi
+          case "$STATUS" in
+            OK|ERROR|NO_ANALYSIS) break ;;
+          esac
+          sleep 15
+          i=$((i+1))
+        done
+        echo "quality gate status: ${STATUS:-UNKNOWN}"
+        [ "$STATUS" = "OK" ] || { echo "质量门未通过（${STATUS:-UNKNOWN}），阻断流水线"; exit 1; }
+      fi
+      printf '%s' "done" > $(results.sonar_webhook.path)

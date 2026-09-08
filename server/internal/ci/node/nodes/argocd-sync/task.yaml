@@ -1,0 +1,86 @@
+# argocd-sync Tekton Task 模板
+# 通过 kubectl 读写 ArgoCD 的 Application CRD（applications.argoproj.io）：
+#   1) 可选打 argocd.argoproj.io/refresh=normal 注解触发立即比对；
+#      Application 启用 automated sync 策略时，OutOfSync 后 ArgoCD 自动同步（GitOps 标准姿势）。
+#   2) 轮询 status.sync.status / status.health.status 直至 Synced + Healthy。
+# ArgoCD 与 CI 同集群时留空 credential（in-cluster ServiceAccount，需 RBAC 见 deployments/argocd/）；
+# 外部集群时填 kubeconfig 凭证（runtime 挂载并注入 KUBECONFIG，kubectl 自动读取）。
+name: argocd-sync
+description: "argocd {{appName}} wait healthy"
+params:
+  - name: appName
+    type: string
+    default: "{{appName}}"
+  - name: appNamespace
+    type: string
+    default: "{{appNamespace}}"
+  - name: refresh
+    type: string
+    default: "{{refresh}}"
+  - name: wait
+    type: string
+    default: "{{wait}}"
+  - name: timeoutSeconds
+    type: string
+    default: "{{timeoutSeconds}}"
+results:
+  - name: sync_status
+    description: 同步状态（Synced/OutOfSync/...）
+  - name: health_status
+    description: 健康状态（Healthy/Degraded/...）
+steps:
+  - name: sync
+    image: harbor.cqyxpt.site:8443/library/kubectl:1.29
+    script: |
+      #!/bin/bash
+      set -e
+      APP="$(params.appName)"
+      NS="$(params.appNamespace)"
+      NS="${NS:-argocd}"
+      TIMEOUT="$(params.timeoutSeconds)"
+      TIMEOUT="${TIMEOUT:-600}"
+      RES="applications.argoproj.io"
+
+      # 应用必须已存在（GitOps：Application 由 Git 声明，不在 CI 里创建）
+      kubectl -n "$NS" get "$RES" "$APP" >/dev/null || { echo "ERROR: Application $NS/$APP 不存在（请先在 Git/ArgoCD 中创建）" >&2; exit 1; }
+
+      # 触发刷新：ArgoCD 控制器看到注解后立即比对 Git（automated sync 下随即自动同步）
+      case "$(params.refresh)" in
+        true|True|TRUE|1)
+          kubectl -n "$NS" annotate "$RES" "$APP" argocd.argoproj.io/refresh=normal --overwrite >/dev/null
+          echo "已触发刷新: $NS/$APP"
+          ;;
+      esac
+
+      # 等待 Synced + Healthy
+      case "$(params.wait)" in
+        true|True|TRUE|1)
+          DEADLINE=$(( $(date +%s) + TIMEOUT ))
+          while :; do
+            SYNC=$(kubectl -n "$NS" get "$RES" "$APP" -o jsonpath='{.status.sync.status}' 2>/dev/null || echo Unknown)
+            HEALTH=$(kubectl -n "$NS" get "$RES" "$APP" -o jsonpath='{.status.health.status}' 2>/dev/null || echo Unknown)
+            echo "[$(date +%H:%M:%S)] sync=$SYNC health=$HEALTH"
+            if [ "$SYNC" = "Synced" ] && [ "$HEALTH" = "Healthy" ]; then
+              break
+            fi
+            if [ "$HEALTH" = "Degraded" ]; then
+              echo "ERROR: 应用进入 Degraded 状态，请在 ArgoCD UI 查看事件与 Pod 日志" >&2
+              kubectl -n "$NS" get "$RES" "$APP" -o jsonpath='{.status.conditions}' >&2 || true
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "ERROR: 等待超时（${TIMEOUT}s），最后状态 sync=$SYNC health=$HEALTH" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          ;;
+        *)
+          SYNC=$(kubectl -n "$NS" get "$RES" "$APP" -o jsonpath='{.status.sync.status}' 2>/dev/null || echo Unknown)
+          HEALTH=$(kubectl -n "$NS" get "$RES" "$APP" -o jsonpath='{.status.health.status}' 2>/dev/null || echo Unknown)
+          ;;
+      esac
+
+      printf '%s' "$SYNC" > $(results.sync_status.path)
+      printf '%s' "$HEALTH" > $(results.health_status.path)
+      echo "ArgoCD 应用 $NS/$APP: sync=$SYNC health=$HEALTH"

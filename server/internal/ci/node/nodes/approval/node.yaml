@@ -1,0 +1,6 @@
+type: approval
+name: 人工审批
+category: control
+icon: audit
+version: "1.0"
+description: 流水线在此暂停，等待人工在平台通过/驳回

@@ -1,0 +1,6 @@
+type: go-build
+name: Go 编译
+category: build
+icon: gopher
+version: "1.0"
+description: Go 构建 / 测试 / 静态检查

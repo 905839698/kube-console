@@ -1,0 +1,205 @@
+# build-image Tekton Task 模板（BuildKit buildctl + buildkitd，非 DinD）
+# 构建并推送：buildctl 连集群内 buildkitd（deployments/buildkit.yaml），
+# buildkitd 兼容自签名 Harbor（buildkitd.toml insecure），基础镜像拉取与产物推送都走它。
+# 镜像漏洞扫描由 Harbor 内置 Trivy 扫描器承担（推送后自动扫描），本节点不含扫描 step。
+name: build-image
+description: "BuildKit build {{registry}}/{{repository}}:{{tag}}"
+params:
+  - name: dockerfile
+    type: string
+    default: "{{dockerfile}}"
+  - name: context
+    type: string
+    default: "{{context}}"
+  - name: registry
+    type: string
+    default: "{{registry}}"
+  - name: repository
+    type: string
+    default: "{{repository}}"
+  - name: tag
+    type: string
+    default: "{{tag}}"
+  - name: generateSBOM
+    type: string
+    default: "{{generateSBOM}}"
+  - name: configFiles
+    type: string
+    default: "{{configFiles}}"
+  - name: buildkitdAddr
+    type: string
+    default: "{{buildkitdAddr}}"
+workspaces:
+  - name: source
+results:
+  - name: imageRef
+    description: "完整镜像地址 registry/repo:tag"
+  - name: imageDigest
+    description: "镜像 digest（sha256:...）"
+  - name: sbom_path
+    description: "workspace 内 SBOM 文件路径（生成时）"
+steps:
+  - name: build-and-push
+    # moby/buildkit 镜像含 buildctl（gRPC 客户端）；buildkitd 是集群内共享构建器服务
+    image: harbor.cqyxpt.site:8443/library/buildkit:stable
+    env:
+      - name: IMAGE
+        value: "{{registry}}/{{repository}}:{{tag}}"
+    script: |
+      #!/bin/sh
+      set -e
+      cd "$(workspaces.source.path)/{{context}}" 2>/dev/null || cd $(workspaces.source.path)
+      # 前置 shell（可选）：主步骤前在同一容器/工作区执行
+      {{preShell}}
+      # 自签名仓库：registry token 获取由 buildctl 客户端发起（buildkitd 经
+      # session Auth.FetchToken 委托给客户端），客户端进程信任库也须含内网 CA
+      # （Go TLS 读 SSL_CERT_FILE）；证书续期后同步更新此处与 deployments/buildkit.yaml
+      mkdir -p /tmp/bk-ca
+      cat > /tmp/bk-ca/harbor-ca.pem <<'CAEOF'
+      -----BEGIN CERTIFICATE-----
+      MIID/TCCAuWgAwIBAgIUTEtMvUvJU0hfcphNntzlNoxXQ48wDQYJKoZIhvcNAQEL
+      BQAwZDELMAkGA1UEBhMCQ04xETAPBgNVBAgTCEhhbmdaaG91MQswCQYDVQQHEwJY
+      UzEMMAoGA1UEChMDazhzMQ8wDQYDVQQLEwZTeXN0ZW0xFjAUBgNVBAMTDWt1YmVy
+      bmV0ZXMtY2EwIBcNMjUwOTI4MDkzODAwWhgPMjA3NTA5MTYwOTM4MDBaMF0xCzAJ
+      BgNVBAYTAkNOMREwDwYDVQQIEwhIYW5nWmhvdTELMAkGA1UEBxMCWFMxDDAKBgNV
+      BAoTA2s4czEPMA0GA1UECxMGU3lzdGVtMQ8wDQYDVQQDEwZoYXJib3IwggEiMA0G
+      CSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC40EueoftxTW0jBVLUaXGzoAuLYz1L
+      SWK/l3fBxouirp4bigjGB9ihiVEGDPW9M5c4ib4j4srQc+mKv32fsCFpSjV6/wuH
+      Otarqw3GycLsFRS1T4rBzjbDLuv6v4YP9bkF4MlW3aiX/W0jbTCTT9RrzoquvMJs
+      YVB3bLAwiSVkvysHxh0f5i3Jfdoflm1zK88R0guUsRo9NML/yoEE0V4ubdrB8geY
+      VuAJsGQkx2i8gvV2nJsdaf0Etag+nPl9ltpyoPTS84nbo+KBua3itCPq52E2I0HK
+      WBt69smYSIEgzdmW16bZBzsOuoSYx2FH5SgMd0PYEnKMIdF8sh+BSbpZAgMBAAGj
+      gaswgagwDgYDVR0PAQH/BAQDAgWgMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEF
+      BQcDAjAMBgNVHRMBAf8EAjAAMB0GA1UdDgQWBBR8uWjTKzsAknl/dQN6/ZbkI4+y
+      WzAfBgNVHSMEGDAWgBTtpEBTNBrySTjGhYQBMlIRrFuuiDApBgNVHREEIjAgghJo
+      YXJib3IuY3F5eHB0LnNpdGWHBH8AAAGHBAprCGswDQYJKoZIhvcNAQELBQADggEB
+      AAaI3ARmk2PlalTCpdg9BREHbKo92TDRAYttuL1Mg/ooquP09KkudguosXiBrJRD
+      E/XRmHM5nCE0MYO+vTyo45QebfYbs1ZLh3iJ1gso/fSwNCJKaMfqwAX46wET+mJK
+      Y0PbeK960ViR7baJtR8uV4/LfGzNUFnqF4Pg4pH9paGH22b/0sl4GHH8f9H8pfi7
+      j1wcmvDKCmscDeQYN4hSo0mcDboOxctxTrNMKe5HoVvj9p5MaQkJ/7lO4TogcPbh
+      CMZg6Uf4SRDzhg+OjbpCq3Pm2ThTKxztDBGlfNELhfNC75XeCDkIxRv0qrqgNcoP
+      4UOaClVZkbJBAW0l5SiCJiw=
+      -----END CERTIFICATE-----
+      CAEOF
+      cat /etc/ssl/certs/ca-certificates.crt /tmp/bk-ca/harbor-ca.pem > /tmp/bk-ca/bundle.pem
+      export SSL_CERT_FILE=/tmp/bk-ca/bundle.pem
+      IMAGE=$(printf '%s' "$IMAGE" | tr -d '[:space:]')
+      # Registry 认证：优先 dockerconfig 凭证文件（runtime 挂载 $DOCKER_CONFIG/config.json，
+      # buildctl 经 session 把凭证传给 buildkitd），回退 basic username/password 拼临时 config
+      if [ -z "$DOCKER_CONFIG" ] || [ ! -f "$DOCKER_CONFIG/config.json" ]; then
+        if [ -n "$username" ] && [ -n "$password" ]; then
+          mkdir -p /tmp/docker-cfg
+          AUTH=$(printf '%s:%s' "$username" "$password" | base64)
+          cat > /tmp/docker-cfg/config.json <<EOF
+      {"auths":{"{{registry}}":{"username":"$username","password":"$password","auth":"$AUTH"}}}
+      EOF
+          export DOCKER_CONFIG=/tmp/docker-cfg
+        else
+          echo "WARN: 未注入 registry 凭证（DOCKER_CONFIG 文件或 username/password）；仅匿名可推送的仓库能成功"
+        fi
+      fi
+      # 构建前把上游产物/配置文件拷入构建上下文（go/java 场景：go build 产物
+      # out/app、仓库 config/app.yaml 等需进 context 供 Dockerfile COPY）。
+      # 路径相对 workspace 根（=仓库根），逗号分隔，支持文件或整目录、src=dst 改名；
+      # 此时已 cd 到 context 目录
+      if [ -n "{{configFiles}}" ]; then
+        # POSIX sh（buildkit 镜像 /bin/sh 是 dash）：用 tr 转空格后逐词遍历
+        _CF_OK=0
+        for _p in $(printf '%s' "{{configFiles}}" | tr ',' ' '); do
+          _p=$(printf '%s' "$_p" | tr -d '[:space:]')
+          [ -z "$_p" ] && continue
+          _s="${_p%%=*}"; _d="${_p#*=}"
+          [ "$_s" = "$_d" ] && _d=""
+          if [ ! -e "$(workspaces.source.path)/$_s" ]; then
+            echo "WARN: configFiles 路径不存在，跳过: $_s"
+            continue
+          fi
+          _CF_OK=1
+          # 源已在当前构建上下文内（如 context=仓库根时）：无需拷贝，
+          # 否则 cp 会报 "same file" 使构建失败
+          if [ -e "./$_s" ]; then
+            echo "configFiles: $_s 已在构建上下文内，跳过（Dockerfile 可直接 COPY）"
+            continue
+          fi
+          if [ -n "$_d" ]; then
+            mkdir -p "./$(dirname "$_d")"
+            if [ -d "./$_d" ]; then
+              # 目标目录已存在：拷入其中（避免 cp -r 产生 src/src 嵌套误以为替换）
+              cp -r "$(workspaces.source.path)/$_s" "./$_d/"
+              echo "configFiles: 目标目录 $_d 已存在，$_s 已合并拷入其中"
+            else
+              cp -r "$(workspaces.source.path)/$_s" "./$_d"
+              echo "configFiles: 已拷入 $_s -> $_d"
+            fi
+          else
+            cp -r "$(workspaces.source.path)/$_s" .
+            echo "configFiles: 已拷入 $_s"
+          fi
+        done
+        # 显式配置却一个都没生效：直接失败，避免静默带着缺文件的上下文
+        # 走到 Dockerfile COPY 才报 "not found"（路径与上游产物名不符的常见坑）
+        if [ "$_CF_OK" = "0" ]; then
+          echo "ERROR: configFiles 配置的项都不存在（当前: {{configFiles}}）。" >&2
+          echo "请核对上游构建节点的实际产物路径（go-build 产物在 out/<binaryName>，" >&2
+          echo "且构建命令里的 -o 参数会决定产物位置，模板已自动追加 -o out/<binaryName>）" >&2
+          exit 1
+        fi
+      fi
+      BUILDKITD="{{buildkitdAddr}}"
+      [ -z "$BUILDKITD" ] && BUILDKITD="tcp://buildkitd:1234"
+      # BuildKit 构建并推送（--output type=image,push=true）。
+      # insecure=true：镜像【推送】路径（image exporter）不走 buildkitd 的 registry
+      # 配置（v0.32 实测 token 获取仍做 TLS 校验），须在此显式跳过自签名仓库校验。
+      # 多副本 buildkitd 下做连接级探活重试（副本滚动/瞬时故障时换连接重试，
+      # 最多 3 次；构建失败本身不重试，避免半程重放）
+      _bk_build() {
+        buildctl --addr "$BUILDKITD" build \
+          --frontend dockerfile.v0 \
+          --local context=. \
+          --local dockerfile=. \
+          --opt filename={{dockerfile}} \
+          --output type=image,name="$IMAGE",push=true,insecure=true \
+          --metadata-file=/tmp/build-meta.json
+      }
+      _bk_ok=0
+      for _bk_try in 1 2 3; do
+        _bk_build && { _bk_ok=1; break; }
+        if [ "$_bk_try" -lt 3 ]; then
+          echo "WARN: buildkitd 连接/构建失败，3s 后重试（第 $_bk_try 次）..."
+          sleep 3
+        fi
+      done
+      if [ "$_bk_ok" != "1" ]; then
+        echo "ERROR: buildkitd 构建 3 次均失败（addr=$BUILDKITD），请检查 buildkitd 副本状态" >&2
+        exit 1
+      fi
+      echo "pushed $IMAGE"
+      printf '%s' "$IMAGE" > $(results.imageRef.path)
+      # digest 从 buildctl 元数据输出里提取（image 输出的 digest 形如 sha256:...）
+      DIGEST=$(grep -oE 'sha256:[0-9a-f]{64}' /tmp/build-meta.json | head -1 || true)
+      printf '%s' "${DIGEST:-}" > $(results.imageDigest.path)
+      printf '%s' "" > $(results.sbom_path.path)
+  - name: generate-sbom
+    # 官方 syft 镜像是 distroless（无 /bin/sh），Tekton 脚本 shebang 执行会
+    # ENOENT；用 busybox+syft 静态二进制的包装镜像。sh2 版修正 USER：
+    # harbor busybox 默认 65532，而 Tekton 结果文件由 init 以 root 0444
+    # 预创建，非 root step 截断写入会 Permission denied
+    image: harbor.cqyxpt.site:8443/library/syft:1.0.0-sh2
+    env:
+      # 自签名镜像仓库：跳过 TLS 校验（与 buildkitd/trivy 一致）
+      - name: SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY
+        value: "true"
+    script: |
+      #!/bin/sh
+      set -e
+      if [ "{{generateSBOM}}" != "true" ]; then
+        echo "SBOM 生成已禁用，跳过"
+        printf '%s' "" > $(results.sbom_path.path)
+        exit 0
+      fi
+      IMAGE=$(printf '%s' "{{registry}}/{{repository}}:{{tag}}" | tr -d '[:space:]')
+      SBOM_DIR=$(workspaces.source.path)/sbom
+      mkdir -p "$SBOM_DIR"
+      syft "$IMAGE" -o spdx-json="$SBOM_DIR/spdx.json"
+      printf '%s' "sbom/spdx.json" > $(results.sbom_path.path)
+      echo "SBOM 已生成：sbom/spdx.json（可接 upload-artifact 上传，type=sbom）"

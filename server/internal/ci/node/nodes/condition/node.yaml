@@ -1,0 +1,6 @@
+type: condition
+name: 条件分支
+category: control
+icon: fork
+version: "1.0"
+description: 按流水线参数条件分支（IF/ELSE），yes/no 两个出口

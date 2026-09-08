@@ -1,0 +1,126 @@
+/* Kube Console 主题：云厂商控制台浅色风 + 青绿色主色 */
+:root {
+  /* 青绿色主色系 */
+  --el-color-primary: #00b8a9;
+  --el-color-primary-light-3: #33c9bd;
+  --el-color-primary-light-5: #66d7ce;
+  --el-color-primary-light-7: #99e4de;
+  --el-color-primary-light-8: #b3ebe7;
+  --el-color-primary-light-9: #e6f7f5;
+  --el-color-primary-dark-2: #009387;
+
+  /* 全局浅色背景 */
+  --kc-bg: #f5f7fa;
+  --kc-sidebar-bg: #ffffff;
+  --kc-sidebar-text: #4b5563;
+  --kc-sidebar-text-active: #00b8a9;
+  --kc-header-bg: #ffffff;
+  --kc-border: #e8eaef;
+  --kc-card-radius: 8px;
+  --kc-logo-gradient: linear-gradient(135deg, #00b8a9 0%, #00d2c0 100%);
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  background: var(--kc-bg);
+  color: #303133;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 卡片圆角与阴影统一 */
+.el-card {
+  border-radius: var(--kc-card-radius) !important;
+  border: 1px solid var(--kc-border) !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04) !important;
+}
+
+.el-card__header {
+  border-bottom: 1px solid var(--kc-border) !important;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+/* 表格微调 */
+.el-table {
+  --el-table-header-bg-color: #fafbfc;
+  --el-table-header-text-color: #6b7280;
+  font-size: 13px;
+}
+
+.el-table th.el-table__cell {
+  font-weight: 600;
+}
+
+/* 链接与主要按钮的主色已由 --el-color-primary 覆盖 */
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ------------------- 暗色模式（html.dark） ------------------- */
+html.dark {
+  --el-color-primary: #00b8a9;
+  --el-color-primary-light-3: #1fa899;
+  --el-color-primary-light-5: #157f74;
+  --el-color-primary-light-7: #11574f;
+  --el-color-primary-light-8: #0e463f;
+  --el-color-primary-light-9: #0a3530;
+  --el-color-primary-dark-2: #33c9bd;
+
+  --kc-bg: #0f1419;
+  --kc-sidebar-bg: #161b22;
+  --kc-sidebar-text: #9ca3af;
+  --kc-sidebar-text-active: #2dd4bf;
+  --kc-header-bg: #161b22;
+  --kc-border: #2d333b;
+  --kc-logo-gradient: linear-gradient(135deg, #00b8a9 0%, #0d9488 100%);
+}
+
+html.dark body {
+  background: var(--kc-bg);
+  color: #c9d1d9;
+}
+
+html.dark .menu :deep(.el-menu-item:hover),
+html.dark .menu :deep(.el-sub-menu__title:hover) {
+  background: #1c2128;
+}
+
+html.dark .el-card {
+  background: #161b22;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4) !important;
+}
+
+html.dark .el-table {
+  --el-table-bg-color: #161b22;
+  --el-table-tr-bg-color: #161b22;
+  --el-table-header-bg-color: #1c2128;
+  --el-table-row-hover-bg-color: #1c2128;
+  --el-table-border-color: #2d333b;
+}
+
+html.dark .el-dialog,
+html.dark .el-drawer,
+html.dark .el-popover.el-popped {
+  background: #161b22;
+}

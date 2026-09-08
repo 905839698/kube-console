@@ -1,0 +1,26 @@
+{
+  "type": "trivy-scan",
+  "properties": [
+    { "name": "scanType", "type": "select", "required": true, "default": "fs",
+      "options": [
+        { "value": "fs", "label": "文件系统" },
+        { "value": "image", "label": "Docker Image" }
+      ], "description": "扫描类型" },
+    { "name": "image", "type": "string", "required": false, "description": "scanType=image 时的镜像地址" },
+    { "name": "severity", "type": "select", "required": false, "default": "CRITICAL,HIGH",
+      "options": [
+        { "value": "CRITICAL", "label": "CRITICAL" },
+        { "value": "HIGH", "label": "HIGH" },
+        { "value": "MEDIUM", "label": "MEDIUM" },
+        { "value": "LOW", "label": "LOW" }
+      ], "description": "严重等级（多选逗号分隔）" },
+    { "name": "failOnVulnerability", "type": "boolean", "required": false, "default": true, "description": "发现漏洞后阻断流水线" },
+    { "name": "outputFormat", "type": "select", "required": false, "default": "json",
+      "options": [
+        { "value": "json", "label": "JSON" },
+        { "value": "sarif", "label": "SARIF" },
+        { "value": "table", "label": "Table" }
+      ], "description": "报告格式" },
+    { "name": "preShell", "type": "text", "required": false, "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行" }
+  ]
+}

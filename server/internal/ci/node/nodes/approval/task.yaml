@@ -1,0 +1,59 @@
+# approval Tekton Task 模板
+# 机制：step 轮询【本 TaskRun 的注解】ci-platform.io/approval。
+# 平台 UI「通过/驳回」由 ci-server 给该 TaskRun 打注解（approved/rejected）。
+# 本 TaskRun 名由平台运行时注入环境变量 CI_TASK_RUN（Tekton 不自动注入）。
+# 用 alpine 的 wget + SA token 直接读 k8s API（不依赖 kubectl，兼容无 shell 镜像源）。
+# 需 ci-projects/ci-bot SA 有 taskruns get 权限（见 deployments/rbac.yaml）。
+name: approval
+description: "人工审批：{{title}}"
+workspaces: []
+results:
+  - name: decision
+    description: "approved / rejected / timeout"
+steps:
+  - name: wait-approval
+    image: harbor.cqyxpt.site:8443/library/alpine:3.19
+    env:
+      - name: ANNOT_KEY
+        value: "ci-platform.io/approval"
+    script: |
+      #!/bin/sh
+      NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null || echo default)
+      TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+      HOST=$KUBERNETES_SERVICE_HOST; PORT=$KUBERNETES_SERVICE_PORT
+      TR="${CI_TASK_RUN:-}"
+      if [ -z "$TR" ]; then echo "缺少 CI_TASK_RUN 环境变量"; exit 1; fi
+      # 解析超时（支持 90s / 30m / 2h / 2h30m）；非法输入直接报错（不静默回退）
+      parse_dur() {
+        d="$1"; s=0
+        echo "$d" | grep -Eq '^[0-9]+(s|m|h)([0-9]+m)?([0-9]+s)?$' \
+          || { echo "无法解析时长: '$d'（合法形式：90s / 30m / 2h / 2h30m）" >&2; exit 1; }
+        case "$d" in *h*) s=$(( s + ${d%%h*} * 3600 )); d="${d#*h}" ;; esac
+        case "$d" in *m*) s=$(( s + ${d%%m*} * 60 )); d="${d#*m}" ;; esac
+        case "$d" in *s*) s=$(( s + ${d%%s*} )); d="${d#*s}" ;; esac
+        echo "$s"
+      }
+      WAIT=$(parse_dur "{{timeout}}") || exit 1
+      [ "$WAIT" -le 0 ] && WAIT=3600
+      INTERVAL=$(parse_dur "{{pollInterval}}") || exit 1
+      [ "$INTERVAL" -le 0 ] && INTERVAL=15
+      DEADLINE=$(( $(date +%s) + WAIT ))
+      echo "等待审批：{{title}}（超时 {{timeout}}，轮询 ${INTERVAL}s）"
+      while :; do
+        # 读本 TaskRun 的审批注解：去反斜杠（兼容 JSON 转义 \/）→ 按逗号分行 → 取注解值
+        VAL=$(wget -qO- --no-check-certificate \
+              --header="Authorization: Bearer $TOKEN" \
+              "https://$HOST:$PORT/apis/tekton.dev/v1/namespaces/$NS/taskruns/$TR" 2>/dev/null \
+              | tr -d '\\' | tr ',' '\n' | grep "$ANNOT_KEY" | head -1 \
+              | sed 's/.*:[[:space:]]*"\([^"]*\)".*/\1/')
+        case "$VAL" in
+          approved)
+            echo "已批准，继续执行"; printf '%s' "approved" > $(results.decision.path); exit 0 ;;
+          rejected)
+            echo "已驳回，流水线终止"; printf '%s' "rejected" > $(results.decision.path); exit 1 ;;
+        esac
+        if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+          echo "审批超时（{{timeout}}），任务失败"; printf '%s' "timeout" > $(results.decision.path); exit 1
+        fi
+        sleep "$INTERVAL"
+      done

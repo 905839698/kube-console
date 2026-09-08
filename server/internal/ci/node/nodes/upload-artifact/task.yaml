@@ -1,0 +1,101 @@
+# upload-artifact Tekton Task 模板
+# 真实上传：nexus 用 curl（raw 仓库 PUT），minio 用 mc。
+# 凭证经 envFrom secretRef 注入（runtime 按 credential 参数填充），
+# Secret key：username / password（见 BuildCredentialSecretData）。
+name: upload-artifact
+description: upload {{path}} -> {{storage}}/{{repository}}
+params:
+  - name: path
+    type: string
+    default: "{{path}}"
+  - name: type
+    type: string
+    default: "{{type}}"
+  - name: storage
+    type: string
+    default: "{{storage}}"
+  - name: repository
+    type: string
+    default: "{{repository}}"
+  - name: version
+    type: string
+    default: "{{version}}"
+  - name: nexusBase
+    type: string
+    default: "{{nexusBase}}"
+  - name: minioEndpoint
+    type: string
+    default: "{{minioEndpoint}}"
+  - name: minioBucket
+    type: string
+    default: "{{minioBucket}}"
+workspaces:
+  - name: source
+results:
+  - name: storage_path
+    description: "存储内路径（nexus: repository/name/file；minio: bucket/key）"
+  - name: sha256
+    description: 文件 sha256（多文件取最后一个）
+  - name: artifact_version
+    description: 制品版本
+  - name: file_count
+    description: 上传文件数
+steps:
+  # ---- Nexus（curl PUT raw）----
+  - name: upload-nexus
+    image: harbor.cqyxpt.site:8443/library/curl:8.5.0
+    script: |
+      #!/bin/sh
+      set -e
+      [ "{{storage}}" = "nexus" ] || { echo "skip: storage != nexus"; exit 0; }
+      [ -n "$username" ] || { echo "ERROR: 未注入 nexus 凭证（username/password）"; exit 1; }
+      cd $(workspaces.source.path)
+      VERSION={{version}}
+      count=0
+      for f in {{path}}; do
+        [ -e "$f" ] || continue
+        sum=$(sha256sum "$f" | awk '{print $1}')
+        base=$(basename "$f")
+        target="{{nexusBase}}/repository/{{repository}}/${VERSION}/${base}"
+        echo "upload -> $target"
+        curl -fsS -u "$username:$password" -T "$f" "$target"
+        printf '%s' "repository/{{repository}}/${VERSION}/${base}" > $(results.storage_path.path)
+        printf '%s' "$sum" > $(results.sha256.path)
+        count=$((count+1))
+      done
+      printf '%s' "$count" > $(results.file_count.path)
+      if [ "$count" -gt 0 ]; then
+        printf '%s' "$VERSION" > $(results.artifact_version.path)
+      else
+        echo "WARN: 未匹配到任何文件: {{path}}"
+      fi
+  # ---- MinIO（mc cp）----
+  - name: upload-minio
+    image: harbor.cqyxpt.site:8443/library/mc:RELEASE.2024-06-12T14-34-03Z
+    script: |
+      #!/bin/sh
+      set -e
+      [ "{{storage}}" = "minio" ] || { echo "skip: storage != minio"; exit 0; }
+      [ -n "$username" ] || { echo "ERROR: 未注入 minio 凭证（username/password）"; exit 1; }
+      mc alias set local "{{minioEndpoint}}" "$username" "$password"
+      mc mb --ignore-existing "local/{{minioBucket}}"
+      cd $(workspaces.source.path)
+      VERSION={{version}}
+      count=0
+      for f in {{path}}; do
+        [ -e "$f" ] || continue
+        sum=$(sha256sum "$f" | awk '{print $1}')
+        base=$(basename "$f")
+        key="{{repository}}/${VERSION}/${base}"
+        echo "upload -> s3://{{minioBucket}}/$key"
+        mc cp "$f" "local/{{minioBucket}}/$key"
+        printf '%s' "{{minioBucket}}/$key" > $(results.storage_path.path)
+        printf '%s' "$sum" > $(results.sha256.path)
+        count=$((count+1))
+      done
+      printf '%s' "$count" > $(results.file_count.path)
+      if [ "$count" -gt 0 ]; then
+        printf '%s' "$VERSION" > $(results.artifact_version.path)
+      else
+        echo "WARN: 未匹配到任何文件: {{path}}"
+      fi

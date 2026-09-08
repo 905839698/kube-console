@@ -1,0 +1,3 @@
+artifacts: []
+outputs:
+  - sonar_webhook

@@ -1,0 +1,43 @@
+# helm-deploy Tekton Task 模板
+# 部署到集群：留空 credential 用 in-cluster ServiceAccount（ci-bot 需有目标 ns 的 RBAC）；
+# 填 kubeconfig form 凭证时部署到外部目标集群（runtime 挂载 kubeconfig 文件并注入
+# env KUBECONFIG，helm 自动读，无需脚本处理）。basic form 凭证用于私有 helm repo 登录。
+name: helm-deploy
+description: "Helm {{release}} -> {{namespace}}"
+workspaces:
+  - name: source
+results:
+  - name: release_status
+    description: "部署结果"
+steps:
+  - name: deploy
+    # bitnami 镜像基于 Debian，自带 bash
+    image: harbor.cqyxpt.site:8443/library/helm:3.14
+    script: |
+      #!/bin/bash
+      # 脚本用到数组 / here-string 等 bash 特性，故用 bash（bitnami 镜像自带）
+      set -e
+      cd $(workspaces.source.path)
+      # 私有 repo 凭证（envFrom 注入 username/password）
+      if [ -n "{{repoUrl}}" ]; then
+        if [ -n "$username" ]; then
+          helm repo add ci-repo "{{repoUrl}}" --username "$username" --password "$password"
+        else
+          helm repo add ci-repo "{{repoUrl}}"
+        fi
+        helm repo update ci-repo
+      fi
+      FLAGS="--namespace {{namespace}} --create-namespace --timeout {{timeout}}"
+      if [ "{{wait}}" = "true" ]; then FLAGS="$FLAGS --wait"; fi
+      # values 文件（逗号分隔）
+      VFILE=""
+      if [ -n "{{values}}" ]; then
+        IFS=',' read -r -a VF <<< "{{values}}"
+        for f in "${VF[@]}"; do VFILE="$VFILE -f $f"; done
+      fi
+      # set 参数（每行 key=value）
+      SETARG=""
+      # 逐行传入（此处用单行简化，MVP）
+      if [ -n "{{set}}" ]; then SETARG="--set {{set}}"; fi
+      helm upgrade --install {{release}} {{chart}} $FLAGS $VFILE $SETARG
+      printf '%s' "deployed" > $(results.release_status.path)

@@ -1,0 +1,56 @@
+# k8s-deploy Tekton Task 模板
+# 部署到集群：留空 credential 用 in-cluster ServiceAccount（ci-bot 需有目标 ns 的 RBAC）；
+# 填 kubeconfig form 凭证时部署到外部目标集群（runtime 挂载 kubeconfig 文件并注入
+# env KUBECONFIG，kubectl 自动读，无需脚本处理）。
+name: k8s-deploy
+description: "kubectl {{kubectlArgs}} -> {{namespace}}"
+workspaces:
+  - name: source
+results:
+  - name: deploy_status
+    description: "部署结果"
+steps:
+  - name: deploy
+    # bitnami 镜像基于 Debian，自带 bash
+    image: harbor.cqyxpt.site:8443/library/kubectl:1.29
+    script: |
+      #!/bin/bash
+      # 脚本用到数组 / here-string 等 bash 特性，故用 bash（bitnami 镜像自带）
+      set -e
+      cd $(workspaces.source.path)
+      NS="--namespace {{namespace}}"
+      # 多清单逐个 apply
+      if [ "{{kubectlArgs}}" = "apply -f" ]; then
+        IFS=',' read -r -a FILES <<< "{{manifests}}"
+        for f in "${FILES[@]}"; do
+          kubectl apply -f "$f" $NS
+        done
+      elif [ -n "{{deployTarget}}" ] && [ -n "{{container}}" ]; then
+        # set image（属性面板下拉选择 deployment/container，推荐方式）
+        IMAGE="{{image}}"
+        kubectl set image {{deployTargetKind}}/{{deployTarget}} {{container}}=$IMAGE $NS
+      else
+        # 通用：kubectl <args>（如 set image deploy/app 容器名）
+        if [ -n "{{image}}" ]; then
+          # set image：镜像必须与容器名拼成 container=image 单参数（kubectl 要求）。
+          # 相邻未加引号的变量展开先拼接再分词，故 $ARGS$IMAGE / $ARGS=$IMAGE
+          # 都能产生单个 argv；kubectlArgs 写 "容器名" 或 "容器名=" 均兼容
+          IMAGE="{{image}}"
+          ARGS="{{kubectlArgs}}"
+          case "$ARGS" in
+            *"=") kubectl $ARGS$IMAGE $NS ;;
+            *)    kubectl $ARGS=$IMAGE $NS ;;
+          esac
+        else
+          kubectl {{kubectlArgs}} $NS
+        fi
+      fi
+      # 等待就绪：未显式填 waitFor 时，按选中的 workload 自动等待
+      WAIT_FOR="{{waitFor}}"
+      if [ -z "$WAIT_FOR" ] && [ -n "{{deployTarget}}" ]; then
+        WAIT_FOR="{{deployTargetKind}}/{{deployTarget}}"
+      fi
+      if [ -n "$WAIT_FOR" ]; then
+        kubectl wait --for=condition=available $WAIT_FOR $NS --timeout=120s
+      fi
+      printf '%s' "deployed" > $(results.deploy_status.path)

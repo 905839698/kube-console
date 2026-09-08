@@ -1,0 +1,6 @@
+type: k8s-deploy
+name: K8s 部署
+category: deploy
+icon: kubernetes
+version: "1.0"
+description: kubectl apply 部署清单到集群

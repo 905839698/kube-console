@@ -1,0 +1,15 @@
+{
+  "type": "helm-deploy",
+  "properties": [
+    { "name": "chart", "type": "string", "required": true, "description": "Chart 路径（workspace 内）或完整引用 name@version" },
+    { "name": "release", "type": "string", "required": true, "description": "Release 名" },
+    { "name": "namespace", "type": "string", "required": false, "default": "default", "description": "目标 namespace" },
+    { "name": "repoUrl", "type": "string", "required": false, "description": "Helm repo 地址（chart 为引用时）" },
+    { "name": "values", "type": "text", "required": false, "description": "values 文件路径（workspace 内），多个逗号分隔" },
+    { "name": "set", "type": "text", "required": false, "description": "set 参数，每行 key=value" },
+    { "name": "wait", "type": "boolean", "required": false, "default": true, "description": "等待就绪" },
+    { "name": "timeout", "type": "string", "required": false, "default": "5m", "description": "超时" },
+    { "name": "credential", "type": "credential", "required": false, "description": "目标集群/私有 repo 凭证（kubeconfig form 部署外部集群；basic form 私有 helm repo 登录）" },
+    { "name": "preShell", "type": "text", "required": false, "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行" }
+  ]
+}

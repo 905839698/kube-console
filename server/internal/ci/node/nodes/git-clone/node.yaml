@@ -1,0 +1,6 @@
+type: git-clone
+name: 拉取代码
+category: source
+icon: git
+version: "1.0"
+description: 从 Git 仓库拉取源码（GitLab/GitHub/Gitee 通用）

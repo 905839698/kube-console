@@ -1,0 +1,122 @@
+# gitops-bump Tekton Task 模板
+# 克隆配置仓库 → 按仓库路径前缀替换清单文件中的 image: 行 → commit + push。
+# 与 git-clone 相同的凭证注入约定：Secret 经 envFrom 注入 username/password/token，
+# 脚本显式引用这些 key（runtime 检测 $key 后注入）。
+name: gitops-bump
+description: "bump image in {{repoUrl}}@{{branch}} -> ArgoCD"
+params:
+  - name: repoUrl
+    type: string
+    default: "{{repoUrl}}"
+  - name: branch
+    type: string
+    default: "{{branch}}"
+  - name: files
+    type: string
+    default: "{{files}}"
+  - name: images
+    type: string
+    default: "{{images}}"
+  - name: commitMessage
+    type: string
+    default: "{{commitMessage}}"
+workspaces:
+  - name: source
+results:
+  - name: commit_sha
+    description: 配置仓库提交 SHA（无变更时空）
+  - name: bumped
+    description: 本次更新的镜像引用（逗号分隔）
+steps:
+  - name: bump
+    image: harbor.cqyxpt.site:8443/library/git:2.43.4
+    script: |
+      #!/bin/sh
+      set -e
+      cd $(workspaces.source.path)
+
+      REPO_URL="$(params.repoUrl)"
+      BRANCH="$(params.branch)"
+      BRANCH="${BRANCH:-main}"
+      FILES="$(params.files)"
+      IMAGES="$(params.images)"
+      MSG="$(params.commitMessage)"
+      MSG="${MSG:-chore: bump image by ci-platform [skip ci]}"
+      GITOPS_DIR=".gitops-config"
+
+      # ---- 认证注入（与 git-clone 一致：token 优先，其次 username/password）----
+      if [ -n "$token" ]; then
+        case "$REPO_URL" in
+          https://*) REPO_URL="https://oauth2:$token@${REPO_URL#https://}" ;;
+          http://*)  REPO_URL="http://oauth2:$token@${REPO_URL#http://}" ;;
+          *) echo "unsupported repo url scheme" >&2; exit 1 ;;
+        esac
+      elif [ -n "$username" ] && [ -n "$password" ]; then
+        case "$REPO_URL" in
+          https://*) REPO_URL="https://$username:$password@${REPO_URL#https://}" ;;
+          http://*)  REPO_URL="http://$username:$password@${REPO_URL#http://}" ;;
+          *) echo "unsupported repo url scheme" >&2; exit 1 ;;
+        esac
+      fi
+
+      # ---- 浅克隆配置仓库（独立子目录，不污染源码工作区）----
+      rm -rf "$GITOPS_DIR"
+      git clone --depth 1 -b "$BRANCH" "$REPO_URL" "$GITOPS_DIR"
+      cd "$GITOPS_DIR"
+      git config user.name "ci-platform"
+      git config user.email "ci@ci-platform.local"
+
+      BUMPED=""
+      IFS=','
+      # ---- 逐镜像替换：按「仓库路径前缀」匹配 image: 行并整行替换（保留缩进/注释）----
+      for REF in $IMAGES; do
+        # 兼容多行文本（换行分隔）
+        for r in $(echo "$REF" | tr '\n' ' '); do
+          case "$r" in
+            ''|'$(tasks.'*) continue ;;  # 空行 / 未渲染的上游占位
+          esac
+          # repo 前缀 = 去掉 :tag / @digest
+          REPO_PREFIX="${r%%:*}"
+          REPO_PREFIX="${REPO_PREFIX%%@*}"
+          # 正则转义（. 与 / 在 BRE/ERE 中 / 由分隔符规避，. 需转义）
+          REPO_ESC=$(printf '%s' "$REPO_PREFIX" | sed -e 's/[][\.*^$()+?{}|]/\\&/g')
+          HIT=0
+          for f in $FILES; do
+            [ -f "$f" ] || { echo "WARN: 文件不存在 $f" >&2; continue; }
+            CNT=$(grep -cE "^[[:space:]]*(-[[:space:]]*)?image[[:space:]]*:[[:space:]]*[\"']?${REPO_ESC}([:@][^\"'[:space:]]*)?[\"']?" "$f" || true)
+            if [ "$CNT" -gt 0 ]; then
+              HIT=1
+              sed -i -E "s#^([[:space:]]*(-[[:space:]]*)?image[[:space:]]*:[[:space:]]*)[\"']?${REPO_ESC}([:@][^\"'[:space:]]*)?[\"']?(#.*)?#\1${r}\4#" "$f"
+            fi
+          done
+          if [ "$HIT" != "1" ]; then
+            echo "ERROR: 未在任何清单文件中找到镜像仓库前缀「$REPO_PREFIX」的 image: 行" >&2
+            echo "       请检查 files 路径与镜像引用是否匹配（image: ${REPO_PREFIX}:<tag>）" >&2
+            exit 1
+          fi
+          BUMPED="${BUMPED:+$BUMPED,}$r"
+        done
+      done
+      unset IFS
+
+      git add -A
+      if git diff --cached --quiet; then
+        echo "镜像无变化（引用与配置仓库一致），跳过提交"
+      else
+        git commit -m "$MSG"
+        # push：非快进时 pull --rebase 重试（并发流水线同时 bump 同仓库）
+        PUSH_OK=0
+        i=1
+        while [ $i -le 3 ]; do
+          if git push origin "HEAD:$BRANCH" 2>/dev/null; then PUSH_OK=1; break; fi
+          echo "push 失败（第 $i 次），pull --rebase 后重试..."
+          git fetch --depth 1 origin "$BRANCH"
+          git rebase FETCH_HEAD || git rebase --abort
+          sleep 3
+          i=$((i+1))
+        done
+        [ "$PUSH_OK" = "1" ] || { echo "push 最终失败" >&2; exit 1; }
+        printf '%s' "$(git rev-parse --short HEAD)" > $(results.commit_sha.path)
+      fi
+      printf '%s' "$BUMPED" > $(results.bumped.path)
+      echo "GitOps 更新完成: $BUMPED"

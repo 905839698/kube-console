@@ -1,0 +1,10 @@
+artifacts:
+  - maven
+  - npm
+  - zip
+  - sbom
+outputs:
+  - storage_path
+  - sha256
+  - artifact_version
+  - file_count

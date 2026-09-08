@@ -1,0 +1,63 @@
+{
+  "type": "go-build",
+  "properties": [
+    {
+      "name": "goVersion",
+      "type": "select",
+      "required": false,
+      "default": "1.22",
+      "options": [
+        {
+          "value": "1.20",
+          "label": "Go 1.20"
+        },
+        {
+          "value": "1.21",
+          "label": "Go 1.21"
+        },
+        {
+          "value": "1.22",
+          "label": "Go 1.22"
+        },
+        {
+          "value": "1.23",
+          "label": "Go 1.23"
+        }
+      ]
+    },
+    {
+      "name": "command",
+      "type": "text",
+      "required": false,
+      "default": "build ./...",
+      "description": "Go 命令（build/test/vet ./...）"
+    },
+    {
+      "name": "binaryName",
+      "type": "string",
+      "required": false,
+      "default": "app",
+      "description": "产物二进制名"
+    },
+    {
+      "name": "runTest",
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "先执行 go test"
+    },
+    {
+      "name": "preShell",
+      "type": "text",
+      "required": false,
+      "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行"
+    },
+    {
+      "name": "cache",
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "启用项目级依赖缓存（挂载缓存 PVC，依赖包不再每次重新下载；同项目并发运行时可能因 RWO 卷排队，建议错峰或使用 RWX 存储）"
+    }
+  ]
+}

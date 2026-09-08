@@ -1,0 +1,78 @@
+{
+  "type": "maven-build",
+  "properties": [
+    {
+      "name": "mavenVersion",
+      "type": "select",
+      "required": false,
+      "default": "3.9",
+      "options": [
+        {
+          "value": "3.8",
+          "label": "3.8"
+        },
+        {
+          "value": "3.9",
+          "label": "3.9"
+        }
+      ]
+    },
+    {
+      "name": "jdk",
+      "type": "select",
+      "required": false,
+      "default": "17",
+      "options": [
+        {
+          "value": "8",
+          "label": "JDK 8"
+        },
+        {
+          "value": "11",
+          "label": "JDK 11"
+        },
+        {
+          "value": "17",
+          "label": "JDK 17"
+        },
+        {
+          "value": "21",
+          "label": "JDK 21"
+        }
+      ]
+    },
+    {
+      "name": "command",
+      "type": "text",
+      "required": false,
+      "default": "mvn clean package -DskipTests",
+      "description": "编译命令"
+    },
+    {
+      "name": "outputDir",
+      "type": "string",
+      "required": false,
+      "default": "target/*.jar",
+      "description": "输出目录 / 通配"
+    },
+    {
+      "name": "mavenRepo",
+      "type": "string",
+      "required": false,
+      "description": "私服 Nexus 地址（settings.xml）"
+    },
+    {
+      "name": "preShell",
+      "type": "text",
+      "required": false,
+      "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行"
+    },
+    {
+      "name": "cache",
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "启用项目级依赖缓存（挂载缓存 PVC，依赖包不再每次重新下载；同项目并发运行时可能因 RWO 卷排队，建议错峰或使用 RWX 存储）"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+type: trivy-scan
+name: 漏洞扫描
+category: security
+icon: shield
+version: "1.0"
+description: Trivy 扫描（文件系统 / 镜像）

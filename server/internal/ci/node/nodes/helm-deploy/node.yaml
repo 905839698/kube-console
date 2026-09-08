@@ -1,0 +1,6 @@
+type: helm-deploy
+name: Helm 部署
+category: deploy
+icon: helm
+version: "1.0"
+description: Helm install/upgrade 部署到 K8s 集群

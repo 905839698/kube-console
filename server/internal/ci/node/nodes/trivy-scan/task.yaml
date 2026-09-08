@@ -1,0 +1,51 @@
+# trivy-scan Tekton Task 模板
+name: trivy-scan
+description: "Trivy scan ({{scanType}})"
+params:
+  - name: scanType
+    type: string
+    default: "{{scanType}}"
+  - name: target
+    type: string
+    default: "{{image}}"
+  - name: severity
+    type: string
+    default: "{{severity}}"
+  - name: failOnVulnerability
+    type: string
+    default: "{{failOnVulnerability}}"
+workspaces:
+  - name: source
+results:
+  - name: vuln_summary
+    description: "漏洞摘要，如 CRITICAL=0;HIGH=2;MEDIUM=7;LOW=0"
+steps:
+  - name: scan
+    image: harbor.cqyxpt.site:8443/library/trivy:0.48.3
+    script: |
+      #!/bin/sh
+      # 不 set -e：先跑扫描拿到退出码，再统计，最后按退出码决定是否阻断
+      cd $(workspaces.source.path)
+      # failOnVulnerability=true 时 --exit-code 1（发现漏洞退出码非 0 → 阻断）；false 时 0（仅报告）
+      EXIT_CODE=1
+      [ "{{failOnVulnerability}}" = "false" ] && EXIT_CODE=0
+      if [ "{{scanType}}" = "image" ]; then
+        trivy image --severity "{{severity}}" --exit-code $EXIT_CODE \
+          --format json --output /tmp/trivy.json "$(params.target)"
+        RC=$?
+      else
+        trivy fs --severity "{{severity}}" --exit-code $EXIT_CODE \
+          --format json --output /tmp/trivy.json .
+        RC=$?
+      fi
+      # 统计各严重级（grep JSON 中的 "Severity":"X"）
+      C=$(grep -o '"Severity":"CRITICAL"' /tmp/trivy.json 2>/dev/null | wc -l)
+      H=$(grep -o '"Severity":"HIGH"' /tmp/trivy.json 2>/dev/null | wc -l)
+      M=$(grep -o '"Severity":"MEDIUM"' /tmp/trivy.json 2>/dev/null | wc -l)
+      L=$(grep -o '"Severity":"LOW"' /tmp/trivy.json 2>/dev/null | wc -l)
+      SUMMARY="CRITICAL=${C};HIGH=${H};MEDIUM=${M};LOW=${L}"
+      printf '%s' "$SUMMARY" > $(results.vuln_summary.path)
+      echo "vuln_summary=$SUMMARY (exit=$RC)"
+      # 报告写入 workspace（供 upload-artifact 上传）
+      cp /tmp/trivy.json ./trivy-report.json 2>/dev/null || true
+      exit $RC

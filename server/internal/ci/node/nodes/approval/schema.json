@@ -1,0 +1,9 @@
+{
+  "type": "approval",
+  "properties": [
+    { "name": "title", "type": "string", "required": false, "default": "等待人工审批", "description": "审批说明（展示在执行中心）" },
+    { "name": "timeout", "type": "string", "required": false, "default": "1h", "description": "等待超时（如 30m / 2h / 24h），超时任务失败" },
+    { "name": "pollInterval", "type": "string", "required": false, "default": "15s", "description": "轮询间隔" },
+    { "name": "preShell", "type": "text", "required": false, "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行" }
+  ]
+}

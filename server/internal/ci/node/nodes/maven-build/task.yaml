@@ -1,0 +1,37 @@
+# maven-build Tekton Task 模板
+name: maven-build
+description: Maven build (JDK {{jdk}})
+params:
+  - name: jdk
+    type: string
+    default: "{{jdk}}"
+  - name: command
+    type: string
+    default: "{{command}}"
+  - name: outputDir
+    type: string
+    default: "{{outputDir}}"
+workspaces:
+  - name: source
+  - name: cache
+    optional: true
+results:
+  - name: build_output
+    description: "产物路径 / 通配（workspace 内）"
+steps:
+  - name: build
+    image: harbor.cqyxpt.site:8443/library/maven:{{mavenVersion}}-eclipse-temurin-{{jdk}}
+    script: |
+      #!/bin/sh
+      set -e
+      cd $(workspaces.source.path)
+      # 依赖缓存：cache workspace 未绑定时 $(workspaces.cache.path) 为空串，自动跳过
+      CACHE="$(workspaces.cache.path)"
+      if [ "{{cache}}" = "true" ] && [ -n "$CACHE" ]; then
+        mkdir -p "$CACHE/m2"
+        export MAVEN_OPTS="$MAVEN_OPTS -Dmaven.repo.local=$CACHE/m2"
+      fi
+      {{command}}
+      echo "ARTIFACTS:"
+      ls -lh {{outputDir}} 2>/dev/null || true
+      printf '%s' "{{outputDir}}" > $(results.build_output.path)
