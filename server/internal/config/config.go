@@ -10,12 +10,38 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Database DatabaseConfig `yaml:"database"`
-	JWT      JWTConfig      `yaml:"jwt"`
-	Admin    AdminConfig    `yaml:"admin"`
-	K8s      K8sConfig      `yaml:"k8s"`
-	CI       CIConfig       `yaml:"ci"`
+	Server   ServerConfig        `yaml:"server"`
+	Database DatabaseConfig      `yaml:"database"`
+	JWT      JWTConfig           `yaml:"jwt"`
+	Admin    AdminConfig         `yaml:"admin"`
+	K8s      K8sConfig           `yaml:"k8s"`
+	CI       CIConfig            `yaml:"ci"`
+	Obs      ObservabilityConfig `yaml:"obs"`
+	Nacos    NacosConfigYaml     `yaml:"nacos"`
+}
+
+// NacosConfigYaml Nacos 集成运行参数（连接配置按集群存 DB）
+type NacosConfigYaml struct {
+	// SyncIntervalSec 命名空间自动同步周期（秒，默认 300）
+	SyncIntervalSec int `yaml:"syncIntervalSec"`
+	// WebhookPort Pod 注入 Admission Webhook 的 HTTPS 监听端口（默认 9443，0 = 不启动）
+	WebhookPort int `yaml:"webhookPort"`
+	// SkipNamespaces 不参与 Nacos 同步的系统命名空间（逗号分隔）
+	SkipNamespaces string `yaml:"skipNamespaces"`
+	// CertDir Webhook 自签证书存放目录（默认 ./data，需持久化以保证 caBundle 跨重启稳定）
+	CertDir string `yaml:"certDir"`
+}
+
+// ObservabilityConfig 可观测性后台任务参数（告警历史轮询 / 事件归档）
+type ObservabilityConfig struct {
+	// AlertIntervalSec 告警历史轮询 Alertmanager 的间隔（秒，默认 60）
+	AlertIntervalSec int `yaml:"alertIntervalSec"`
+	// AlertRetentionDays 告警历史保留天数（默认 90，超期清理）
+	AlertRetentionDays int `yaml:"alertRetentionDays"`
+	// EventIntervalSec 事件归档轮询 K8s Events 并写 ES 的间隔（秒，默认 60）
+	EventIntervalSec int `yaml:"eventIntervalSec"`
+	// EventRetentionDays 事件归档索引保留天数（默认 30，0 = 永不清理；按索引名日期删除）
+	EventRetentionDays int `yaml:"eventRetentionDays"`
 }
 
 // CIConfig 内置 CI（Tekton）运行参数。节点插件随二进制 embed（server/nodes），无需路径配置。
@@ -30,6 +56,9 @@ type CIConfig struct {
 	ServiceAccount  string `yaml:"serviceAccount"`    // Tekton 运行 SA（默认 ci-bot）
 	ImagePullSecret string `yaml:"imagePullSecret"`   // PipelineRun podTemplate 的镜像拉取 Secret
 	PlatformNS      string `yaml:"platformNamespace"` // 平台级凭据 Secret 所在 ns（默认 ci-platform）
+	// ImageRegistry CI 任务镜像仓库前缀（节点模板里 {{imageRegistry}} 的全局取值，
+	// 默认 harbor.cqyxpt.site:8443/library）；镜像版本仍是各节点自己的属性
+	ImageRegistry string `yaml:"imageRegistry"`
 	// 构建/存储端点（upload-artifact / build-image 节点伪参数默认值，可空）
 	BuildkitAddr  string `yaml:"buildkitAddr"`
 	NexusURL      string `yaml:"nexusUrl"`
@@ -48,7 +77,8 @@ type K8sConfig struct {
 }
 
 type ServerConfig struct {
-	Port int `yaml:"port"`
+	Port     int    `yaml:"port"`
+	LogLevel string `yaml:"logLevel"` // debug | info | warn | error（默认 info）
 }
 
 type DatabaseConfig struct {
@@ -85,7 +115,7 @@ func Load(path string) (*Config, error) {
 
 func defaultConfig() *Config {
 	return &Config{
-		Server:   ServerConfig{Port: 8080},
+		Server:   ServerConfig{Port: 8080, LogLevel: "info"},
 		Database: DatabaseConfig{Driver: "sqlite", DSN: "./data/kube-console.db"},
 		JWT:      JWTConfig{Secret: "kube-console-dev-secret", ExpireIn: 24},
 		Admin:    AdminConfig{Username: "admin", Password: "admin123"},
@@ -100,12 +130,28 @@ func defaultConfig() *Config {
 			ServiceAccount:  "ci-bot",
 			ImagePullSecret: "harbor",
 			PlatformNS:      "ci-platform",
+			ImageRegistry:   "harbor.cqyxpt.site:8443/library",
+		},
+		Obs: ObservabilityConfig{
+			AlertIntervalSec:   60,
+			AlertRetentionDays: 90,
+			EventIntervalSec:   60,
+			EventRetentionDays: 30,
+		},
+		Nacos: NacosConfigYaml{
+			SyncIntervalSec: 300,
+			WebhookPort:     9443,
+			SkipNamespaces:  "kube-system,kube-public,kube-node-lease,kube-console",
+			CertDir:         "./data",
 		},
 	}
 }
 
 func applyEnv(cfg *Config) {
 	cfg.Server.Port = envInt("KC_SERVER_PORT", cfg.Server.Port)
+	if v := os.Getenv("KC_LOG_LEVEL"); v != "" {
+		cfg.Server.LogLevel = v
+	}
 	if v := os.Getenv("KC_DB_DRIVER"); v != "" {
 		cfg.Database.Driver = v
 	}
@@ -140,6 +186,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("KC_CI_IMAGE_PULL_SECRET"); v != "" {
 		cfg.CI.ImagePullSecret = v
 	}
+	if v := os.Getenv("KC_CI_IMAGE_REGISTRY"); v != "" {
+		cfg.CI.ImageRegistry = v
+	}
 	if v := os.Getenv("KC_CI_PLATFORM_NAMESPACE"); v != "" {
 		cfg.CI.PlatformNS = v
 	}
@@ -154,6 +203,18 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("KC_CI_MINIO_SECRET_KEY"); v != "" {
 		cfg.CI.MinIOSecretKey = v
+	}
+	cfg.Obs.AlertIntervalSec = envInt("KC_OBS_ALERT_INTERVAL", cfg.Obs.AlertIntervalSec)
+	cfg.Obs.AlertRetentionDays = envInt("KC_OBS_ALERT_RETENTION_DAYS", cfg.Obs.AlertRetentionDays)
+	cfg.Obs.EventIntervalSec = envInt("KC_OBS_EVENT_INTERVAL", cfg.Obs.EventIntervalSec)
+	cfg.Obs.EventRetentionDays = envInt("KC_OBS_EVENT_RETENTION_DAYS", cfg.Obs.EventRetentionDays)
+	cfg.Nacos.SyncIntervalSec = envInt("KC_NACOS_SYNC_INTERVAL", cfg.Nacos.SyncIntervalSec)
+	cfg.Nacos.WebhookPort = envInt("KC_NACOS_WEBHOOK_PORT", cfg.Nacos.WebhookPort)
+	if v := os.Getenv("KC_NACOS_SKIP_NAMESPACES"); v != "" {
+		cfg.Nacos.SkipNamespaces = v
+	}
+	if v := os.Getenv("KC_NACOS_CERT_DIR"); v != "" {
+		cfg.Nacos.CertDir = v
 	}
 }
 

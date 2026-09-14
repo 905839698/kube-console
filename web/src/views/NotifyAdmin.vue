@@ -2,14 +2,17 @@
   <el-card shadow="never">
     <template #header>
       <div class="card-header">
-        <span>通知管理（告警 → 钉钉 / Webhook）</span>
-        <el-button type="primary" size="default" @click="openCreate"><el-icon><Plus /></el-icon>&nbsp;新建渠道</el-button>
+        <span>通知渠道（CI 执行事件 → 钉钉 / Webhook）</span>
+        <div class="header-right">
+          <el-button :icon="Refresh" circle @click="load" />
+          <el-button type="primary" size="default" @click="openCreate"><el-icon><Plus /></el-icon>&nbsp;新建渠道</el-button>
+        </div>
       </div>
     </template>
 
     <el-tabs v-model="tab">
       <el-tab-pane label="通知渠道" name="channels">
-        <el-table :data="channels" size="small" stripe>
+        <el-table border :data="channels" size="small" stripe>
           <el-table-column prop="name" label="名称" min-width="140" />
           <el-table-column prop="type" label="类型" width="110" align="center">
             <template #default="{ row }">
@@ -30,11 +33,11 @@
           </el-table-column>
         </el-table>
         <el-alert type="info" :closable="false" style="margin-top: 10px"
-          title="服务端每 60 秒轮询 Prometheus firing 告警，按指纹去重后推送到启用渠道（同一告警 2 小时内不重复推送）。钉钉机器人需在安全设置里开启「加签」并填入密钥。" />
+          title="本页渠道用于 CI 流水线执行事件（成功/失败/待审批）的通知推送；K8s 告警通知已迁移至 Alertmanager（见「告警」页的实时告警/静默/配置）。钉钉机器人需在安全设置里开启「加签」并填入密钥。" />
       </el-tab-pane>
 
       <el-tab-pane label="通知记录" name="logs">
-        <el-table :data="logs" size="small" stripe v-loading="logsLoading">
+        <el-table border :data="logs" size="small" stripe v-loading="logsLoading">
           <el-table-column prop="sentAt" label="时间" width="170">
             <template #default="{ row }">{{ fmtTime(row.sentAt) }}</template>
           </el-table-column>
@@ -89,7 +92,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Refresh } from '@element-plus/icons-vue'
 import { notifyApi, type NotifyChannelItem, type NotifyLogItem } from '../api'
 
 const tab = ref('channels')

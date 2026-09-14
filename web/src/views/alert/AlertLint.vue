@@ -41,7 +41,7 @@
       </el-col>
     </el-row>
 
-    <el-table :data="filtered" size="default" stripe>
+    <el-table border :data="filtered" size="default" stripe>
       <el-table-column prop="alertName" label="规则名" min-width="240">
         <template #default="{ row }">
           <div class="rule-name">{{ row.alertName }}</div>
@@ -141,6 +141,6 @@ function sevLabel(s: string) {
 .issue-label { color: #909399; font-size: 12px; margin-top: 4px; }
 
 .ok { color: #67c23a; }
-.link { color: #00b8a9; }
+.link { color: var(--el-color-primary); }
 .issue-tag { margin-right: 4px; }
 </style>

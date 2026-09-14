@@ -19,7 +19,7 @@
         <el-link v-if="step > 0" @click="step = 0; search = ''" style="margin-left: 10px">← 返回项目列表</el-link>
       </div>
 
-      <el-table v-if="step === 0" :data="projects" v-loading="loading" size="small" stripe>
+      <el-table border v-if="step === 0" :data="projects" v-loading="loading" size="small" stripe>
         <el-table-column prop="name" label="项目" min-width="200">
           <template #default="{ row }">
             <el-link type="primary" @click="openProject(row.name)">{{ row.name }}</el-link>
@@ -28,7 +28,7 @@
         <el-table-column prop="repo_count" label="仓库数" width="100" align="center" />
       </el-table>
 
-      <el-table v-else-if="step === 1" :data="repos" v-loading="loading" size="small" stripe>
+      <el-table border v-else-if="step === 1" :data="repos" v-loading="loading" size="small" stripe>
         <el-table-column prop="name" label="镜像仓库" min-width="280">
           <template #default="{ row }">
             <el-link type="primary" @click="openRepo(row.name)">{{ row.name }}</el-link>
@@ -46,7 +46,7 @@
           镜像：<code>{{ fullRepo }}</code>
           <el-tag v-for="t in topTags" :key="t" size="small" style="margin-left: 6px">{{ t }}</el-tag>
         </div>
-        <el-table :data="artifacts" v-loading="loading" size="small" stripe>
+        <el-table border :data="artifacts" v-loading="loading" size="small" stripe>
           <el-table-column label="Tag" min-width="150">
             <template #default="{ row }">
               <el-link v-for="t in row.tags" :key="t.name" style="margin-right: 8px" @click="copyRef(t.name)">{{ t.name }}</el-link>
@@ -271,7 +271,8 @@ function fmtSize(n?: number) {
   return (n / 1024).toFixed(0) + ' KiB'
 }
 async function copyRef(tag: string) {
-  const ref = `${cfg.url.replace(/^https?:\/\//, '')}/${fullRepo.value}:${tag}`
+  const host = cfg.url.replace(/^https?:\/\//, '').replace(/\/+$/, '')
+  const ref = host ? `${host}/${fullRepo.value}:${tag}` : `${fullRepo.value}:${tag}`
   try {
     await navigator.clipboard.writeText(ref)
     ElMessage.success(`已复制 ${ref}`)
@@ -341,7 +342,9 @@ async function testCfg() {
 
 async function init() {
   try {
-    await registryApi.getConfig()
+    // 回填配置：复制镜像地址需要 url（仓库域名），仅打开设置弹窗时加载会导致域名丢失
+    const c = await registryApi.getConfig()
+    if (c.url) Object.assign(cfg, { url: c.url, username: c.username || '', insecure: !!c.insecure })
     configured.value = true
     await reload()
   } catch {

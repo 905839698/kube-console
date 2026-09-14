@@ -11,6 +11,7 @@
             <el-button size="small" type="primary" @click="openFormEdit">可视化编辑</el-button>
             <el-button size="small" plain @click="openYaml">编辑 YAML</el-button>
             <el-button size="small" @click="openScale" v-if="kind !== 'cronjobs' && kind !== 'jobs'">缩放</el-button>
+            <el-button size="small" plain @click="imageVisible = true" v-if="kind !== 'pods'">调整镜像</el-button>
             <el-button size="small" type="warning" plain @click="doRestart" v-if="kind !== 'cronjobs' && kind !== 'jobs'">重启</el-button>
             <el-button size="small" type="danger" plain @click="doDelete">删除</el-button>
           </div>
@@ -65,7 +66,7 @@
 
             <el-tabs v-model="tab" style="margin-top: 12px">
               <el-tab-pane label="容器" name="containers">
-                <el-table :data="detail?.containers || []" size="small" stripe>
+                <el-table border :data="detail?.containers || []" size="small" stripe>
                   <el-table-column prop="name" label="名称" min-width="150" />
                   <el-table-column prop="image" label="镜像" min-width="220" show-overflow-tooltip />
                   <el-table-column prop="command" label="启动命令" min-width="160" show-overflow-tooltip />
@@ -117,7 +118,7 @@
               </el-descriptions>
 
               <div class="sub-title">容器</div>
-              <el-table :data="podDetail?.containers || []" size="small" stripe>
+              <el-table border :data="podDetail?.containers || []" size="small" stripe>
                 <el-table-column prop="name" label="名称" min-width="140" />
                 <el-table-column label="状态" width="120">
                   <template #default="{ row }"><StatusTag :status="row.state" :text="row.reason || row.state" /></template>
@@ -178,7 +179,7 @@
 
     <!-- Deployment 历史版本回滚 -->
     <el-dialog v-model="rolloutsVisible" title="Deployment 历史版本（回滚）" width="780px">
-      <el-table :data="rollouts" v-loading="rolloutsLoading" size="small">
+      <el-table border :data="rollouts" v-loading="rolloutsLoading" size="small">
         <el-table-column prop="revision" label="版本" width="90" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.current" type="success" size="small">当前 {{ row.revision }}</el-tag>
@@ -209,6 +210,9 @@
       </template>
     </el-dialog>
 
+    <!-- 调整镜像版本（tag 从已配置仓库拉取） -->
+    <ImageUpdateDialog v-model="imageVisible" :kind="kind" :namespace="namespace" :name="name" @saved="load" />
+
     <!-- Pod 日志抽屉 -->
     <PodLogsDrawer v-model="logsVisible" :pod="logsPod" :container="logsContainer" />
     <WebTerminal
@@ -235,6 +239,7 @@ import ObjectEditor from '../components/ObjectEditor.vue'
 import EventTable from '../components/EventTable.vue'
 import PodLogsDrawer from '../components/PodLogsDrawer.vue'
 import WebTerminal from '../components/WebTerminal.vue'
+import ImageUpdateDialog from '../components/ImageUpdateDialog.vue'
 import MetricPanel, { type MetricCardDef, type MetricChartDef } from '../components/MetricPanel.vue'
 import RangeSwitch from '../components/RangeSwitch.vue'
 import { useClusterStore } from '../store/cluster'
@@ -319,8 +324,8 @@ const monitorCards = computed<MetricCardDef[]>(() => {
   const memPct = m?.memUsagePct ?? null
   return [
     cpuPct != null
-      ? { label: 'CPU 使用率', value: cpuPct, unit: '%', color: '#00b8a9' }
-      : { label: 'CPU 用量', value: m?.cpuUsage ?? null, unit: '核', decimals: 2, color: '#00b8a9' },
+      ? { label: 'CPU 使用率', value: cpuPct, unit: '%', color: '#00aa55' }
+      : { label: 'CPU 用量', value: m?.cpuUsage ?? null, unit: '核', decimals: 2, color: '#00aa55' },
     memPct != null
       ? { label: '内存使用率', value: memPct, unit: '%', color: '#67c23a' }
       : { label: '内存用量', value: m?.memUsageMi ?? null, unit: 'Mi', decimals: 0, color: '#67c23a' },
@@ -337,7 +342,7 @@ const monitorCharts = computed<MetricChartDef[]>(() => {
   const cpuUnit = cpuIsPct ? '%' : '核'
   const memUnit = memIsPct ? '%' : 'Mi'
   return [
-    { title: cpuIsPct ? 'CPU 使用率趋势' : 'CPU 用量趋势', series: [{ name: 'CPU', data: monitor.value?.cpuUsageTrend || [], color: '#00b8a9', unit: cpuUnit }], yAxisName: cpuUnit },
+    { title: cpuIsPct ? 'CPU 使用率趋势' : 'CPU 用量趋势', series: [{ name: 'CPU', data: monitor.value?.cpuUsageTrend || [], color: '#00aa55', unit: cpuUnit }], yAxisName: cpuUnit },
     { title: memIsPct ? '内存使用率趋势' : '内存用量趋势', series: [{ name: '内存', data: monitor.value?.memUsageTrend || [], color: '#67c23a', unit: memUnit }], yAxisName: memUnit },
     { title: '磁盘写趋势', series: [{ name: '磁盘写', data: monitor.value?.diskWriteTrend || [], color: '#909399', unit: 'MB/s' }], yAxisName: 'MB/s' },
     {
@@ -541,6 +546,9 @@ async function doDelete() {
   ElMessage.success('已删除')
   goBack()
 }
+
+// ------------------- 调整镜像版本（逻辑见 ImageUpdateDialog） -------------------
+const imageVisible = ref(false)
 </script>
 
 <style scoped>

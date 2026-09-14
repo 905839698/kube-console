@@ -19,7 +19,7 @@
       <el-tab-pane label="已卸载" name="uninstalled" />
     </el-tabs>
 
-    <el-table :data="filtered" v-loading="loading" stripe>
+    <el-table border :data="filtered" v-loading="loading" stripe>
       <el-table-column label="名称" prop="name" min-width="200">
         <template #default="{ row }">
           <el-link type="primary" @click="goDetail(row)">{{ row.name }}</el-link>
@@ -129,7 +129,7 @@
 
     <!-- 历史对话框 -->
     <el-dialog v-model="historyVisible" :title="`版本历史 - ${historyRow?.name || ''}`" width="640px" destroy-on-close>
-      <el-table :data="history" v-loading="historyLoading" stripe size="small">
+      <el-table border :data="history" v-loading="historyLoading" stripe size="small">
         <el-table-column prop="version" label="修订版" width="80" align="center" sortable />
         <el-table-column prop="status" label="状态" width="130">
           <template #default="{ row }">

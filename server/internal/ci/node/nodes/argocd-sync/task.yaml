@@ -30,7 +30,7 @@ results:
     description: 健康状态（Healthy/Degraded/...）
 steps:
   - name: sync
-    image: harbor.cqyxpt.site:8443/library/kubectl:1.29
+    image: {{imageRegistry}}/kubectl:1.29
     script: |
       #!/bin/bash
       set -e

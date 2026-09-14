@@ -65,7 +65,7 @@ async function onLogin() {
   height: 64px;
   margin: 0 auto;
   border-radius: 16px;
-  background: linear-gradient(135deg, #00b8a9 0%, #00d2c0 100%);
+  background: linear-gradient(135deg, #2fbf71 0%, #00aa55 100%);
   color: #fff;
   display: flex;
   align-items: center;

@@ -231,6 +231,13 @@ func IsGatewayKind(kind string) bool {
 	return gatewayKinds[kind]
 }
 
+// IsGatewayKindFromYAML 接收 YAML 中的 kind（PascalCase 单数，如 "Gateway"），
+// 返回对应的资源名（小写复数，如 "gateways"）及是否为 Gateway API 资源。
+func IsGatewayKindFromYAML(yamlKind string) (resource string, ok bool) {
+	resource = plural(yamlKind)
+	return resource, gatewayKinds[resource]
+}
+
 // gatewayGroup 资源所属的 API 组（用于 discovery 解析版本）
 func gatewayGroup(kind string) string {
 	return "gateway.networking.k8s.io"

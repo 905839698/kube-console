@@ -1,4 +1,5 @@
-// 告警通知：Prometheus firing 告警 → 钉钉/通用 webhook 推送 + 落库去重
+// 通知渠道发送：钉钉机器人（加签）/ 通用 webhook。
+// 渠道模型与 CRUD 由 CI 执行事件通知使用；K8s 告警通知已迁移至 Alertmanager（见 alertmanager.go）
 package service
 
 import (
@@ -14,10 +15,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
-	"gorm.io/gorm"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,151 +24,6 @@ import (
 	"kube-console/server/internal/kube"
 	"kube-console/server/internal/model"
 )
-
-// NotifyService 通知服务
-type NotifyService struct {
-	db *gorm.DB
-	ms *MonitorService
-
-	mu    sync.Mutex
-	// active: fingerprint -> 最近一次已通知的告警（恢复前不重复推）
-	active map[string]time.Time
-	// lastClean 定期清理过期 active 状态（2h 无更新移除）
-	lastClean time.Time
-}
-
-// NewNotifyService 创建通知服务并启动轮询
-func NewNotifyService(db *gorm.DB, ms *MonitorService, clusters *ClusterManager) *NotifyService {
-	s := &NotifyService{db: db, ms: ms, active: map[string]time.Time{}, lastClean: time.Now()}
-	go s.pollLoop(clusters)
-	return s
-}
-
-func (s *NotifyService) pollLoop(clusters *ClusterManager) {
-	poll := func() {
-		var channels []model.NotifyChannel
-		if err := s.db.Where("enabled = ?", true).Find(&channels).Error; err != nil || len(channels) == 0 {
-			return
-		}
-		var clustersList []model.Cluster
-		s.db.Find(&clustersList)
-		cfg := DefaultPromConfig()
-		for _, cl := range clustersList {
-			client, err := clusters.Client(cl.Name)
-			if err != nil {
-				continue
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			alerts, err := s.ms.FiringAlerts(ctx, client, cfg)
-			cancel()
-			if err != nil {
-				continue
-			}
-			if len(alerts) > 0 {
-				s.dispatch(cl.Name, alerts, channels)
-			}
-		}
-		// 清理 active 中 2 小时未见的指纹
-		s.mu.Lock()
-		if time.Since(s.lastClean) > 10*time.Minute {
-			for fp, t := range s.active {
-				if time.Since(t) > 2*time.Hour {
-					delete(s.active, fp)
-				}
-			}
-			s.lastClean = time.Now()
-		}
-		s.mu.Unlock()
-	}
-	poll()
-	ticker := time.NewTicker(60 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		poll()
-	}
-}
-
-// PromAlertRef 轮询到的告警（由 monitor 层解析）
-type PromAlertRef struct {
-	Fingerprint string
-	Name        string
-	Severity    string
-	Summary     string
-	Description string
-	ActiveAt    string
-}
-
-// dispatch 推送告警到所有启用渠道（按指纹去重）
-func (s *NotifyService) dispatch(cluster string, alerts []PromAlertRef, channels []model.NotifyChannel) {
-	for _, a := range alerts {
-		s.mu.Lock()
-		if t, ok := s.active[a.Fingerprint]; ok && time.Since(t) < 2*time.Hour {
-			s.mu.Unlock()
-			continue
-		}
-		s.active[a.Fingerprint] = time.Now()
-		s.mu.Unlock()
-
-		for _, ch := range channels {
-			if !matchSeverity(a.Severity, ch.MinSeverity) {
-				continue
-			}
-			msg := renderAlert(cluster, a)
-			err := SendNotification(ch, fmt.Sprintf("【%s】K8s 告警", cluster), msg)
-			s.db.Create(&model.NotifyLog{
-				ChannelID: ch.ID, ChannelName: ch.Name, Cluster: cluster,
-				AlertName: a.Name, Severity: a.Severity, Message: msg,
-				Fingerprint: a.Fingerprint, Ok: err == nil,
-				Error: errStr(err), SentAt: time.Now(),
-			})
-		}
-	}
-}
-
-func errStr(err error) string {
-	if err == nil {
-		return ""
-	}
-	return truncateStr(err.Error(), 500)
-}
-
-// severityRank 数字越大越严重
-func severityRank(s string) int {
-	switch strings.ToLower(s) {
-	case "critical", "crit":
-		return 3
-	case "warning", "warn":
-		return 2
-	case "info":
-		return 1
-	}
-	return 2
-}
-
-func matchSeverity(actual, minSev string) bool {
-	if minSev == "" {
-		return true
-	}
-	return severityRank(actual) >= severityRank(minSev)
-}
-
-// renderAlert 钉钉 markdown 正文
-func renderAlert(cluster string, a PromAlertRef) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "### %s\n\n", a.Name)
-	fmt.Fprintf(&b, "- **集群**: %s\n", cluster)
-	fmt.Fprintf(&b, "- **级别**: %s\n", strings.ToUpper(a.Severity))
-	if a.Summary != "" {
-		fmt.Fprintf(&b, "- **概要**: %s\n", a.Summary)
-	}
-	if a.Description != "" {
-		fmt.Fprintf(&b, "- **详情**: %s\n", a.Description)
-	}
-	if a.ActiveAt != "" {
-		fmt.Fprintf(&b, "- **开始时间**: %s\n", a.ActiveAt)
-	}
-	return b.String()
-}
 
 // SendNotification 发送一条通知到渠道（也用于手动测试）
 func SendNotification(ch model.NotifyChannel, title, markdown string) error {
@@ -185,11 +39,13 @@ func SendNotification(ch model.NotifyChannel, title, markdown string) error {
 
 // sendDingtalk 钉钉自定义机器人（支持加签）
 func sendDingtalk(ch model.NotifyChannel, title, markdown string) error {
-	webhook := ch.Webhook
-	if ch.Secret != "" {
+	// TrimSpace：粘贴时带入的首尾空白会改变 HMAC 密钥/URL，导致钉钉 310000 签名不匹配
+	webhook := strings.TrimSpace(ch.Webhook)
+	secret := strings.TrimSpace(ch.Secret)
+	if secret != "" {
 		ts := time.Now().UnixMilli()
-		stringToSign := fmt.Sprintf("%d\n%s", ts, ch.Secret)
-		mac := hmac.New(sha256.New, []byte(ch.Secret))
+		stringToSign := fmt.Sprintf("%d\n%s", ts, secret)
+		mac := hmac.New(sha256.New, []byte(secret))
 		mac.Write([]byte(stringToSign))
 		sign := base64.StdEncoding.EncodeToString(mac.Sum(nil))
 		sep := "?"
@@ -211,6 +67,9 @@ func sendDingtalk(ch model.NotifyChannel, title, markdown string) error {
 			ErrMsg  string `json:"errmsg"`
 		}
 		if json.Unmarshal(respBody, &dr) == nil && dr.ErrCode != 0 {
+			if dr.ErrCode == 310000 {
+				return fmt.Errorf("钉钉返回 %d: %s（排查：1. 加签密钥是否与机器人设置中的一致、是否含首尾空白；2. 服务器时间与标准时间偏差是否超过 1 小时）", dr.ErrCode, dr.ErrMsg)
+			}
 			return fmt.Errorf("钉钉返回 %d: %s", dr.ErrCode, dr.ErrMsg)
 		}
 		return nil

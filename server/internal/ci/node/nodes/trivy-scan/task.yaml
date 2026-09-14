@@ -21,7 +21,7 @@ results:
     description: "漏洞摘要，如 CRITICAL=0;HIGH=2;MEDIUM=7;LOW=0"
 steps:
   - name: scan
-    image: harbor.cqyxpt.site:8443/library/trivy:0.48.3
+    image: {{imageRegistry}}/trivy:0.48.3
     script: |
       #!/bin/sh
       # 不 set -e：先跑扫描拿到退出码，再统计，最后按退出码决定是否阻断

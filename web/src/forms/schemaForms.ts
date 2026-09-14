@@ -85,6 +85,34 @@ export const simpleFormFields: Record<string, FieldDef[]> = {
       ],
     },
   ],
+  endpointslices: [
+    ...metaFields,
+    { key: 'addressType', label: '地址类型', type: 'select', options: ['IPv4', 'IPv6'] },
+    {
+      key: 'endpoints',
+      label: '端点',
+      type: 'list',
+      items: [
+        { key: 'addresses', label: '地址', type: 'strings', placeholder: '逗号分隔，如 10.0.0.1, 10.0.0.2' },
+        { key: 'notReadyAddresses', label: 'NotReady 地址', type: 'strings' },
+        { key: 'conditions.ready', label: '就绪', type: 'bool' },
+        { key: 'hostname', label: '主机名', type: 'text', placeholder: '可选' },
+        { key: 'zones', label: '可用区', type: 'strings' },
+        { key: 'deploymentName', label: '部署名称', type: 'text', placeholder: '可选（1.21+）' },
+      ],
+    },
+    {
+      key: 'ports',
+      label: '端口',
+      type: 'list',
+      items: [
+        { key: 'name', label: '名称', type: 'text', placeholder: '如 http' },
+        { key: 'protocol', label: '协议', type: 'select', options: ['TCP', 'UDP', 'SCTP'] },
+        { key: 'port', label: '端口', type: 'number' },
+        { key: 'appProtocol', label: 'appProtocol', type: 'text', placeholder: '可选，如 kubernetes.io/h2c' },
+      ],
+    },
+  ],
   gatewayclasses: [
     ...clusterMetaFields,
     { key: 'spec.controllerName', label: '控制器', type: 'text', required: true, placeholder: '如 istio.io/gateway-controller' },

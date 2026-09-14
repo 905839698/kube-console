@@ -27,7 +27,7 @@ results:
     description: "分析完成标记"
 steps:
   - name: scan
-    image: harbor.cqyxpt.site:8443/library/sonar-scanner-cli:11
+    image: {{imageRegistry}}/sonar-scanner-cli:11
     env:
       - name: SONAR_HOST_URL
         value: "{{sonarHost}}"

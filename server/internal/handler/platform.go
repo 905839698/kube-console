@@ -3,10 +3,11 @@ package handler
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -90,17 +91,50 @@ func (h *PlatformHandler) ListLogSources(c *gin.Context) {
 	response.OK(c, items)
 }
 
+// logSourceInput 日志源表单入参：模型 Password 带 json:"-"（不回显，双向生效），
+// 直接绑 model.LogSource 会导致密码永远绑不进来（保存/测试均失效），须用独立结构体接收
+type logSourceInput struct {
+	ClusterName      string `json:"clusterName"`
+	Namespace        string `json:"namespace"`
+	Service          string `json:"service"`
+	Port             int    `json:"port"`
+	DirectURL        string `json:"directURL"`
+	IndexPrefix      string `json:"indexPrefix"`
+	Username         string `json:"username"`
+	Password         string `json:"password"`
+	Enabled          bool   `json:"enabled"`
+	EventEnabled     bool   `json:"eventEnabled"`
+	EventIndexPrefix string `json:"eventIndexPrefix"`
+}
+
+func (in logSourceInput) toModel() model.LogSource {
+	return model.LogSource{
+		ClusterName:      in.ClusterName,
+		Namespace:        in.Namespace,
+		Service:          in.Service,
+		Port:             in.Port,
+		DirectURL:        in.DirectURL,
+		IndexPrefix:      in.IndexPrefix,
+		Username:         in.Username,
+		Password:         in.Password,
+		Enabled:          in.Enabled,
+		EventEnabled:     in.EventEnabled,
+		EventIndexPrefix: in.EventIndexPrefix,
+	}
+}
+
 // SaveLogSource POST/PUT /logsources
 func (h *PlatformHandler) SaveLogSource(c *gin.Context) {
-	var src model.LogSource
-	if err := c.ShouldBindJSON(&src); err != nil {
+	var in logSourceInput
+	if err := c.ShouldBindJSON(&in); err != nil {
 		response.Fail(c, 400, 400, "参数错误")
 		return
 	}
-	if src.Namespace == "" || src.Service == "" || src.Port == 0 {
+	if in.Namespace == "" || in.Service == "" || in.Port == 0 {
 		response.Fail(c, 400, 400, "命名空间/服务名/端口必填")
 		return
 	}
+	src := in.toModel()
 	var existing model.LogSource
 	if err := h.db.Where("cluster_name = ?", src.ClusterName).First(&existing).Error; err == nil {
 		src.ID = existing.ID
@@ -124,11 +158,12 @@ func (h *PlatformHandler) DeleteLogSource(c *gin.Context) {
 
 // TestLogSource POST /logsources/test
 func (h *PlatformHandler) TestLogSource(c *gin.Context) {
-	var src model.LogSource
-	if err := c.ShouldBindJSON(&src); err != nil {
+	var in logSourceInput
+	if err := c.ShouldBindJSON(&in); err != nil {
 		response.Fail(c, 400, 400, "参数错误")
 		return
 	}
+	src := in.toModel()
 	if src.Password == "" {
 		var existing model.LogSource
 		if h.db.Where("cluster_name = ?", src.ClusterName).First(&existing).Error == nil {
@@ -160,10 +195,28 @@ func (h *PlatformHandler) ListChannels(c *gin.Context) {
 
 // SaveChannel POST/PUT /notify/channels
 func (h *PlatformHandler) SaveChannel(c *gin.Context) {
-	var ch model.NotifyChannel
-	if err := c.ShouldBindJSON(&ch); err != nil {
+	// 模型 Secret 带 json:"-"（不回显）会同时挡住 ShouldBindJSON 的入参绑定，
+	// 导致密钥永远存不进库（钉钉加签机器人收到无签名请求，恒报 310000），须用独立入参结构
+	var in struct {
+		Name        string `json:"name"`
+		Type        string `json:"type"`
+		Webhook     string `json:"webhook"`
+		Secret      string `json:"secret"`
+		MinSeverity string `json:"minSeverity"`
+		Enabled     bool   `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
 		response.Fail(c, 400, 400, "参数错误")
 		return
+	}
+	// 粘贴带入的首尾空白会破坏钉钉加签（HMAC 密钥变化），入库前统一清洗
+	ch := model.NotifyChannel{
+		Name:        strings.TrimSpace(in.Name),
+		Type:        in.Type,
+		Webhook:     strings.TrimSpace(in.Webhook),
+		Secret:      strings.TrimSpace(in.Secret),
+		MinSeverity: in.MinSeverity,
+		Enabled:     in.Enabled,
 	}
 	if ch.Webhook == "" {
 		response.Fail(c, 400, 400, "webhook 地址必填")
@@ -173,6 +226,7 @@ func (h *PlatformHandler) SaveChannel(c *gin.Context) {
 	if err := h.db.Where("name = ?", ch.Name).First(&existing).Error; err == nil {
 		ch.ID = existing.ID
 		ch.CreatedAt = existing.CreatedAt
+		// 编辑时密钥留空 = 保持原密钥不变
 		if ch.Secret == "" {
 			ch.Secret = existing.Secret
 		}
@@ -355,10 +409,15 @@ func (h *PlatformHandler) UsageReport(c *gin.Context) {
 		response.Fail(c, 400, 400, err.Error())
 		return
 	}
+	cl, err := h.clusters.GetRaw(cluster)
+	if err != nil {
+		response.Fail(c, 400, 400, err.Error())
+		return
+	}
 	days := atoiDefault(c.Query("days"), 7)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer cancel()
-	rows, err := service.NamespaceUsage(ctx, client, h.monitor, service.DefaultPromConfig(), days)
+	rows, err := service.NamespaceUsage(ctx, client, h.monitor, service.PromConfigOf(cl), days)
 	if err != nil {
 		response.Fail(c, 500, 500, err.Error())
 		return

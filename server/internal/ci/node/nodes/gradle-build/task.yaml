@@ -10,7 +10,7 @@ results:
     description: "产物路径 / 通配（workspace 内）"
 steps:
   - name: build
-    image: harbor.cqyxpt.site:8443/library/gradle:8-jdk{{jdk}}
+    image: {{imageRegistry}}/gradle:8-jdk{{jdk}}
     script: |
       #!/bin/sh
       set -e

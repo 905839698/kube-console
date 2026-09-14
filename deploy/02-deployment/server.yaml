@@ -1,6 +1,9 @@
-# kube-console 后端 Deployment
-# 说明：本应用采用 kubeconfig 注册制管理集群（在界面中粘贴 kubeconfig 即可）。
-# 若部署在集群内并希望管理该集群自身，可通过 ConfigMap 挂载 kubeconfig，或在界面中粘贴本集群的 kubeconfig。
+# kube-console 后端 Deployment（PostgreSQL）
+# 说明：
+#   - 镜像按 server/Dockerfile 构建（多阶段，含 git：CI 的 GitLab 分支/Tag 接口依赖）
+#   - 本应用采用 kubeconfig 注册制管理集群（界面中粘贴 kubeconfig 即可）
+#   - 数据库为 PostgreSQL：先建库（CREATE DATABASE kube_console;），DSN 放 Secret 的 db-dsn
+#   - 副本数保持 1：CI 后台同步循环在进程内运行，多副本会重复消费（未做 leader election）
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,16 +23,21 @@ spec:
     spec:
       containers:
         - name: server
-          # TODO: 替换为你自己的镜像（参考 server/Dockerfile）
-          image: harbor.example.com/library/kube-console-server:latest
+          # 构建并推送到你自己的仓库后替换（docker build -f server/Dockerfile -t <仓库>/kube-console-server:latest .）
+          image: easzlab.io.local:5000/kube-console-server:fix-gateway
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
+            # Nacos Pod 注入 Admission Webhook（HTTPS 自签）
+            - containerPort: 9443
           env:
-            # 生产环境建议使用 PostgreSQL 或 MySQL（先创建数据库）
             - name: KC_DB_DRIVER
-              value: sqlite
+              value: postgres
             - name: KC_DB_DSN
-              value: /data/kube-console.db
+              valueFrom:
+                secretKeyRef:
+                  name: kube-console-secrets
+                  key: db-dsn
             - name: KC_JWT_SECRET
               valueFrom:
                 secretKeyRef:
@@ -40,6 +48,9 @@ spec:
                 secretKeyRef:
                   name: kube-console-secrets
                   key: admin-password
+            # Webhook 自签证书目录（须持久化，保证 caBundle 跨重启稳定）
+            - name: KC_NACOS_CERT_DIR
+              value: /data/nacos-cert
           volumeMounts:
             - name: data
               mountPath: /data
@@ -52,37 +63,25 @@ spec:
               memory: 512Mi
           readinessProbe:
             httpGet:
-              path: /api/auth/login
+              path: /api/health
               port: 8080
               scheme: HTTP
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /api/auth/login
+              path: /api/health
               port: 8080
               scheme: HTTP
             initialDelaySeconds: 15
             periodSeconds: 20
       volumes:
+        # SQLite 开发模式默认落在 /data；生产用 PostgreSQL 时该卷仅存 Webhook 自签证书
         - name: data
-          persistentVolumeClaim:
-            claimName: kube-console-data
+          emptyDir: {}
 ---
-# 数据持久化（sqlite 模式）
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: kube-console-data
-  namespace: kube-console
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
----
-# 密钥（先创建 Secret，或删除后直接使用明文默认值）
+# 密钥与数据库连接：apply 前必须改成真值（或改用 SealedSecret/ExternalSecret 注入后删除本段）
+# db-dsn 示例: host=10.0.0.1 user=kc password=xxx dbname=kube_console port=5432 sslmode=disable TimeZone=Asia/Shanghai
 apiVersion: v1
 kind: Secret
 metadata:
@@ -90,5 +89,6 @@ metadata:
   namespace: kube-console
 type: Opaque
 stringData:
+  db-dsn: "host=POSTGRES_HOST user=kc password=CHANGE_ME dbname=kube_console port=5432 sslmode=disable TimeZone=Asia/Shanghai"
   jwt-secret: "change-me-to-a-long-random-string"
   admin-password: "admin123"

@@ -1,0 +1,100 @@
+# kube-console 前端 Deployment（纯静态 + Nginx）
+# 镜像按 web/Dockerfile 构建（仓库根目录执行）：
+#   docker build -f web/Dockerfile -t <仓库>/kube-console-web:latest .
+# nginx.conf 通过 ConfigMap 挂载（可独立于镜像更新）。
+# 走 Ingress 路径分发时 /api 由 Ingress 接管，镜像内反代段仅作 NodePort/独立暴露兜底。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-console-nginx
+  namespace: kube-console
+data:
+  nginx.conf: |
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    server {
+        listen 80;
+        server_name _;
+
+        root /usr/share/nginx/html;
+        index index.html;
+
+        client_max_body_size 100m;
+
+        gzip on;
+        gzip_types text/css application/javascript application/json image/svg+xml;
+
+        location /api/ {
+            # K8s 内解析；物理机部署请改为后端机器 IP:8080
+            proxy_pass http://kube-console-server.kube-console.svc.cluster.local:8080;
+            proxy_set_header Host              $host;
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+
+            # WebSocket 透传三件套
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade    $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+
+            # SSE（CI 日志流）：关缓冲
+            proxy_buffering off;
+            proxy_cache off;
+
+            # 终端/日志长连接
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-console-web
+  namespace: kube-console
+  labels:
+    app: kube-console-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-console-web
+  template:
+    metadata:
+      labels:
+        app: kube-console-web
+    spec:
+      containers:
+        - name: web
+          image: easzlab.io.local:5000/kube-console-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+              scheme: HTTP
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          volumeMounts:
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: nginx.conf
+      volumes:
+        - name: nginx-conf
+          configMap:
+            name: kube-console-nginx

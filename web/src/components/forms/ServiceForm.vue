@@ -26,7 +26,23 @@
       </el-form-item>
       <template v-if="o.spec.type !== 'ExternalName'">
         <el-form-item label="选择器">
-          <KvEditor v-model="o.spec.selector" key-placeholder="key" value-placeholder="value" />
+          <!-- 标签 key/value 级联下拉：选项来自所选命名空间内 Pod 的现有标签，可输入自定义值 -->
+          <div style="width: 100%">
+            <div v-for="(row, i) in selectorRows" :key="i" class="kv-row">
+              <el-select v-model="row.key" size="small" style="width: 46%" filterable allow-create placeholder="标签 key（选择或输入）" @change="row.value = ''">
+                <el-option v-for="k in labelKeys" :key="k" :label="k" :value="k" />
+              </el-select>
+              <span class="sep">=</span>
+              <el-select v-model="row.value" size="small" style="width: 46%" filterable allow-create placeholder="标签 value（选择或输入）">
+                <el-option v-for="v in nsLabels[row.key] || []" :key="v" :label="v" :value="v" />
+              </el-select>
+              <el-button size="small" type="danger" text @click="selectorRows.splice(i, 1)"><el-icon><Delete /></el-icon></el-button>
+            </div>
+            <el-button size="small" type="primary" plain @click="selectorRows.push({ key: '', value: '' })">
+              <el-icon><Plus /></el-icon>添加标签
+            </el-button>
+            <span class="monitor-hint">选项来自该命名空间下 Pod 的现有标签</span>
+          </div>
         </el-form-item>
         <el-form-item label="端口">
           <div v-for="(p, i) in o.spec.ports || []" :key="i" class="kv-row">
@@ -97,7 +113,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
-import KvEditor from './KvEditor.vue'
+import { k8sApi } from '../../api'
 
 const props = defineProps<{ modelValue: any }>()
 const emit = defineEmits(['update:modelValue', 'change'])
@@ -105,6 +121,62 @@ const o = computed({
   get: () => props.modelValue,
   set: (v) => emit('update:modelValue', v),
 })
+
+// ---- 标签选择器：行数组 <-> spec.selector 对象；key/value 下拉选项取自命名空间内 Pod 的现有标签 ----
+const selectorRows = ref<{ key: string; value: string }[]>([])
+const nsLabels = ref<Record<string, string[]>>({})
+const labelKeys = computed(() => Object.keys(nsLabels.value).sort())
+const nsLabelCache: Record<string, Record<string, string[]>> = {}
+let labelsLoading = ''
+
+function syncRowsFromSelector() {
+  selectorRows.value = Object.entries(o.value?.spec?.selector || {}).map(([key, value]) => ({ key, value: String(value) }))
+}
+syncRowsFromSelector()
+watch(selectorRows, () => {
+  const sel: Record<string, string> = {}
+  for (const r of selectorRows.value) {
+    if (r.key) sel[r.key] = r.value
+  }
+  o.value.spec = o.value.spec || {}
+  o.value.spec.selector = sel
+  emit('change')
+}, { deep: true })
+
+// 外部整体替换 selector（如 YAML → 表单切换重解析）时重新同步行；
+// 比较时忽略未填 key 的待编辑行，避免自身写回把刚添加的空行清掉
+watch(() => o.value?.spec?.selector, (sel) => {
+  const rows = Object.entries(sel || {}).map(([key, value]) => ({ key, value: String(value) }))
+  const cur = selectorRows.value.filter((r) => r.key)
+  if (JSON.stringify(rows) !== JSON.stringify(cur)) selectorRows.value = rows
+})
+
+async function ensureLabels(ns: string) {
+  if (nsLabelCache[ns]) {
+    nsLabels.value = nsLabelCache[ns]
+    return
+  }
+  if (labelsLoading === ns) return
+  labelsLoading = ns
+  try {
+    const pods = await k8sApi.workloads('pods', ns)
+    const m: Record<string, Record<string, boolean>> = {}
+    for (const p of pods || []) {
+      for (const [k, v] of Object.entries(p.labels || {})) {
+        ;(m[k] = m[k] || {})[v] = true
+      }
+    }
+    const out: Record<string, string[]> = {}
+    for (const [k, vs] of Object.entries(m)) out[k] = Object.keys(vs).sort()
+    nsLabelCache[ns] = out
+    if ((o.value?.metadata?.namespace || '') === ns) nsLabels.value = out
+  } catch {
+    nsLabelCache[ns] = {}
+  } finally {
+    labelsLoading = ''
+  }
+}
+watch(() => o.value?.metadata?.namespace, (ns) => { if (ns) ensureLabels(ns) }, { immediate: true })
 
 // 接入监控配置：写入 Service annotations，后端保存后自动同步 ServiceMonitor
 const monitorEnabled = ref(false)

@@ -29,7 +29,7 @@ results:
     description: 本次更新的镜像引用（逗号分隔）
 steps:
   - name: bump
-    image: harbor.cqyxpt.site:8443/library/git:2.43.4
+    image: {{imageRegistry}}/git:2.43.4
     script: |
       #!/bin/sh
       set -e

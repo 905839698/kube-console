@@ -22,5 +22,31 @@ admin:
   password: admin123
 
 k8s:
-  # 终端调试容器镜像（内网集群需用私有仓库可拉取的镜像）
+  # 终端调试容器镜像（内网集群需用私有仓库可拉取的镜像；env: KC_K8S_DEBUG_IMAGE）
   debugImage: busybox:1.36
+
+ci:
+  # CI 任务镜像仓库前缀（节点模板里 {{imageRegistry}} 的全局取值；env: KC_CI_IMAGE_REGISTRY）。
+  # 换 Harbor/registry 只改这一处，全部 19 类 CI 节点镜像随之切换；镜像版本仍是各节点自己的参数。
+  # 完整镜像清单见 docs/images.md
+  imageRegistry: harbor.cqyxpt.site:8443/library
+
+obs:
+  # 告警历史轮询 Alertmanager 的间隔（秒；env: KC_OBS_ALERT_INTERVAL）
+  alertIntervalSec: 60
+  # 告警历史保留天数，超期清理（env: KC_OBS_ALERT_RETENTION_DAYS）
+  alertRetentionDays: 90
+  # 事件归档轮询 K8s Events 写 ES 的间隔（秒；env: KC_OBS_EVENT_INTERVAL）
+  eventIntervalSec: 60
+  # 事件归档索引保留天数，按索引名日期删除过期索引，0 = 永不清理（env: KC_OBS_EVENT_RETENTION_DAYS）
+  eventRetentionDays: 30
+
+nacos:
+  # 命名空间自动同步周期（秒；env: KC_NACOS_SYNC_INTERVAL）。连接地址/凭证在「平台管理 → Nacos 管理」按集群配置
+  syncIntervalSec: 300
+  # Pod 注入 Admission Webhook 的 HTTPS 监听端口（0 = 不启动；env: KC_NACOS_WEBHOOK_PORT）
+  webhookPort: 9443
+  # 不参与 Nacos 同步的系统命名空间（逗号分隔；env: KC_NACOS_SKIP_NAMESPACES）
+  skipNamespaces: kube-system,kube-public,kube-node-lease,kube-console
+  # Webhook 自签证书目录（须持久化，保证 caBundle 跨重启稳定；env: KC_NACOS_CERT_DIR）
+  certDir: ./data

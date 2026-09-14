@@ -20,7 +20,7 @@ results:
     description: "产物路径 / 通配（workspace 内）"
 steps:
   - name: build
-    image: harbor.cqyxpt.site:8443/library/maven:{{mavenVersion}}-eclipse-temurin-{{jdk}}
+    image: {{imageRegistry}}/maven:{{mavenVersion}}-eclipse-temurin-{{jdk}}
     script: |
       #!/bin/sh
       set -e

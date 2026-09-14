@@ -33,7 +33,7 @@
             <el-option v-for="p in pipelines" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
         </div>
-        <el-table :data="runs" v-loading="runsLoading" size="small" stripe highlight-current-row @row-click="(r: any) => openDetail(r)" row-class-name="cursor-row">
+        <el-table border :data="runs" v-loading="runsLoading" size="small" stripe highlight-current-row @row-click="(r: any) => openDetail(r)" row-class-name="cursor-row">
           <el-table-column label="#" width="90">
             <template #default="{ row }">
               <span :class="['dot', 'st-' + row.status]"></span>#{{ row.runNo }}
@@ -80,7 +80,7 @@
           </el-select>
           <el-button v-if="canWrite" type="primary" size="small" :disabled="!projects.length" @click="openPipeDlg()">新建流水线</el-button>
         </div>
-        <el-table :data="pipelines" v-loading="loading" size="small" stripe>
+        <el-table border :data="pipelines" v-loading="loading" size="small" stripe>
           <el-table-column prop="name" label="流水线" min-width="200" />
           <el-table-column prop="description" label="描述" min-width="160" show-overflow-tooltip />
           <el-table-column label="所属项目" min-width="130">
@@ -108,7 +108,7 @@
           <el-button v-if="canWrite" type="primary" size="small" @click="openProjDlg()">新建项目</el-button>
           <span class="cfg-tip">项目 = 一个 K8s 命名空间：该项目的流水线运行 / 工作区 PVC / 凭证 Secret 都落在项目 ns 内（自动创建）。</span>
         </div>
-        <el-table :data="projects" v-loading="loading" size="small" stripe>
+        <el-table border :data="projects" v-loading="loading" size="small" stripe>
           <el-table-column label="项目" min-width="150">
             <template #default="{ row }">{{ row.displayName || row.name }}</template>
           </el-table-column>
@@ -135,7 +135,7 @@
           <el-button v-if="canWrite" type="primary" size="small" @click="openCredDlg()">新建凭据</el-button>
           <span class="cfg-tip">凭据供流水线节点引用；明文只存 K8s Secret（平台 ns + 各项目 ns 扇出）。</span>
         </div>
-        <el-table :data="credentials" v-loading="credLoading" size="small" stripe>
+        <el-table border :data="credentials" v-loading="credLoading" size="small" stripe>
           <el-table-column prop="name" label="名称" min-width="170" />
           <el-table-column label="形态" width="150" align="center">
             <template #default="{ row }"><el-tag size="small" type="info">{{ credFormLabel(row.form) }}</el-tag></template>
@@ -172,7 +172,7 @@
             <el-option v-for="p in projects" :key="p.id" :label="p.displayName || p.name" :value="p.id" />
           </el-select>
         </div>
-        <el-table :data="artifacts" v-loading="artLoading" size="small" stripe @row-click="(r: any) => openArtifact(r)" row-class-name="cursor-row">
+        <el-table border :data="artifacts" v-loading="artLoading" size="small" stripe @row-click="(r: any) => openArtifact(r)" row-class-name="cursor-row">
           <el-table-column prop="name" label="制品" min-width="200" show-overflow-tooltip />
           <el-table-column prop="type" label="类型" width="100" align="center">
             <template #default="{ row }"><el-tag size="small" type="info">{{ row.type }}</el-tag></template>
@@ -204,7 +204,7 @@
             <el-option v-for="p in projects" :key="p.id" :label="p.displayName || p.name" :value="p.id" />
           </el-select>
         </div>
-        <el-table :data="deployments" v-loading="deployLoading" size="small" stripe>
+        <el-table border :data="deployments" v-loading="deployLoading" size="small" stripe>
           <el-table-column prop="namespace" label="命名空间" min-width="130" />
           <el-table-column label="类型" width="120" align="center">
             <template #default="{ row }">
@@ -243,7 +243,7 @@
           <el-button v-if="canWrite" type="primary" size="small" @click="openGlobalDlg()">新建变量</el-button>
           <span class="cfg-tip">节点参数中以 <code>${'{'}global.KEY{'}'}</code> 引用（如 <code>${'{'}global.HARBOR{'}'}/app</code>）；编译前替换为变量值，未定义的 key 原样保留。</span>
         </div>
-        <el-table :data="globals" v-loading="globalLoading" size="small" stripe>
+        <el-table border :data="globals" v-loading="globalLoading" size="small" stripe>
           <el-table-column prop="key" label="Key" min-width="180">
             <template #default="{ row }"><span class="mono">{{ row.key }}</span></template>
           </el-table-column>

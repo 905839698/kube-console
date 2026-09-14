@@ -7,6 +7,7 @@
           <el-button v-if="selected.length && !isPod" size="small" type="warning" plain :disabled="kind === 'cronjobs' || kind === 'jobs'" @click="batchRestart">重启选中 ({{ selected.length }})</el-button>
           <el-button v-if="selected.length" size="small" type="danger" plain @click="batchDelete">删除选中 ({{ selected.length }})</el-button>
           <el-input v-model="search" placeholder="搜索..." :prefix-icon="Search" clearable style="width: 200px" @input="load" />
+          <el-button :icon="Refresh" circle @click="load" />
           <el-button v-if="!isPod" type="primary" size="default" @click="openCreate">
             <el-icon><Plus /></el-icon>&nbsp;新建
           </el-button>
@@ -14,7 +15,7 @@
       </div>
     </template>
 
-    <el-table :data="paged" v-loading="loading" stripe @row-click="onRowClick" @selection-change="(rows: WorkloadItem[]) => (selected = rows)">
+    <el-table border :data="paged" v-loading="loading" stripe @row-click="onRowClick" @selection-change="(rows: WorkloadItem[]) => (selected = rows)">
       <el-table-column type="selection" width="42" />
       <el-table-column label="名称" prop="name" min-width="200" sortable>
         <template #default="{ row }">
@@ -65,6 +66,7 @@
                 <el-dropdown-item command="yaml" divided>编辑 YAML</el-dropdown-item>
                 <el-dropdown-item command="scale" :disabled="kind === 'daemonsets' || kind === 'cronjobs'">缩放</el-dropdown-item>
                 <el-dropdown-item command="restart" :disabled="kind === 'cronjobs' || kind === 'jobs'">重启</el-dropdown-item>
+                <el-dropdown-item command="image">调整镜像</el-dropdown-item>
                 <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -122,6 +124,15 @@
         <el-button type="primary" :loading="scaling" @click="doScale">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 调整镜像版本（tag 从已配置仓库拉取） -->
+    <ImageUpdateDialog
+      v-model="imageVisible"
+      :kind="kind"
+      :namespace="imageTarget?.namespace || namespace[0] || 'default'"
+      :name="imageTarget?.name || ''"
+      @saved="load"
+    />
   </el-card>
 </template>
 
@@ -130,13 +141,14 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ElPagination } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
+import { Refresh, Search } from '@element-plus/icons-vue'
 import { k8sApi, nsParam, type WorkloadItem } from '../api'
 import YamlDialog from '../components/YamlDialog.vue'
 import ObjectEditor from '../components/ObjectEditor.vue'
 import StatusTag from '../components/StatusTag.vue'
 import PodLogsDrawer from '../components/PodLogsDrawer.vue'
 import WebTerminal from '../components/WebTerminal.vue'
+import ImageUpdateDialog from '../components/ImageUpdateDialog.vue'
 import { useClusterStore } from '../store/cluster'
 import { useNamespaceStore } from '../store/namespace'
 import { parseDuration } from '../utils/sort'
@@ -216,6 +228,8 @@ const scaleVisible = ref(false)
 const scaleTarget = ref<WorkloadItem>()
 const scaleReplicas = ref(1)
 const scaling = ref(false)
+const imageVisible = ref(false)
+const imageTarget = ref<WorkloadItem>()
 
 // Pod 日志 / 终端（字段与 PodItem 兼容，按 any 透传避免结构约束）
 const logsVisible = ref(false)
@@ -339,6 +353,10 @@ async function onCommand(cmd: string, row: WorkloadItem) {
         await k8sApi.restartWorkload(kind.value, row.namespace || namespace.value[0] || 'default', row.name)
         ElMessage.success('已触发重启')
       })
+      break
+    case 'image':
+      imageTarget.value = row
+      imageVisible.value = true
       break
     case 'delete':
       await confirmAndDo(`确定删除 ${kindTitle.value} ${row.name}？`, async () => {

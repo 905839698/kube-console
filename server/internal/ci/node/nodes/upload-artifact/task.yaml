@@ -43,7 +43,7 @@ results:
 steps:
   # ---- Nexus（curl PUT raw）----
   - name: upload-nexus
-    image: harbor.cqyxpt.site:8443/library/curl:8.5.0
+    image: {{imageRegistry}}/curl:8.5.0
     script: |
       #!/bin/sh
       set -e
@@ -71,7 +71,7 @@ steps:
       fi
   # ---- MinIO（mc cp）----
   - name: upload-minio
-    image: harbor.cqyxpt.site:8443/library/mc:RELEASE.2024-06-12T14-34-03Z
+    image: {{imageRegistry}}/mc:RELEASE.2024-06-12T14-34-03Z
     script: |
       #!/bin/sh
       set -e

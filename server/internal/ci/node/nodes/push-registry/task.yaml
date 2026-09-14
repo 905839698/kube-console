@@ -17,7 +17,7 @@ results:
     description: "镜像 digest（sha256:...）"
 steps:
   - name: push
-    image: harbor.cqyxpt.site:8443/library/skopeo:latest
+    image: {{imageRegistry}}/skopeo:latest
     script: |
       #!/bin/sh
       set -e

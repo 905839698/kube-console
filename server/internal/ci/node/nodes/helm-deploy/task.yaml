@@ -12,7 +12,7 @@ results:
 steps:
   - name: deploy
     # bitnami 镜像基于 Debian，自带 bash
-    image: harbor.cqyxpt.site:8443/library/helm:3.14
+    image: {{imageRegistry}}/helm:3.14
     script: |
       #!/bin/bash
       # 脚本用到数组 / here-string 等 bash 特性，故用 bash（bitnami 镜像自带）

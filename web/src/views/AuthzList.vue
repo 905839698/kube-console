@@ -8,7 +8,7 @@
       <span class="hint">授权 = 把某个角色的集群/命名空间权限授予指定用户（生成带 kc-grant- 前缀的 RBAC 绑定，可在此回收）</span>
     </div>
 
-    <el-table :data="grants" v-loading="loading" size="small">
+    <el-table border :data="grants" v-loading="loading" size="small">
       <el-table-column prop="grantee" label="用户" width="140" />
       <el-table-column label="角色" width="150">
         <template #default="{ row }">
@@ -107,7 +107,7 @@
       <template v-if="queryResult">
         <el-alert v-if="queryResult.groups.length" type="info" :closable="false" style="margin-bottom: 10px"
           :title="`所属组：${queryResult.groups.join('、')}`" />
-        <el-table :data="queryResult.permissions" size="small" stripe>
+        <el-table border :data="queryResult.permissions" size="small" stripe>
           <el-table-column label="范围" width="190">
             <template #default="{ row }">
               <el-tag v-if="row.kind === 'ClusterRoleBinding'" size="small" type="warning">集群级</el-tag>

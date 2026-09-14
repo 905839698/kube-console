@@ -8,11 +8,12 @@
             <el-option v-for="d in [1, 7, 30, 90]" :key="d" :label="`近 ${d} 天`" :value="d" />
           </el-select>
           <el-button size="small" @click="exportCsv" :disabled="!rows.length">导出 CSV</el-button>
+          <el-button :icon="Refresh" circle size="small" @click="load" style="margin-left: 8px" />
         </div>
       </div>
     </template>
 
-    <el-table :data="rows" v-loading="loading" size="small" stripe>
+    <el-table border :data="rows" v-loading="loading" size="small" stripe>
       <el-table-column prop="namespace" label="命名空间" min-width="180" />
       <el-table-column label="CPU 平均（核）" width="140" align="right">
         <template #default="{ row }">{{ row.cpuAvgCores.toFixed(3) }}</template>
@@ -42,6 +43,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { usageApi, type NSUsageRow } from '../api'
 
 const days = ref(7)

@@ -13,7 +13,7 @@
     <el-alert v-if="!installed" type="info" :closable="false"
       title="当前集群未部署 ArgoCD（未发现 applications.argoproj.io CRD）。" />
 
-    <el-table v-else :data="apps" v-loading="loading" size="small" stripe>
+    <el-table border v-else :data="apps" v-loading="loading" size="small" stripe>
       <el-table-column prop="name" label="应用" min-width="160">
         <template #default="{ row }">
           <span>{{ row.name }}</span>

@@ -8,11 +8,15 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 
 	"kube-console/server/internal/kube"
@@ -22,8 +26,8 @@ import (
 // PromResult Prometheus 查询结果（简化）
 type PromResult struct {
 	Metric map[string]string `json:"metric"`
-	Value  []interface{}     `json:"value"`    // [timestamp, "value"]
-	Values [][]interface{}   `json:"values"`   // [[timestamp, "value"], ...]
+	Value  []interface{}     `json:"value"`  // [timestamp, "value"]
+	Values [][]interface{}   `json:"values"` // [[timestamp, "value"], ...]
 }
 
 type promResponse struct {
@@ -111,7 +115,11 @@ func (m *MonitorService) doProm(ctx context.Context, c *kube.Client, cfg PromCon
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prometheus 返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(body))[:min(300, len(body))])
+		msg := strings.TrimSpace(string(body))
+		if len(msg) > 300 {
+			msg = msg[:300]
+		}
+		return nil, fmt.Errorf("Prometheus 返回 %d: %s", resp.StatusCode, msg)
 	}
 	var pr promResponse
 	if err := json.Unmarshal(body, &pr); err != nil {
@@ -121,13 +129,6 @@ func (m *MonitorService) doProm(ctx context.Context, c *kube.Client, cfg PromCon
 		return nil, fmt.Errorf("Prometheus 查询失败: %s", pr.Error)
 	}
 	return &pr, nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // Query 瞬时查询
@@ -189,7 +190,11 @@ func (m *MonitorService) doPromRaw(ctx context.Context, c *kube.Client, cfg Prom
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prometheus 返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(body))[:min(300, len(body))])
+		msg := strings.TrimSpace(string(body))
+		if len(msg) > 300 {
+			msg = msg[:300]
+		}
+		return nil, fmt.Errorf("Prometheus 返回 %d: %s", resp.StatusCode, msg)
 	}
 	var out map[string]interface{}
 	if err := json.Unmarshal(body, &out); err != nil {
@@ -205,18 +210,20 @@ func (m *MonitorService) doPromRaw(ctx context.Context, c *kube.Client, cfg Prom
 
 // AlertRule 一条告警规则（含状态 / 严重级 / 描述 / 当前活动实例）
 type AlertRule struct {
-	AlertName string            `json:"alertName"`
-	State     string            `json:"state"`    // firing / pending / inactive
-	Severity  string            `json:"severity"` // critical / warning / info / none
-	Namespace string            `json:"namespace"`
-	Summary   string            `json:"summary"`
-	Detail    string            `json:"detail"`
-	Runbook   string            `json:"runbook"`
-	Group     string            `json:"group"`
-	Query     string            `json:"query"`
-	Duration  float64           `json:"duration"` // 触发持续时长（秒）
-	LastEval  string            `json:"lastEval"`
-	Instances []AlertInstance   `json:"instances"`
+	AlertName string          `json:"alertName"`
+	State     string          `json:"state"`    // firing / pending / inactive
+	Severity  string          `json:"severity"` // critical / warning / info / none
+	Namespace string          `json:"namespace"`
+	Summary   string          `json:"summary"`
+	Detail    string          `json:"detail"`
+	Runbook   string          `json:"runbook"`
+	Group     string          `json:"group"`
+	Query     string          `json:"query"`
+	Duration  float64         `json:"duration"` // 触发持续时长（秒）
+	LastEval  string          `json:"lastEval"`
+	Instances []AlertInstance `json:"instances"`
+	// Source 规则所在的 PrometheusRule CR（ns/name），供查看/编辑定位源；非 CR 来源（如直接 rulefiles）为空
+	Source string `json:"source"`
 
 	// 规则检查（lint）：供「规则检查」页定位配置缺陷
 	HasSeverity  bool `json:"hasSeverity"`
@@ -245,20 +252,20 @@ type AlertInstance struct {
 
 // AlertSummary 顶部统计
 type AlertSummary struct {
-	Firing   int `json:"firing"`
-	Pending  int `json:"pending"`
-	Inactive int `json:"inactive"`
-	Total    int `json:"total"`
+	Firing     int            `json:"firing"`
+	Pending    int            `json:"pending"`
+	Inactive   int            `json:"inactive"`
+	Total      int            `json:"total"`
 	BySeverity map[string]int `json:"bySeverity"`
 }
 
 // AlertRulesResponse /api/v1/rules 解析后的告警视图
 type AlertRulesResponse struct {
-	Summary    AlertSummary   `json:"summary"`
-	Rules      []AlertRule    `json:"rules"`
-	Groups     int            `json:"groups"`
-	GroupList  []GroupSummary `json:"groupList"`
-	LastEval   string         `json:"lastEval"`
+	Summary   AlertSummary   `json:"summary"`
+	Rules     []AlertRule    `json:"rules"`
+	Groups    int            `json:"groups"`
+	GroupList []GroupSummary `json:"groupList"`
+	LastEval  string         `json:"lastEval"`
 }
 
 // AlertRules 拉取并解析 Prometheus /api/v1/rules，返回告警规则（含活动告警实例）。
@@ -376,7 +383,59 @@ func (m *MonitorService) AlertRules(ctx context.Context, c *kube.Client, cluster
 		}
 		out.GroupList = append(out.GroupList, gs)
 	}
+
+	// 回填规则源（PrometheusRule CR），供前端查看/编辑定位；CRD 不存在时静默降级
+	if idx := m.promRuleSourceIndex(ctx, c); idx != nil {
+		for i := range out.Rules {
+			if byAlert, ok := idx[out.Rules[i].Group]; ok {
+				out.Rules[i].Source = byAlert[out.Rules[i].AlertName]
+			}
+		}
+	}
 	return out, nil
+}
+
+// promRuleSourceIndex 列出全部 PrometheusRule CR，构建 (分组,告警名) → "ns/name" 索引；
+// CRD 不存在或列表失败返回 nil（调用方保持 Source 为空）
+func (m *MonitorService) promRuleSourceIndex(ctx context.Context, c *kube.Client) map[string]map[string]string {
+	gvr := schema.GroupVersionResource{Group: "monitoring.coreos.com", Version: "v1", Resource: "prometheusrules"}
+	list, err := c.Dynamic.Resource(gvr).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil
+	}
+	return promRuleSources(list.Items)
+}
+
+// promRuleSources 从 PrometheusRule CR 列表构建 (分组名,告警名) → CR "ns/name" 索引。
+// 同组同名的告警取先出现的 CR（分组名重复的少见场景下保持确定性）。
+func promRuleSources(items []unstructured.Unstructured) map[string]map[string]string {
+	idx := map[string]map[string]string{}
+	for _, cr := range items {
+		ref := cr.GetNamespace() + "/" + cr.GetName()
+		groups, _, _ := unstructured.NestedSlice(cr.Object, "spec", "groups")
+		for _, gRaw := range groups {
+			g, _ := gRaw.(map[string]interface{})
+			gName, _ := g["name"].(string)
+			if gName == "" {
+				continue
+			}
+			rules, _ := g["rules"].([]interface{})
+			for _, rRaw := range rules {
+				r, _ := rRaw.(map[string]interface{})
+				alert, _ := r["alert"].(string)
+				if alert == "" {
+					continue // 记录型规则无 alert 字段
+				}
+				if idx[gName] == nil {
+					idx[gName] = map[string]string{}
+				}
+				if _, ok := idx[gName][alert]; !ok {
+					idx[gName][alert] = ref
+				}
+			}
+		}
+	}
+	return idx
 }
 
 // instHasNamespace 任一活动实例带 namespace 标签即视为有命名空间
@@ -409,7 +468,6 @@ func rangeSpec(r string) RangeSpec {
 		return RangeSpec{Start: end.Add(-24 * time.Hour), End: end, Step: 15 * time.Minute}
 	}
 }
-
 
 // nodeCPUQL 节点 CPU 使用率排行（join node_uname_info 获取 nodename 标签）
 func nodeCPUQL() string {
@@ -446,9 +504,6 @@ func series(result []PromResult) [][]float64 {
 	return out
 }
 
-
-
-
 // ------------------- 指标查询（五级） -------------------
 
 // ClusterMonitor 集群级监控数据
@@ -469,11 +524,27 @@ type ClusterMonitor struct {
 	NodeMemRank      []RankItem         `json:"nodeMemRank"`
 	NamespaceCPURank []RankItem         `json:"namespaceCpuRank"`
 	ControlPlane     []ControlPlaneItem `json:"controlPlane"`
+	// Request/Limit 配额视角（kube-state-metrics；对全集群可调度资源的分配情况）
+	CPURequestsCores    float64 `json:"cpuRequestsCores"`
+	CPULimitsCores      float64 `json:"cpuLimitsCores"`
+	CPUAllocatableCores float64 `json:"cpuAllocatableCores"`
+	MemRequestsGi       float64 `json:"memRequestsGi"`
+	MemLimitsGi         float64 `json:"memLimitsGi"`
+	MemAllocatableGi    float64 `json:"memAllocatableGi"`
+	// PV 存储用量（kubelet_volume_stats；部分环境未采集时为 0）
+	PvCount   int        `json:"pvCount"`
+	PvTotalGi float64    `json:"pvTotalGi"`
+	PvUsedPct float64    `json:"pvUsedPct"`
+	PvTopUsed []RankItem `json:"pvTopUsed"` // PVC 使用率 Top（name = ns/pvc）
+	// 控制面趋势
+	ApiserverQpsTrend [][]float64 `json:"apiserverQpsTrend"`
+	CoreDnsQpsTrend   [][]float64 `json:"coreDnsQpsTrend"`
+	EtcdDbSizeTrend   [][]float64 `json:"etcdDbSizeTrend"` // Gi
 }
 
 type RankItem struct {
-	Name    string  `json:"name"`
-	Value   float64 `json:"value"` // 百分比
+	Name  string  `json:"name"`
+	Value float64 `json:"value"` // 百分比
 }
 
 // ControlPlaneItem 控制面组件监控（kube-apiserver/controller-manager/scheduler 等）
@@ -548,6 +619,13 @@ func (m *MonitorService) controlPlane(ctx context.Context, c *kube.Client, cfg P
 			{"Leader", "", 0, `etcd_server_has_leader{job=~"etcd|kube-etcd"}`},
 			{"WAL fsync P99", "ms", 1, `histogram_quantile(0.99, sum by (le) (rate(etcd_disk_wal_fsync_duration_seconds_bucket{job=~"etcd|kube-etcd"}[5m]))) * 1000`},
 			{"DB 大小", "Mi", 1, `etcd_mvcc_db_total_size_in_bytes{job=~"etcd|kube-etcd"} / 1024 / 1024`},
+		}},
+		// Prometheus 自监控（抓取健康 / TSDB 写入压力）
+		{"prometheus", []string{"prometheus"}, []controlCardDef{
+			{"存活目标", "个", 0, `sum(up == 1)`},
+			{"抓取失败", "个", 0, `sum(up == 0)`},
+			{"样本写入/s", "条/s", 0, `sum(rate(prometheus_tsdb_head_samples_appended_total[5m]))`},
+			{"Head 序列数", "条", 0, `prometheus_tsdb_head_series`},
 		}},
 	}
 
@@ -635,21 +713,69 @@ func (m *MonitorService) Overview(ctx context.Context, c *kube.Client, cluster *
 
 	// 瞬时使用率 / 容量
 	tasks = append(tasks,
-		func() { if res, err := m.Query(ctx, c, cfg, qInst); err == nil && len(res) > 0 { out.CPUUsagePct, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64) } },
-		func() { if res, err := m.Query(ctx, c, cfg, qMem); err == nil && len(res) > 0 { out.MemUsagePct, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64) } },
-		func() { if res, err := m.Query(ctx, c, cfg, `count(node_cpu_seconds_total{mode="idle"})`); err == nil && len(res) > 0 { out.CPUCores, _ = strconv.Atoi(fmt.Sprintf("%v", res[0].Value[1])) } },
-		func() { if res, err := m.Query(ctx, c, cfg, `sum(node_memory_MemTotal_bytes) / 1024 / 1024 / 1024`); err == nil && len(res) > 0 { out.MemTotalGi, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64) } },
-		func() { if res, err := m.Query(ctx, c, cfg, qDisk); err == nil && len(res) > 0 { out.DiskUsagePct, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64) } },
-		func() { if res, err := m.Query(ctx, c, cfg, qNetRx); err == nil && len(res) > 0 { out.NetRxMBs, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64) } },
-		func() { if res, err := m.Query(ctx, c, cfg, qNetTx); err == nil && len(res) > 0 { out.NetTxMBs, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64) } },
+		func() {
+			if res, err := m.Query(ctx, c, cfg, qInst); err == nil && len(res) > 0 {
+				out.CPUUsagePct, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
+			}
+		},
+		func() {
+			if res, err := m.Query(ctx, c, cfg, qMem); err == nil && len(res) > 0 {
+				out.MemUsagePct, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
+			}
+		},
+		func() {
+			if res, err := m.Query(ctx, c, cfg, `count(node_cpu_seconds_total{mode="idle"})`); err == nil && len(res) > 0 {
+				out.CPUCores, _ = strconv.Atoi(fmt.Sprintf("%v", res[0].Value[1]))
+			}
+		},
+		func() {
+			if res, err := m.Query(ctx, c, cfg, `sum(node_memory_MemTotal_bytes) / 1024 / 1024 / 1024`); err == nil && len(res) > 0 {
+				out.MemTotalGi, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
+			}
+		},
+		func() {
+			if res, err := m.Query(ctx, c, cfg, qDisk); err == nil && len(res) > 0 {
+				out.DiskUsagePct, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
+			}
+		},
+		func() {
+			if res, err := m.Query(ctx, c, cfg, qNetRx); err == nil && len(res) > 0 {
+				out.NetRxMBs, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
+			}
+		},
+		func() {
+			if res, err := m.Query(ctx, c, cfg, qNetTx); err == nil && len(res) > 0 {
+				out.NetTxMBs, _ = strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
+			}
+		},
 	)
 	// 趋势（node_* range 查询，最慢，必须并行）
 	tasks = append(tasks,
-		func() { if res, err := m.QueryRange(ctx, c, cfg, qInst, rs.Start, rs.End, rs.Step); err == nil { out.CPUUsageTrend = series(res) } },
-		func() { if res, err := m.QueryRange(ctx, c, cfg, qMem, rs.Start, rs.End, rs.Step); err == nil { out.MemUsageTrend = series(res) } },
-		func() { if res, err := m.QueryRange(ctx, c, cfg, qDisk, rs.Start, rs.End, rs.Step); err == nil { out.DiskUsageTrend = series(res) } },
-		func() { if res, err := m.QueryRange(ctx, c, cfg, qNetRx, rs.Start, rs.End, rs.Step); err == nil { out.NetRxTrend = series(res) } },
-		func() { if res, err := m.QueryRange(ctx, c, cfg, qNetTx, rs.Start, rs.End, rs.Step); err == nil { out.NetTxTrend = series(res) } },
+		func() {
+			if res, err := m.QueryRange(ctx, c, cfg, qInst, rs.Start, rs.End, rs.Step); err == nil {
+				out.CPUUsageTrend = series(res)
+			}
+		},
+		func() {
+			if res, err := m.QueryRange(ctx, c, cfg, qMem, rs.Start, rs.End, rs.Step); err == nil {
+				out.MemUsageTrend = series(res)
+			}
+		},
+		func() {
+			if res, err := m.QueryRange(ctx, c, cfg, qDisk, rs.Start, rs.End, rs.Step); err == nil {
+				out.DiskUsageTrend = series(res)
+			}
+		},
+		func() {
+			if res, err := m.QueryRange(ctx, c, cfg, qNetRx, rs.Start, rs.End, rs.Step); err == nil {
+				out.NetRxTrend = series(res)
+			}
+		},
+		func() {
+			if res, err := m.QueryRange(ctx, c, cfg, qNetTx, rs.Start, rs.End, rs.Step); err == nil {
+				out.NetTxTrend = series(res)
+			}
+		},
 	)
 	// 排行
 	tasks = append(tasks,
@@ -679,6 +805,79 @@ func (m *MonitorService) Overview(ctx context.Context, c *kube.Client, cluster *
 		},
 	)
 
+	// Request/Limit 配额视角（kube-state-metrics，缺指标时保持 0 由前端隐藏）
+	quotaQ := []struct {
+		dst *float64
+		ql  string
+	}{
+		{&out.CPURequestsCores, `sum(kube_pod_container_resource_requests{resource="cpu",node!=""})`},
+		{&out.CPULimitsCores, `sum(kube_pod_container_resource_limits{resource="cpu",node!=""})`},
+		{&out.CPUAllocatableCores, `sum(kube_node_status_allocatable{resource="cpu"})`},
+		{&out.MemRequestsGi, `sum(kube_pod_container_resource_requests{resource="memory",node!=""}) / 1024 / 1024 / 1024`},
+		{&out.MemLimitsGi, `sum(kube_pod_container_resource_limits{resource="memory",node!=""}) / 1024 / 1024 / 1024`},
+		{&out.MemAllocatableGi, `sum(kube_node_status_allocatable{resource="memory"}) / 1024 / 1024 / 1024`},
+	}
+	for _, it := range quotaQ {
+		ql := it.ql
+		tasks = append(tasks, func() {
+			if res, err := m.Query(ctx, c, cfg, ql); err == nil && len(res) > 0 {
+				v, _ := strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
+				*it.dst = v
+			}
+		})
+	}
+	// PV 存储用量（kubelet_volume_stats）
+	tasks = append(tasks,
+		func() {
+			if res, err := m.Query(ctx, c, cfg, `count(kubelet_volume_stats_capacity_bytes)`); err == nil && len(res) > 0 {
+				v, _ := strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
+				out.PvCount = int(v)
+			}
+		},
+		func() {
+			if res, err := m.Query(ctx, c, cfg, `sum(kubelet_volume_stats_capacity_bytes) / 1024 / 1024 / 1024`); err == nil && len(res) > 0 {
+				v, _ := strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
+				out.PvTotalGi = v
+			}
+		},
+		func() {
+			if res, err := m.Query(ctx, c, cfg, `sum(kubelet_volume_stats_used_bytes) / sum(kubelet_volume_stats_capacity_bytes) * 100`); err == nil && len(res) > 0 {
+				v, _ := strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
+				out.PvUsedPct = v
+			}
+		},
+		func() {
+			res, err := m.Query(ctx, c, cfg, `topk(8, kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes * 100)`)
+			if err != nil {
+				return
+			}
+			for _, rr := range res {
+				v, _ := strconv.ParseFloat(fmt.Sprintf("%v", rr.Value[1]), 64)
+				name := fmt.Sprintf("%s/%s", rr.Metric["namespace"], rr.Metric["persistentvolumeclaim"])
+				out.PvTopUsed = append(out.PvTopUsed, RankItem{Name: name, Value: v})
+			}
+			sort.Slice(out.PvTopUsed, func(i, j int) bool { return out.PvTopUsed[i].Value > out.PvTopUsed[j].Value })
+		},
+	)
+	// 控制面趋势（apiserver / CoreDNS QPS、etcd DB 大小）
+	tasks = append(tasks,
+		func() {
+			if res, err := m.QueryRange(ctx, c, cfg, `sum(rate(apiserver_request_total[5m]))`, rs.Start, rs.End, rs.Step); err == nil {
+				out.ApiserverQpsTrend = series(res)
+			}
+		},
+		func() {
+			if res, err := m.QueryRange(ctx, c, cfg, `sum(rate(coredns_dns_requests_total[5m]))`, rs.Start, rs.End, rs.Step); err == nil {
+				out.CoreDnsQpsTrend = series(res)
+			}
+		},
+		func() {
+			if res, err := m.QueryRange(ctx, c, cfg, `max(etcd_mvcc_db_total_size_in_bytes{job=~"etcd|kube-etcd"}) / 1024 / 1024 / 1024`, rs.Start, rs.End, rs.Step); err == nil {
+				out.EtcdDbSizeTrend = series(res)
+			}
+		},
+	)
+
 	// 有界 worker 池：限制并发（避免压垮单实例 Prometheus）。
 	// 单实例 Prometheus 对并发 range 查询会互相拖慢，过高并发反而更慢，取折中值 4。
 	const workers = 4
@@ -700,6 +899,14 @@ func (m *MonitorService) Overview(ctx context.Context, c *kube.Client, cluster *
 	return out, nil
 }
 
+// KubeletMonitor 节点 Kubelet 运行时指标（部分环境无 node 标签时整块降级为 nil）
+type KubeletMonitor struct {
+	RunningPods        int     `json:"runningPods"`
+	RunningContainers  int     `json:"runningContainers"`
+	RelistRate         float64 `json:"relistRate"`         // PLEG relist 次/s
+	RuntimeErrorsRate  float64 `json:"runtimeErrorsRate"`  // 容器运行时操作错误 次/s
+}
+
 // NodeMonitor 节点级监控
 type NodeMonitor struct {
 	CPUUsagePct    float64     `json:"cpuUsagePct"`
@@ -712,6 +919,24 @@ type NodeMonitor struct {
 	DiskUsageTrend [][]float64 `json:"diskUsageTrend"`
 	NetRxTrend     [][]float64 `json:"netRxTrend"`
 	NetTxTrend     [][]float64 `json:"netTxTrend"`
+	// Node Exporter 深度指标（对齐 Grafana Node Exporter / Nodes 仪表盘的核心面板）
+	Load1               float64     `json:"load1"`
+	Load5               float64     `json:"load5"`
+	Load15              float64     `json:"load15"`
+	Load1Trend          [][]float64 `json:"load1Trend"`
+	SwapUsagePct        *float64    `json:"swapUsagePct"` // nil = 未启用 swap 或无指标
+	DiskReadIops        float64     `json:"diskReadIops"`
+	DiskWriteIops       float64     `json:"diskWriteIops"`
+	DiskIopsTrend       [][]float64 `json:"diskIopsTrend"` // 读+写 IOPS 趋势
+	DiskReadMBs         float64     `json:"diskReadMBs"`
+	DiskWriteMBs        float64     `json:"diskWriteMBs"`
+	DiskThroughputTrend [][]float64 `json:"diskThroughputTrend"` // 读+写 MB/s 趋势
+	IoUtilPct           float64     `json:"ioUtilPct"`
+	IoUtilTrend         [][]float64 `json:"ioUtilTrend"`
+	NetDropRate         float64     `json:"netDropRate"` // 丢包 次/s（收+发）
+	NetDropTrend        [][]float64 `json:"netDropTrend"`
+	TcpEstablished      float64     `json:"tcpEstablished"`
+	Kubelet             *KubeletMonitor `json:"kubelet,omitempty"`
 }
 
 // Node 节点监控
@@ -750,23 +975,83 @@ func (m *MonitorService) Node(ctx context.Context, c *kube.Client, cluster *mode
 	out.DiskUsageTrend = qr(fmt.Sprintf(`avg by(nodename)(%s)`, nodeSel(diskExpr, name)))
 	out.NetRxTrend = qr(netExpr("receive"))
 	out.NetTxTrend = qr(netExpr("transmit"))
+
+	// ---- Node Exporter 深度指标：load / swap / 磁盘 IO / 丢包 / TCP ----
+	out.Load1, _ = q(nodeSel(`node_load1`, name))
+	out.Load5, _ = q(nodeSel(`node_load5`, name))
+	out.Load15, _ = q(nodeSel(`node_load15`, name))
+	out.Load1Trend = qr(nodeSel(`node_load1`, name))
+
+	// swap 仅在启用时有序列，无 swap 保持 nil（前端显示 -）
+	if v, ok := q(nodeSel(`(node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes) / node_memory_SwapTotal_bytes * 100`, name)); ok {
+		out.SwapUsagePct = &v
+	}
+
+	// 磁盘 IO：IOPS（读/写）、吞吐（读/写 MB/s）、IO 利用率
+	out.DiskReadIops, _ = q(nodeSel(`sum(rate(node_disk_reads_completed_total[5m]))`, name))
+	out.DiskWriteIops, _ = q(nodeSel(`sum(rate(node_disk_writes_completed_total[5m]))`, name))
+	out.DiskIopsTrend = qr(nodeSel(`sum(rate(node_disk_reads_completed_total[5m])) + sum(rate(node_disk_writes_completed_total[5m]))`, name))
+	out.DiskReadMBs, _ = q(nodeSel(`sum(rate(node_disk_read_bytes_total[5m])) / 1024 / 1024`, name))
+	out.DiskWriteMBs, _ = q(nodeSel(`sum(rate(node_disk_written_bytes_total[5m])) / 1024 / 1024`, name))
+	out.DiskThroughputTrend = qr(nodeSel(`(sum(rate(node_disk_read_bytes_total[5m])) + sum(rate(node_disk_written_bytes_total[5m]))) / 1024 / 1024`, name))
+	out.IoUtilPct, _ = q(nodeSel(`sum(rate(node_disk_io_time_seconds_total[5m])) * 100`, name))
+	out.IoUtilTrend = qr(nodeSel(`sum(rate(node_disk_io_time_seconds_total[5m])) * 100`, name))
+
+	// 网络丢包（收+发 次/s）与 TCP 连接数
+	out.NetDropRate, _ = q(nodeSel(`sum(rate(node_network_receive_drop_total[5m])) + sum(rate(node_network_transmit_drop_total[5m]))`, name))
+	out.NetDropTrend = qr(nodeSel(`sum(rate(node_network_receive_drop_total[5m])) + sum(rate(node_network_transmit_drop_total[5m]))`, name))
+	out.TcpEstablished, _ = q(nodeSel(`node_netstat_Tcp_CurrEstab`, name))
+
+	// ---- Kubelet 运行时（kube-prometheus-stack 会给 kubelet 指标打 node 标签；无标签时整块降级） ----
+	kb := &KubeletMonitor{}
+	kbOk := false
+	if v, ok := q(fmt.Sprintf(`max(kubelet_running_pod_count{node="%s"})`, name)); ok {
+		kb.RunningPods = int(v)
+		kbOk = true
+	} else if v, ok := q(fmt.Sprintf(`count(kube_pod_info{node="%s"})`, name)); ok {
+		kb.RunningPods = int(v)
+		kbOk = true
+	}
+	if v, ok := q(fmt.Sprintf(`max(kubelet_running_container_count{node="%s"})`, name)); ok {
+		kb.RunningContainers = int(v)
+		kbOk = true
+	}
+	if v, ok := q(fmt.Sprintf(`sum(rate(kubelet_pleg_relist_duration_seconds_count{node="%s"}[5m]))`, name)); ok {
+		kb.RelistRate = v
+		kbOk = true
+	}
+	if v, ok := q(fmt.Sprintf(`sum(rate(kubelet_runtime_operations_errors_total{node="%s"}[5m]))`, name)); ok {
+		kb.RuntimeErrorsRate = v
+		kbOk = true
+	}
+	if kbOk {
+		out.Kubelet = kb
+	}
 	return out, nil
 }
 
 // NamespaceMonitor 命名空间级监控
+// CPUUsage 核数 / MemUsageMi Mi：相对全集群的使用率对小命名空间恒近 0，统一展示绝对值
 type NamespaceMonitor struct {
-	CPUUsagePct    float64     `json:"cpuUsagePct"`
-	MemUsagePct    float64     `json:"memUsagePct"`
+	CPUUsage       float64     `json:"cpuUsage"`   // 核数
+	MemUsageMi     float64     `json:"memUsageMi"` // Mi
 	PodCount       int         `json:"podCount"`
 	DiskWriteMBs   float64     `json:"diskWriteMBs"`
 	NetRxMBs       float64     `json:"netRxMBs"`
 	NetTxMBs       float64     `json:"netTxMBs"`
-	CPUUsageTrend  [][]float64 `json:"cpuUsageTrend"`
-	MemUsageTrend  [][]float64 `json:"memUsageTrend"`
+	CPUUsageTrend  [][]float64 `json:"cpuUsageTrend"` // 核数
+	MemUsageTrend  [][]float64 `json:"memUsageTrend"` // Mi
 	PodCountTrend  [][]float64 `json:"podCountTrend"`
 	DiskWriteTrend [][]float64 `json:"diskWriteTrend"`
 	NetRxTrend     [][]float64 `json:"netRxTrend"`
 	NetTxTrend     [][]float64 `json:"netTxTrend"`
+	// Request/Limit 配额视角（kube-state-metrics；未设置 limit 的 ns 数值为 0）
+	CPURequests  float64  `json:"cpuRequests"`  // 核
+	CPULimits    float64  `json:"cpuLimits"`    // 核
+	MemRequestsMi float64 `json:"memRequestsMi"`
+	MemLimitsMi   float64 `json:"memLimitsMi"`
+	CPUUsagePctOfLimit *float64 `json:"cpuUsagePctOfLimit"` // 用量 / Limit %
+	MemUsagePctOfLimit *float64 `json:"memUsagePctOfLimit"`
 }
 
 // Namespace 命名空间监控
@@ -783,9 +1068,9 @@ func (m *MonitorService) Namespace(ctx context.Context, c *kube.Client, cluster 
 		v, err := strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
 		return v, err == nil
 	}
-	// CPU 使用率（容器 CPU / 集群总核数）
-	out.CPUUsagePct, _ = q(fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s",container!="",cpu="total"}[5m])) / scalar(count(node_cpu_seconds_total{mode="idle"})) * 100`, name))
-	out.MemUsagePct, _ = q(fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s",container!=""}) / sum(node_memory_MemTotal_bytes) * 100`, name))
+	// CPU 用量（核数）/ 内存用量（Mi）
+	out.CPUUsage, _ = q(fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s",container!="",cpu="total"}[5m]))`, name))
+	out.MemUsageMi, _ = q(fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s",container!=""}) / 1024 / 1024`, name))
 	if res, err := m.Query(ctx, c, cfg, fmt.Sprintf(`count(kube_pod_info{namespace="%s"})`, name)); err == nil && len(res) > 0 {
 		v, _ := strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
 		out.PodCount = int(v)
@@ -802,12 +1087,26 @@ func (m *MonitorService) Namespace(ctx context.Context, c *kube.Client, cluster 
 		}
 		return series(res)
 	}
-	out.CPUUsageTrend = qr(fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s",container!="",cpu="total"}[5m])) / scalar(count(node_cpu_seconds_total{mode="idle"})) * 100`, name))
-	out.MemUsageTrend = qr(fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s",container!=""}) / sum(node_memory_MemTotal_bytes) * 100`, name))
+	out.CPUUsageTrend = qr(fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s",container!="",cpu="total"}[5m]))`, name))
+	out.MemUsageTrend = qr(fmt.Sprintf(`sum(container_memory_working_set_bytes{namespace="%s",container!=""}) / 1024 / 1024`, name))
 	out.PodCountTrend = qr(fmt.Sprintf(`count(kube_pod_info{namespace="%s"})`, name))
 	out.DiskWriteTrend = qr(fmt.Sprintf(`sum(rate(container_fs_writes_bytes_total{namespace="%s",container!=""}[5m])) / 1024 / 1024`, name))
 	out.NetRxTrend = qr(fmt.Sprintf(`sum(rate(container_network_receive_bytes_total{namespace="%s"}[5m])) / 1024 / 1024`, name))
 	out.NetTxTrend = qr(fmt.Sprintf(`sum(rate(container_network_transmit_bytes_total{namespace="%s"}[5m])) / 1024 / 1024`, name))
+
+	// Request/Limit 配额视角
+	out.CPURequests, _ = q(fmt.Sprintf(`sum(kube_pod_container_resource_requests{namespace="%s",resource="cpu"})`, name))
+	out.CPULimits, _ = q(fmt.Sprintf(`sum(kube_pod_container_resource_limits{namespace="%s",resource="cpu"})`, name))
+	out.MemRequestsMi, _ = q(fmt.Sprintf(`sum(kube_pod_container_resource_requests{namespace="%s",resource="memory"}) / 1024 / 1024`, name))
+	out.MemLimitsMi, _ = q(fmt.Sprintf(`sum(kube_pod_container_resource_limits{namespace="%s",resource="memory"}) / 1024 / 1024`, name))
+	if out.CPULimits > 0 {
+		v := out.CPUUsage / out.CPULimits * 100
+		out.CPUUsagePctOfLimit = &v
+	}
+	if out.MemLimitsMi > 0 {
+		v := out.MemUsageMi / out.MemLimitsMi * 100
+		out.MemUsagePctOfLimit = &v
+	}
 	return out, nil
 }
 
@@ -822,8 +1121,8 @@ type WorkloadMonitor struct {
 	DiskWriteMBs   float64     `json:"diskWriteMBs"`
 	NetRxMBs       float64     `json:"netRxMBs"`
 	NetTxMBs       float64     `json:"netTxMBs"`
-	CPUUsageTrend  [][]float64 `json:"cpuUsageTrend"`  // 百分比或核数（见 cpuTrendIsPct）
-	MemUsageTrend  [][]float64 `json:"memUsageTrend"`  // 百分比或 Mi（见 memTrendIsPct）
+	CPUUsageTrend  [][]float64 `json:"cpuUsageTrend"` // 百分比或核数（见 cpuTrendIsPct）
+	MemUsageTrend  [][]float64 `json:"memUsageTrend"` // 百分比或 Mi（见 memTrendIsPct）
 	CPUTrendIsPct  bool        `json:"cpuTrendIsPct"`
 	MemTrendIsPct  bool        `json:"memTrendIsPct"`
 	DiskWriteTrend [][]float64 `json:"diskWriteTrend"`
@@ -1002,19 +1301,22 @@ func (m *MonitorService) Workload(ctx context.Context, c *kube.Client, cluster *
 // PodMonitor Pod 级监控
 // CPUUsagePct / MemUsagePct 用 *float64：无有效 limit（容器未全覆盖）时为 nil，前端显示 --
 type PodMonitor struct {
-	CPUUsagePct   *float64    `json:"cpuUsagePct"`
-	MemUsageMi    float64     `json:"memUsageMi"`
-	MemUsagePct   *float64    `json:"memUsagePct"`
-	NetRxMBs      float64     `json:"netRxMBs"`
-	NetTxMBs      float64     `json:"netTxMBs"`
-	DiskWriteMBs  float64     `json:"diskWriteMBs"`
-	FsUsageMi     float64     `json:"fsUsageMi,omitempty"`
-	CPUUsageTrend [][]float64 `json:"cpuUsageTrend"`
-	MemUsageTrend [][]float64 `json:"memUsageTrend"`
-	NetRxTrend    [][]float64 `json:"netRxTrend"`
-	NetTxTrend    [][]float64 `json:"netTxTrend"`
+	CPUUsagePct    *float64    `json:"cpuUsagePct"`
+	MemUsageMi     float64     `json:"memUsageMi"`
+	MemUsagePct    *float64    `json:"memUsagePct"`
+	NetRxMBs       float64     `json:"netRxMBs"`
+	NetTxMBs       float64     `json:"netTxMBs"`
+	DiskWriteMBs   float64     `json:"diskWriteMBs"`
+	FsUsageMi      float64     `json:"fsUsageMi,omitempty"`
+	CPUUsageTrend  [][]float64 `json:"cpuUsageTrend"`
+	MemUsageTrend  [][]float64 `json:"memUsageTrend"`
+	NetRxTrend     [][]float64 `json:"netRxTrend"`
+	NetTxTrend     [][]float64 `json:"netTxTrend"`
 	DiskWriteTrend [][]float64 `json:"diskWriteTrend"`
-	FsUsageTrend  [][]float64 `json:"fsUsageTrend"`
+	FsUsageTrend   [][]float64 `json:"fsUsageTrend"`
+	// 按容器细分趋势（对齐 Grafana Compute Resources / Pod）
+	ContainerCpu []ContainerSeries `json:"containerCpu"` // 核
+	ContainerMem []ContainerSeries `json:"containerMem"` // Mi
 }
 
 // Pod Pod 监控
@@ -1088,7 +1390,33 @@ func (m *MonitorService) Pod(ctx context.Context, c *kube.Client, cluster *model
 	out.NetTxTrend = qr(netTxQL)
 	out.DiskWriteTrend = qr(diskWriteQL)
 	out.FsUsageTrend = qr(fsUsageQL)
+
+	// 按容器细分（对齐 Grafana Compute Resources / Pod 的 per-container 曲线；
+	// image!="" 过滤掉 pause 容器）
+	containerCpu := `sum by(container)(rate(container_cpu_usage_seconds_total{namespace="%s",pod="%s",container!="",image!=""}[5m]))`
+	containerMem := `sum by(container)(container_memory_working_set_bytes{namespace="%s",pod="%s",container!="",image!=""})`
+	if res, err := m.QueryRange(ctx, c, cfg, fmt.Sprintf(containerCpu, namespace, name), rs.Start, rs.End, rs.Step); err == nil {
+		out.ContainerCpu = multiSeries(res)
+	}
+	if res, err := m.QueryRange(ctx, c, cfg, fmt.Sprintf(containerMem, namespace, name), rs.Start, rs.End, rs.Step); err == nil {
+		out.ContainerMem = multiSeries(res)
+	}
 	return out, nil
+}
+
+// ContainerSeries 按容器细分的单序列（多序列图表用）
+type ContainerSeries struct {
+	Name string      `json:"name"`
+	Data [][]float64 `json:"data"`
+}
+
+// multiSeries 提取范围查询结果为多序列（按 series label 命名，如 container）
+func multiSeries(result []PromResult) []ContainerSeries {
+	out := make([]ContainerSeries, 0, len(result))
+	for _, r := range result {
+		out = append(out, ContainerSeries{Name: r.Metric["container"], Data: series([]PromResult{r})})
+	}
+	return out
 }
 
 // convertTrend 对趋势序列逐点做数值转换（如字节 -> Mi）
@@ -1103,63 +1431,3 @@ func convertTrend(points [][]float64, fn func(float64) float64) [][]float64 {
 	return out
 }
 
-
-// FiringAlerts 拉取当前 firing 状态的告警（供通知轮询使用）
-func (m *MonitorService) FiringAlerts(ctx context.Context, c *kube.Client, cfg PromConfig) ([]PromAlertRef, error) {
-	u, err := proxyURL(c, cfg, "alerts", url.Values{})
-	if err != nil {
-		return nil, err
-	}
-	httpClient, err := rest.HTTPClientFor(c.Config)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	if bearer := c.Config.BearerToken; bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prometheus 返回 %d", resp.StatusCode)
-	}
-	var ar struct {
-		Data struct {
-			Alerts []struct {
-				Labels      map[string]string `json:"labels"`
-				Annotations map[string]string `json:"annotations"`
-				State       string            `json:"state"`
-				ActiveAt    string            `json:"activeAt"`
-				Fingerprint string            `json:"fingerprint"`
-			} `json:"alerts"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &ar); err != nil {
-		return nil, err
-	}
-	out := []PromAlertRef{}
-	for _, a := range ar.Data.Alerts {
-		if a.State != "firing" && a.State != "" && a.State != "active" {
-			continue
-		}
-		out = append(out, PromAlertRef{
-			Fingerprint: a.Fingerprint,
-			Name:        a.Labels["alertname"],
-			Severity:    a.Labels["severity"],
-			Summary:     a.Annotations["summary"],
-			Description: a.Annotations["description"],
-			ActiveAt:    a.ActiveAt,
-		})
-	}
-	return out, nil
-}

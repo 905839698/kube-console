@@ -55,10 +55,17 @@ func NewDeps(db *gorm.DB, cfg *config.CIConfig, clusters *service.ClusterManager
 	if err != nil {
 		return nil, err
 	}
-	if err := node.NewLoader(reg).LoadEmbedded(nodesFS); err != nil {
+	// imageRegistry：CI 任务镜像仓库前缀（ci.imageRegistry / KC_CI_IMAGE_REGISTRY），
+	// 节点模板里以 {{imageRegistry}} 引用；清单见 docs/images.md
+	if cfg.ImageRegistry == "" {
+		cfg.ImageRegistry = "harbor.cqyxpt.site:8443/library"
+	}
+	if err := node.NewLoader(reg).WithGlobals(map[string]interface{}{
+		"imageRegistry": cfg.ImageRegistry,
+	}).LoadEmbedded(nodesFS); err != nil {
 		return nil, err
 	}
-	log.Printf("ci: 加载节点插件 %d 个", len(reg.List()))
+	log.Printf("ci: 加载节点插件 %d 个（镜像仓库前缀 %s）", len(reg.List()), cfg.ImageRegistry)
 
 	d := &Deps{
 		Cfg:      cfg,

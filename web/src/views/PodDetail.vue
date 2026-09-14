@@ -8,7 +8,6 @@
             <el-button size="small" @click="load">刷新</el-button>
             <el-button size="small" type="success" plain @click="openTerminal()">终端</el-button>
             <el-button size="small" type="primary" plain @click="logsVisible = true">日志</el-button>
-            <el-button size="small" type="warning" plain @click="pfVisible = true">端口转发</el-button>
             <el-button size="small" type="info" plain @click="filesVisible = true">文件</el-button>
             <el-button size="small" type="danger" plain @click="doDelete">删除</el-button>
           </div>
@@ -55,7 +54,7 @@
             <el-tabs v-model="tab">
               <!-- 容器 -->
               <el-tab-pane label="容器" name="containers">
-                <el-table :data="detail?.containers || []" size="small" stripe>
+                <el-table border :data="detail?.containers || []" size="small" stripe>
                   <el-table-column prop="name" label="名称" min-width="140" />
                   <el-table-column label="状态" width="120">
                     <template #default="{ row }"><StatusTag :status="row.state" :text="row.reason || row.state" /></template>
@@ -74,7 +73,7 @@
                 </el-table>
                 <div v-if="detail?.initContainers?.length" style="margin-top: 12px">
                   <div class="sub-title">Init 容器</div>
-                  <el-table :data="detail.initContainers" size="small" stripe>
+                  <el-table border :data="detail.initContainers" size="small" stripe>
                     <el-table-column prop="name" label="名称" min-width="140" />
                     <el-table-column label="状态" width="120">
                       <template #default="{ row }"><StatusTag :status="row.state" :text="row.reason || row.state" /></template>
@@ -87,7 +86,7 @@
 
               <!-- 条件 -->
               <el-tab-pane label="Conditions" name="conditions">
-                <el-table :data="detail?.conditions || []" size="small" stripe>
+                <el-table border :data="detail?.conditions || []" size="small" stripe>
                   <el-table-column prop="type" label="类型" min-width="180" />
                   <el-table-column label="状态" width="100">
                     <template #default="{ row }"><StatusTag :status="row.status === 'True' ? 'Ready' : 'NotReady'" :text="row.status" /></template>
@@ -146,7 +145,6 @@
 
     <PodLogsDrawer v-model="logsVisible" :pod="podItem" :container="logsContainer" />
     <WebTerminal v-model:visible="terminalVisible" :namespace="namespace" :pod="name" :container="terminalContainer || undefined" />
-    <PortForwardDialog v-model="pfVisible" :namespace="namespace" :pod="name" />
     <el-dialog v-model="filesVisible" title="容器文件" width="900px">
       <FileBrowser :namespace="namespace" :pod="name" :containers="detail?.containers || []" />
     </el-dialog>
@@ -162,10 +160,11 @@ import StatusTag from '../components/StatusTag.vue'
 import EventTable from '../components/EventTable.vue'
 import PodLogsDrawer from '../components/PodLogsDrawer.vue'
 import WebTerminal from '../components/WebTerminal.vue'
-import PortForwardDialog from '../components/PortForwardDialog.vue'
 import FileBrowser from '../components/FileBrowser.vue'
 import VulnChip from '../components/VulnChip.vue'
 import MetricPanel, { type MetricCardDef, type MetricChartDef } from '../components/MetricPanel.vue'
+import type { ContainerSeries } from '../api'
+import type { ChartSeries } from '../components/MetricChart.vue'
 import RangeSwitch from '../components/RangeSwitch.vue'
 import { Box, Grid } from '@element-plus/icons-vue'
 import { useClusterStore } from '../store/cluster'
@@ -180,7 +179,6 @@ const detail = ref<PodDetail>()
 const tab = ref('containers')
 const loading = ref(false)
 const logsVisible = ref(false)
-const pfVisible = ref(false)
 const filesVisible = ref(false)
 const logsContainer = ref('')
 const terminalVisible = ref(false)
@@ -263,7 +261,23 @@ const monitorCharts = computed<MetricChartDef[]>(() => [
   },
   { title: '磁盘写趋势', series: [{ name: '磁盘写', data: monitor.value?.diskWriteTrend || [], color: '#909399', unit: 'MB/s' }], yAxisName: 'MB/s' },
   { title: '文件系统使用趋势', series: [{ name: '文件系统', data: monitor.value?.fsUsageTrend || [], color: '#9254de', unit: 'Mi' }], yAxisName: 'Mi' },
+  {
+    title: '按容器 CPU',
+    series: toSeries(monitor.value?.containerCpu, '核'),
+    yAxisName: '核',
+  },
+  {
+    title: '按容器内存',
+    series: toSeries(monitor.value?.containerMem, 'Mi'),
+    yAxisName: 'Mi',
+  },
 ])
+
+// 按容器细分序列 → 图表 series（缺数据时隐藏该卡片）
+function toSeries(list: ContainerSeries[] | undefined, unit: string): ChartSeries[] {
+  const palette = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9254de', '#00c1de', '#ff7f50', '#d4b106']
+  return (list || []).map((s, i) => ({ name: s.name, data: s.data, color: palette[i % palette.length], unit }))
+}
 
 const podItem = computed<PodItem | undefined>(() =>
   detail.value

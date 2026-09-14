@@ -22,6 +22,7 @@ export interface Cluster {
   prometheusNamespace?: string
   prometheusService?: string
   prometheusPort?: number
+  grafanaURL?: string
   createdAt: string
   updatedAt: string
 }
@@ -239,6 +240,15 @@ export interface WorkloadMatrix {
 
 export type TrendPoint = [number, number]
 
+// PromQL 查询结果（与 server 的 PromResult 对应）
+export interface PromQueryResult {
+  metric: Record<string, string>
+  /** 瞬时查询结果：[时间戳, "值"] */
+  value?: [number, string]
+  /** 范围查询结果：[时间戳, "值"][] */
+  values?: [number, string][]
+}
+
 export interface RankItem {
   name: string
   value: number
@@ -275,6 +285,29 @@ export interface MonitorOverview {
   nodeMemRank: RankItem[]
   namespaceCpuRank: RankItem[]
   controlPlane: ControlPlaneItem[]
+  // Request/Limit 配额视角（kube-state-metrics；缺指标时为 0）
+  cpuRequestsCores: number
+  cpuLimitsCores: number
+  cpuAllocatableCores: number
+  memRequestsGi: number
+  memLimitsGi: number
+  memAllocatableGi: number
+  // PV 存储用量（kubelet_volume_stats；未采集时为 0）
+  pvCount: number
+  pvTotalGi: number
+  pvUsedPct: number
+  pvTopUsed: RankItem[]
+  // 控制面趋势
+  apiserverQpsTrend: TrendPoint[]
+  coreDnsQpsTrend: TrendPoint[]
+  etcdDbSizeTrend: TrendPoint[]
+}
+
+export interface KubeletMonitor {
+  runningPods: number
+  runningContainers: number
+  relistRate: number
+  runtimeErrorsRate: number
 }
 
 export interface NodeMonitor {
@@ -288,11 +321,30 @@ export interface NodeMonitor {
   diskUsageTrend: TrendPoint[]
   netRxTrend: TrendPoint[]
   netTxTrend: TrendPoint[]
+  // Node Exporter 深度指标
+  load1: number
+  load5: number
+  load15: number
+  load1Trend: TrendPoint[]
+  swapUsagePct: number | null
+  diskReadIops: number
+  diskWriteIops: number
+  diskIopsTrend: TrendPoint[]
+  diskReadMBs: number
+  diskWriteMBs: number
+  diskThroughputTrend: TrendPoint[]
+  ioUtilPct: number
+  ioUtilTrend: TrendPoint[]
+  netDropRate: number
+  netDropTrend: TrendPoint[]
+  tcpEstablished: number
+  kubelet?: KubeletMonitor
 }
 
 export interface NamespaceMonitor {
-  cpuUsagePct: number
-  memUsagePct: number
+  // 命名空间级对全集群的使用率恒近 0，改为绝对值展示
+  cpuUsage: number
+  memUsageMi: number
   podCount: number
   diskWriteMBs: number
   netRxMBs: number
@@ -303,6 +355,13 @@ export interface NamespaceMonitor {
   diskWriteTrend: TrendPoint[]
   netRxTrend: TrendPoint[]
   netTxTrend: TrendPoint[]
+  // Request/Limit 配额视角
+  cpuRequests: number
+  cpuLimits: number
+  memRequestsMi: number
+  memLimitsMi: number
+  cpuUsagePctOfLimit: number | null
+  memUsagePctOfLimit: number | null
 }
 
 export interface WorkloadMonitor {
@@ -325,6 +384,11 @@ export interface WorkloadMonitor {
   netTxTrend: TrendPoint[]
 }
 
+export interface ContainerSeries {
+  name: string
+  data: TrendPoint[]
+}
+
 export interface PodMonitor {
   // null = 容器未全覆盖 limit，无有效百分比（前端显示 --）
   cpuUsagePct: number | null
@@ -340,6 +404,9 @@ export interface PodMonitor {
   netTxTrend: TrendPoint[]
   diskWriteTrend: TrendPoint[]
   fsUsageTrend: TrendPoint[]
+  // 按容器细分趋势（对齐 Grafana Compute Resources / Pod）
+  containerCpu: ContainerSeries[]
+  containerMem: ContainerSeries[]
 }
 
 // ---------------- 告警 ----------------
@@ -362,6 +429,8 @@ export interface AlertRule {
   query: string
   duration: number // 触发持续时长（秒）
   lastEval: string
+  /** 源 PrometheusRule CR（ns/name）；非 CR 来源（直接 rulefiles）为空 */
+  source?: string
   instances: AlertInstance[]
   // 规则检查（lint）
   hasSeverity: boolean
@@ -466,6 +535,9 @@ export const k8sApi = {
   applyYaml: (yaml: string) => request<{ created: boolean }>({ url: '/yaml/apply', method: 'post', data: { yaml } }),
   getYaml: (resource: string, namespace: string, name: string) =>
     request<{ yaml: string }>({ url: '/yaml', params: { resource, namespace, name } }),
+  // 导出筛选后的资源为多文档 YAML（kind 模式，与资源列表页同参）
+  exportYaml: (kind: string, namespace: string, search = '') =>
+    request<{ yaml: string }>({ url: '/yaml/export', params: { kind, namespace, search } }),
 
   resourceDefs: (force = false) => request<GroupDef[]>({ url: '/resource-defs', params: { force: force ? 1 : undefined } }),
 
@@ -478,6 +550,9 @@ export const k8sApi = {
 
   // Prometheus 监控
   monitorOverview: (range = '6h') => request<MonitorOverview>({ url: '/monitor/overview', params: { range } }),
+  // PromQL 查询（瞬时 / 范围）
+  monitorQuery: (q: string) => request<PromQueryResult[]>({ url: '/monitor/query', params: { q } }),
+  monitorQueryRange: (q: string, range = '6h') => request<PromQueryResult[]>({ url: '/monitor/query-range', params: { q, range } }),
   monitorNode: (name: string, range = '6h') => request<NodeMonitor>({ url: `/monitor/node/${name}`, params: { range } }),
   monitorNamespace: (name: string, range = '6h') => request<NamespaceMonitor>({ url: `/monitor/namespace/${name}`, params: { range } }),
   monitorWorkload: (kind: string, namespace: string, name: string, range = '6h') =>
@@ -701,24 +776,6 @@ export const nodeApi = {
     request({ url: `/nodes/${name}/labels`, method: 'put', data: { labels } }),
 }
 
-// ------------------- 端口转发 -------------------
-
-export interface PortForwardItem {
-  id: number
-  cluster: string
-  namespace: string
-  pod: string
-  localPort: number
-  remotePort: number
-  createdAt: string
-}
-
-export const pfApi = {
-  list: () => request<PortForwardItem[]>({ url: '/portforwards' }),
-  start: (namespace: string, pod: string, port: number, localPort = 0) =>
-    request<PortForwardItem>({ url: '/portforwards', method: 'post', data: { namespace, pod, port, localPort } }),
-  stop: (id: number) => request({ url: `/portforwards/${id}`, method: 'delete' }),
-}
 
 // ------------------- 容器文件浏览器 -------------------
 
@@ -762,6 +819,7 @@ export interface LogSearchResult { total: number; items: LogHit[]; took: number;
 export interface LogSourceItem {
   id: number; clusterName: string; namespace: string; service: string; port: number
   directURL: string; indexPrefix: string; username: string; enabled: boolean
+  eventEnabled: boolean; eventIndexPrefix: string
 }
 export interface NotifyChannelItem {
   id: number; name: string; type: string; webhook: string; minSeverity: string; enabled: boolean
@@ -804,6 +862,148 @@ export const notifyApi = {
   testChannel: (id: number) => request({ url: `/notify/channels/${id}/test`, method: 'post' }),
   logs: (page = 1, size = 50) =>
     request<{ total: number; items: NotifyLogItem[] }>({ url: '/notify/logs', params: { page, size } }),
+}
+
+// ------------------- Alertmanager 接入 / 告警历史 -------------------
+
+export interface AMAlertItem {
+  fingerprint: string
+  labels: Record<string, string>
+  annotations: Record<string, string>
+  startsAt: string
+  endsAt: string
+  generatorURL?: string
+  value?: string
+  status: { state: string; silencedBy: string[]; inhibitedBy: string[] }
+}
+export interface AMMatcherItem { name: string; value: string; isRegex: boolean; isEqual: boolean }
+export interface AMSilenceItem {
+  id: string
+  matchers: AMMatcherItem[]
+  startsAt: string
+  endsAt: string
+  createdBy: string
+  comment: string
+  status: { state: string }
+}
+export interface AMConfigItem {
+  id: number; clusterName: string; namespace: string; service: string; port: number
+  directURL: string; insecure: boolean; configSecret: string
+}
+export interface AMStatusItem {
+  configured: boolean
+  ok: boolean
+  error?: string
+  config?: AMConfigItem
+}
+export interface AlertEventItem {
+  id: number; cluster: string; fingerprint: string; alertName: string; severity: string
+  namespace: string; state: string; startedAt: string; resolvedAt: string | null; lastSeenAt: string
+}
+export interface AlertEventStatsItem {
+  days: number; fired: number; resolved: number; active: number; avgDurationHours: number
+  top: { alertName: string; count: number }[]
+}
+
+export const amApi = {
+  status: () => request<AMStatusItem>({ url: '/monitor/am/status' }),
+  alerts: () => request<AMAlertItem[]>({ url: '/monitor/am/alerts' }),
+  silences: () => request<AMSilenceItem[]>({ url: '/monitor/am/silences' }),
+  createSilence: (s: { matchers: AMMatcherItem[]; startsAt: string; endsAt: string; comment?: string }) =>
+    request({ url: '/monitor/am/silences', method: 'post', data: s }),
+  deleteSilence: (id: string) => request({ url: `/monitor/am/silences/${encodeURIComponent(id)}`, method: 'delete' }),
+  configs: () => request<AMConfigItem[]>({ url: '/alertmanager' }),
+  saveConfig: (c: Partial<AMConfigItem> & { clusterName: string }) =>
+    request({ url: '/alertmanager', method: 'post', data: c }),
+  deleteConfig: (cluster: string) => request({ url: `/alertmanager/${encodeURIComponent(cluster)}`, method: 'delete' }),
+  testConfig: (clusterName: string) => request({ url: '/alertmanager/test', method: 'post', data: { clusterName } }),
+  configYaml: (secret?: string) => request<AMConfigYAMLItem>({ url: '/monitor/am/config-yaml', params: secret ? { secret } : {} }),
+  saveConfigYaml: (secret: string, yaml: string) =>
+    request({ url: '/monitor/am/config-yaml', method: 'put', data: { secret, yaml } }),
+}
+export interface AMConfigYAMLItem { secret: string; key: string; gzip: boolean; yaml: string }
+
+export const alertEventApi = {
+  list: (q: { cluster?: string; state?: string; name?: string; namespace?: string; days?: number; page?: number; size?: number }) =>
+    request<{ total: number; items: AlertEventItem[]; page: number; size: number }>({ url: '/alertevents', params: q }),
+  stats: (days = 7) => request<AlertEventStatsItem>({ url: '/alertevents/stats', params: { days } }),
+}
+
+// ------------------- Nacos 微服务集成 -------------------
+
+export interface NacosConfigItem {
+  id: number; clusterName: string; addr: string; adminUsername: string
+  enabled: boolean; injectEnabled: boolean; autoLabel: boolean
+  webhookMode: string; webhookURL: string
+  webhookServiceNS: string; webhookServiceName: string; webhookServicePort: number
+}
+export interface NacosMappingItem {
+  id: number; clusterName: string; k8sNamespace: string; nacosNamespaceId: string
+  username: string; password: string; status: string; error: string; syncedAt: string
+}
+export interface NacosNsInfo {
+  namespace?: string; namespaceId?: string; customNamespaceId?: string; namespaceShowName?: string
+  namespaceDesc?: string; configCount?: number
+}
+export interface NacosConfigEntry { id?: string; dataId: string; group: string; type?: string; namespace?: string }
+export interface NacosServiceItem {
+  name: string; groupName: string; clusterCount: number
+  ipCount: number; healthyCount: number; namespace: string
+}
+export interface NacosInstanceItem {
+  instanceId?: string; ip: string; port: number; weight?: number
+  healthy?: boolean; enabled?: boolean; ephemeral?: boolean
+  clusterName?: string; serviceName?: string; metadata?: Record<string, string>
+}
+export interface NacosConfigExportItem { namespace: string; dataId: string; group: string; type?: string; content: string }
+export interface NacosConfigExportFile { cluster?: string; exportedAt?: string; configs: NacosConfigExportItem[] }
+
+export const nacosApi = {
+  configs: () => request<NacosConfigItem[]>({ url: '/nacos/config' }),
+  saveConfig: (c: Partial<NacosConfigItem> & { clusterName: string; addr: string }) =>
+    request({ url: '/nacos/config', method: 'post', data: c }),
+  deleteConfig: (cluster: string) => request({ url: `/nacos/config/${encodeURIComponent(cluster)}`, method: 'delete' }),
+  testConfig: (clusterName: string) => request({ url: '/nacos/config/test', method: 'post', data: { clusterName } }),
+  status: () => request<{ sync: Record<string, string>; mappings: NacosMappingItem[] }>({ url: '/nacos/status' }),
+  syncNow: (cluster: string) => request({ url: `/nacos/sync/${encodeURIComponent(cluster)}`, method: 'post' }),
+  resetPassword: (clusterName: string, namespace: string) =>
+    request<{ username: string }>({ url: '/nacos/reset-password', method: 'post', data: { clusterName, namespace } }),
+  nacosNamespaces: (cluster: string) => request<NacosNsInfo[]>({ url: '/nacos/namespaces', params: { cluster } }),
+  users: (cluster: string) => request<string[]>({ url: '/nacos/users', params: { cluster } }),
+  // 微服务页面（跟随全局命名空间选择，namespaces 为多选参数：* = 全部）
+  ready: (cluster: string) => request<{ configured: boolean; enabled?: boolean }>({ url: '/nacos/ready', params: { cluster } }),
+  services: (cluster: string, namespaces: string) => request<NacosServiceItem[]>({ url: '/nacos/services', params: { cluster, namespaces } }),
+  instances: (cluster: string, namespace: string, service: string, group: string) =>
+    request<NacosInstanceItem[]>({ url: '/nacos/instances', params: { cluster, namespace, service, group } }),
+  serviceDelete: (cluster: string, namespace: string, service: string, group: string) =>
+    request({ url: '/nacos/service', method: 'delete', params: { cluster, namespace, service, group } }),
+  configList: (cluster: string, namespaces: string) => request<NacosConfigEntry[]>({ url: '/nacos/configs', params: { cluster, namespaces } }),
+  configExport: (cluster: string, namespaces: string) =>
+    request<NacosConfigExportFile>({ url: '/nacos/config-export', params: { cluster, namespaces } }),
+  configContent: (cluster: string, namespace: string, dataId: string, group: string) =>
+    request<{ content: string }>({ url: '/nacos/config-content', params: { cluster, namespace, dataId, group } }),
+  configPublish: (p: { clusterName: string; namespace: string; dataId: string; group: string; content: string; type?: string }) =>
+    request({ url: '/nacos/config-publish', method: 'post', data: p }),
+  configDelete: (cluster: string, namespace: string, dataId: string, group: string) =>
+    request({ url: '/nacos/config-content', params: { cluster, namespace, dataId, group }, method: 'delete' }),
+}
+
+// ------------------- 事件归档（ES）/ Grafana 内嵌 -------------------
+
+export interface EventArchiveHitItem {
+  name: string; namespace: string; type: string; reason: string
+  message: string; object: string; count: number; lastAt: string
+}
+
+export const eventsApiArchive = {
+  search: (q: { namespace?: string; type?: string; reason?: string; keyword?: string; object?: string; start?: string; end?: string; page?: number; size?: number }) =>
+    request<{ total: number; items: EventArchiveHitItem[]; took: number }>({ url: '/events/archive/search', method: 'post', data: q }),
+}
+
+export const grafanaApi = {
+  update: (name: string, grafanaURL: string) =>
+    request({ url: `/clusters/${encodeURIComponent(name)}/grafana`, method: 'put', data: { grafanaURL } }),
+  check: (url: string) => request<{ ok: boolean; error?: string }>({ url: '/monitor/grafana-check', params: { url } }),
 }
 
 export const registryApi = {

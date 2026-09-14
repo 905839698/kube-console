@@ -9,7 +9,7 @@
       <el-button :icon="Refresh" circle @click="load()" />
     </div>
 
-    <el-table :data="items" v-loading="loading" size="small">
+    <el-table border :data="items" v-loading="loading" size="small">
       <el-table-column prop="createdAt" label="时间" width="170" />
       <el-table-column prop="username" label="用户" width="120" />
       <el-table-column label="操作" width="80">

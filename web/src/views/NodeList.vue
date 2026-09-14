@@ -7,7 +7,7 @@
       </div>
     </template>
 
-    <el-table :data="items" v-loading="loading" stripe @row-click="onRowClick">
+    <el-table border :data="items" v-loading="loading" stripe @row-click="onRowClick">
       <el-table-column label="名称" prop="name" min-width="170" sortable>
         <template #default="{ row }">
           <el-link type="primary" @click="goDetail(row)">{{ row.name }}</el-link>

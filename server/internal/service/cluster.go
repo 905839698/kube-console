@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -303,6 +304,19 @@ func (m *ClusterManager) UpdatePrometheus(name string, promNs, promSvc string, p
 	if promPort > 0 {
 		cluster.PrometheusPort = promPort
 	}
+	if err := m.db.Save(cluster).Error; err != nil {
+		return nil, err
+	}
+	return cluster, nil
+}
+
+// UpdateGrafana 更新集群的 Grafana 地址（iframe 直连内嵌用）
+func (m *ClusterManager) UpdateGrafana(name, grafanaURL string) (*model.Cluster, error) {
+	cluster, err := m.GetRaw(name)
+	if err != nil {
+		return nil, err
+	}
+	cluster.GrafanaURL = strings.TrimSpace(grafanaURL)
 	if err := m.db.Save(cluster).Error; err != nil {
 		return nil, err
 	}

@@ -142,7 +142,8 @@ function removeListItem(key: string, idx: number) {
 
 <style scoped>
 .sub-form { width: 100%; }
-.sub-item { display: flex; align-items: flex-start; gap: 8px; border: 1px dashed #dcdfe6; border-radius: 4px; padding: 8px; margin-bottom: 8px; width: 100%; }
-.sub-field { flex: 1; margin-bottom: 8px; }
+.sub-item { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; border: 1px dashed #dcdfe6; border-radius: 4px; padding: 8px; margin-bottom: 8px; width: 100%; }
+/* 子字段过宽时会挤压标签（如 LimitRange 12 项），按最小宽度自动换行 */
+.sub-field { flex: 1 1 240px; min-width: 240px; margin-bottom: 8px; }
 .empty-hint { color: #909399; font-size: 13px; padding: 20px 0; text-align: center; }
 </style>

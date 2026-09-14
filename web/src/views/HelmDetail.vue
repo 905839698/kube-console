@@ -32,7 +32,7 @@
           </div>
         </el-tab-pane>
         <el-tab-pane label="历史" name="history">
-          <el-table :data="history" v-loading="historyLoading" stripe size="small">
+          <el-table border :data="history" v-loading="historyLoading" stripe size="small">
             <el-table-column prop="version" label="修订版" width="80" align="center" sortable />
             <el-table-column prop="status" label="状态" width="140">
               <template #default="{ row }">

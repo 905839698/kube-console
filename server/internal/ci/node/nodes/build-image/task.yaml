@@ -41,7 +41,7 @@ results:
 steps:
   - name: build-and-push
     # moby/buildkit 镜像含 buildctl（gRPC 客户端）；buildkitd 是集群内共享构建器服务
-    image: harbor.cqyxpt.site:8443/library/buildkit:stable
+    image: {{imageRegistry}}/buildkit:stable
     env:
       - name: IMAGE
         value: "{{registry}}/{{repository}}:{{tag}}"
@@ -184,7 +184,7 @@ steps:
     # ENOENT；用 busybox+syft 静态二进制的包装镜像。sh2 版修正 USER：
     # harbor busybox 默认 65532，而 Tekton 结果文件由 init 以 root 0444
     # 预创建，非 root step 截断写入会 Permission denied
-    image: harbor.cqyxpt.site:8443/library/syft:1.0.0-sh2
+    image: {{imageRegistry}}/syft:1.0.0-sh2
     env:
       # 自签名镜像仓库：跳过 TLS 校验（与 buildkitd/trivy 一致）
       - name: SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY

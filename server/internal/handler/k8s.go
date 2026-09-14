@@ -19,6 +19,8 @@ type K8sHandler struct {
 	clusters  *service.ClusterManager
 	k8s       *service.K8sService
 	jwtSecret string
+	// OnNamespaceCreated 命名空间创建后的联动钩子（Nacos 自动同步），由 router 装配注入；可为 nil
+	OnNamespaceCreated func(cluster, namespace string)
 }
 
 func NewK8sHandler(clusters *service.ClusterManager, k8s *service.K8sService, jwtSecret string) *K8sHandler {
@@ -173,6 +175,10 @@ func (h *K8sHandler) CreateNamespace(c *gin.Context) {
 	if err := h.k8s.CreateNamespace(c.Request.Context(), client, req.Name); err != nil {
 		response.K8sError(c, err)
 		return
+	}
+	// Nacos 联动：异步同步该命名空间（未配置 Nacos 的集群静默跳过）
+	if h.OnNamespaceCreated != nil {
+		go h.OnNamespaceCreated(h.clusterName(c), req.Name)
 	}
 	response.OK(c, nil)
 }
@@ -543,7 +549,28 @@ func (h *K8sHandler) ApplyYAML(c *gin.Context) {
 	_ = h.k8s.SyncServiceMonitor(c.Request.Context(), client, req.YAML)
 	// 工作负载接入监控：根据 annotation 自动创建/更新/删除 PodMonitor
 	_ = h.k8s.SyncPodMonitor(c.Request.Context(), client, req.YAML)
+	// Route 跨命名空间引用：自动创建 ReferenceGrant 授权
+	_ = h.k8s.SyncReferenceGrant(c.Request.Context(), client, req.YAML)
 	response.OK(c, gin.H{"created": created})
+}
+
+// ExportYAML GET /yaml/export?kind=&namespace=&search= —— 导出筛选后的资源为多文档 YAML
+func (h *K8sHandler) ExportYAML(c *gin.Context) {
+	client := h.client(c)
+	if client == nil {
+		return
+	}
+	kind := c.Query("kind")
+	if kind == "" {
+		response.Fail(c, 400, 400, "缺少 kind 参数")
+		return
+	}
+	yamlStr, err := h.k8s.ExportGeneric(c.Request.Context(), client, kind, queryNamespace(c), c.Query("search"))
+	if err != nil {
+		response.K8sError(c, err)
+		return
+	}
+	response.OK(c, gin.H{"yaml": yamlStr})
 }
 
 // GetYAML 获取任意受支持资源的 YAML（参数: resource, namespace, name）

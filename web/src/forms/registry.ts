@@ -187,6 +187,19 @@ export const formRegistry: Record<string, FormModule> = {
   // 配额
   resourcequotas: schemaModule('ResourceQuota', 'resourcequotas'),
   limitranges: schemaModule('LimitRange', 'limitranges'),
+  // EndpointSlice：apiVersion 为 discovery.k8s.io/v1，需自定义模板（默认模板硬编码 v1）
+  endpointslices: {
+    title: 'EndpointSlice',
+    fields: simpleFormFields['endpointslices'],
+    template: (kind, ns) => ({
+      apiVersion: 'discovery.k8s.io/v1',
+      kind: 'EndpointSlice',
+      metadata: { name: 'my-slice', namespace: ns || 'default', labels: { 'kubernetes.io/service-name': '' } },
+      addressType: 'IPv4',
+      endpoints: [],
+      ports: [],
+    }),
+  },
   // Gateway API
   gatewayclasses: schemaModule('GatewayClass', 'gatewayclasses'),
   referencegrants: schemaModule('ReferenceGrant', 'referencegrants'),

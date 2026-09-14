@@ -103,12 +103,13 @@ kind: `services | ingresses | configmaps | secrets | persistentvolumeclaims | pe
 | GET | `/generic/:group/:version/:resource/:name/yaml?namespace=` | 读取 YAML |
 | DELETE | `/generic/:group/:version/:resource/:name?namespace=` | 删除 |
 
-## YAML 应用
+## YAML 应用与导入导出
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/yaml/apply` | 应用 YAML（server-side apply）`{"yaml"}` → `{created}` |
+| POST | `/yaml/apply` | 应用 YAML（create-or-update：先查再改，已存在则更新、不存在则创建）`{"yaml"}` → `{created}`；Service/工作负载携带监控注解时自动联动创建 ServiceMonitor/PodMonitor，Route 跨命名空间引用自动创建 ReferenceGrant |
 | GET | `/yaml?resource=&namespace=&name=` | 读取任意资源 YAML |
+| GET | `/yaml/export?kind=&namespace=&search=` | 导出筛选后的资源为多文档 YAML（`---` 分隔）；跟随列表页同款命名空间筛选（`*` 或逗号分隔多选）与搜索；深度清洗（uid/resourceVersion/generation/creationTimestamp/managedFields/status/last-applied 注解），导出文件可直接再导入 |
 
 ## 监控（Prometheus，经 kube-apiserver proxy）
 
@@ -123,7 +124,23 @@ kind: `services | ingresses | configmaps | secrets | persistentvolumeclaims | pe
 | GET | `/monitor/workload?namespace=&kind=&name=` | 工作负载级（按容器聚合） |
 | GET | `/monitor/pod?namespace=&name=` | Pod 级 |
 | GET | `/monitor/prometheus-check` | Prometheus 连通性测试 |
-| GET | `/monitor/alerts` | 告警规则（firing/pending/inactive + 分组 + 规则检查） |
+| GET | `/monitor/alerts` | 告警规则（firing/pending/inactive + 分组 + 规则检查；每条规则含 `source` = 来源 PrometheusRule CR `ns/name`，为空表示规则直接来自 rulefiles，规则编辑/新建/删除走 `/generic/.../prometheusrules` 接口由前端完成） |
+
+### Alertmanager 接入
+
+除「连接配置/主配置 YAML」外均需 `X-Cluster`。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/monitor/am/status` | 当前集群 AM 可用性（configured/ok/error） |
+| GET | `/monitor/am/alerts` | 实时告警（含 silenced/inhibited 状态） |
+| GET/POST | `/monitor/am/silences` | 静默列表 / 创建（matchers + startsAt/endsAt） |
+| DELETE | `/monitor/am/silences/:id` | 删除静默 |
+| GET | `/alertevents?cluster=&state=&name=&namespace=&days=&page=&size=` | 告警历史（Alertmanager 轮询归档，跨集群） |
+| GET | `/alertevents/stats?days=7` | 告警统计（触发/恢复/平均持续/Top 告警） |
+| GET/POST/DELETE | `/alertmanager[/:cluster]` | （admin）AM 连接配置 CRUD |
+| POST | `/alertmanager/test` | （admin）连通测试 `{clusterName}` |
+| GET/PUT | `/monitor/am/config-yaml` | （admin）AM 主配置 YAML 读写（Secret 内 alertmanager.yaml[.gz]） |
 
 ## Helm 应用管理
 
@@ -216,14 +233,6 @@ CI 接口全部经 **X-Cluster** 选择集群（集群隔离）；项目级资�
 | GET | `/registry/image-tags?image=` | 按完整镜像引用取可选 Tag（校验属于已配置仓库） |
 | GET | `/registry/image-vulns?image=` | 按完整镜像引用取扫描概览 + CVE 报告 |
 
-## 端口转发
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/portforwards` | 列表 |
-| POST | `/portforwards` | 启动 `{cluster,kind,namespace,name,port,localPort}` |
-| DELETE | `/portforwards/:id` | 停止 |
-
 ## 授权管理
 
 | 方法 | 路径 | 说明 |
@@ -246,18 +255,51 @@ CI 接口全部经 **X-Cluster** 选择集群（集群隔离）；项目级资�
 | GET | `/groups` | 用户组列表（登录即可读，供授权向导选择） |
 | POST | `/groups` | 新建/更新组 |
 | DELETE | `/groups/:id` | 删除组 |
-| GET/POST | `/notify/channels` | 通知渠道列表 / 保存（钉钉加签等） |
+| GET/POST | `/notify/channels` | 通知渠道列表 / 保存（钉钉加签等；用于 CI 执行事件推送） |
 | DELETE | `/notify/channels/:id` | 删除渠道 |
 | POST | `/notify/channels/:id/test` | 测试渠道连通 |
 | GET | `/notify/logs?page=&size=` | 推送历史 |
-| GET/POST | `/logsources` | ES 日志源（按集群）列表 / 保存 |
+| GET/POST | `/logsources` | ES 日志源（按集群）列表 / 保存（含事件归档开关与索引前缀） |
 | DELETE | `/logsources/:cluster` | 删除日志源 |
 | POST | `/logsources/test` | 日志源连通性测试 |
 | POST | `/logs/search` | 日志检索（全文 + 字段 + 时间范围 + Pod 分布） |
+| POST | `/events/archive/search` | 事件归档检索（ES，namespace/type/reason/keyword/object + 时间范围 + 分页） |
+| PUT | `/clusters/:name/grafana` | 保存集群 Grafana 地址（iframe 内嵌） |
+| GET | `/monitor/grafana-check?url=` | Grafana 可达性测试（服务端尽力而为） |
 | GET | `/usage?days=` | 命名空间用量报表（Prometheus 历史指标） |
 | GET | `/backups` | Velero 备份/恢复概览（未安装时 `installed:false`） |
 | GET/POST | `/tokens` | 个人 API Token 列表 / 创建 |
 | DELETE | `/tokens/:id` | 吊销 Token |
+
+## Nacos 微服务集成
+
+OpenAPI 客户端自动探测版本风格（1.x/2.x 走 v1 API，3.x 走 `/v3/admin` + `/v3/auth`）；集群经 `cluster` 参数或 `X-Cluster` 选择。
+
+**微服务页面接口（登录即可用）**——服务发现与配置管理，跟随全局命名空间选择（`namespaces` 支持逗号分隔多选，`*` 展开为全部命名空间）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/nacos/ready?cluster=` | 当前集群是否已接入 Nacos `{configured, enabled}` |
+| GET | `/nacos/services?cluster=&namespaces=` | 服务发现列表（3.x 含分组/集群数/实例数/健康数，1.x/2.x 仅名称），多命名空间合并，每项带 `namespace`；单命名空间异常不阻塞整体 |
+| GET | `/nacos/instances?cluster=&namespace=&service=&group=` | 服务实例列表（IP:端口/健康/权重/集群/元数据） |
+| DELETE | `/nacos/service?cluster=&namespace=&service=&group=` | 删除 Nacos 侧服务注册记录（不影响 K8s 资源） |
+| GET | `/nacos/configs?cluster=&namespaces=` | 配置列表（多命名空间合并，每项带 `namespace`） |
+| GET | `/nacos/config-content?cluster=&namespace=&dataId=&group=` | 读取配置内容 |
+| POST | `/nacos/config-publish` | 发布/更新配置 `{clusterName,namespace,dataId,group,content,type}` |
+| DELETE | `/nacos/config-content?cluster=&namespace=&dataId=&group=` | 删除配置 |
+| GET | `/nacos/config-export?cluster=&namespaces=` | 批量导出配置（含内容）为 JSON：`{cluster, exportedAt, configs:[{namespace,dataId,group,type,content}]}`，配合前端导入实现跨环境迁移 |
+
+**接入与治理接口（admin）**：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET/POST | `/nacos/config` | 按集群接入配置列表 / 保存（密码留空保持不变） |
+| DELETE | `/nacos/config/:cluster` | 删除配置（清理映射与 Webhook） |
+| POST | `/nacos/config/test` | 连通测试 `{clusterName}` |
+| GET | `/nacos/status` | 各集群同步状态 + 命名空间映射（含注入凭据） |
+| POST | `/nacos/sync/:cluster` | 立即同步 |
+| POST | `/nacos/reset-password` | 轮换 ns 用户密码并同步注入 Secret `{clusterName, namespace}` |
+| GET | `/nacos/namespaces`、`/nacos/users` | Nacos 侧命名空间 / 用户浏览 |
 
 ## WebSocket 端点
 

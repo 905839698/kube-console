@@ -7,7 +7,7 @@
       <el-button :icon="Refresh" circle @click="load" />
     </div>
 
-    <el-table :data="users" v-loading="loading" size="small">
+    <el-table border :data="users" v-loading="loading" size="small">
       <el-table-column prop="id" label="ID" width="70" />
       <el-table-column prop="username" label="用户名" min-width="160">
         <template #default="{ row }">
@@ -69,7 +69,7 @@
           <el-button type="primary" size="small" @click="groupDlg = true"><el-icon><Plus /></el-icon>&nbsp;新建用户组</el-button>
           <el-button :icon="Refresh" circle size="small" @click="loadGroups" />
         </div>
-        <el-table :data="groups" v-loading="groupsLoading" size="small">
+        <el-table border :data="groups" v-loading="groupsLoading" size="small">
           <el-table-column prop="name" label="组名" min-width="160" />
           <el-table-column prop="description" label="描述" min-width="220" />
           <el-table-column prop="users" label="成员数" width="90" align="center" />

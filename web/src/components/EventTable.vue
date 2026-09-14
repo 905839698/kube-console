@@ -1,5 +1,5 @@
 <template>
-  <el-table :data="events" size="small" stripe max-height="480">
+  <el-table border :data="events" size="small" stripe max-height="480">
     <el-table-column label="类型" width="80">
       <template #default="{ row }">
         <el-tag :type="row.type === 'Normal' ? 'info' : 'danger'" size="small">{{ row.type }}</el-tag>

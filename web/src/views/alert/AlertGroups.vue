@@ -12,7 +12,7 @@
       </div>
     </template>
 
-    <el-table :data="filtered" size="default" stripe :default-sort="{ prop: 'alertRules', order: 'descending' }">
+    <el-table border :data="filtered" size="default" stripe :default-sort="{ prop: 'alertRules', order: 'descending' }">
       <el-table-column prop="name" label="分组名" min-width="280">
         <template #default="{ row }">
           <span class="group-name">{{ row.name }}</span>

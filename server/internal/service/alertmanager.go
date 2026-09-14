@@ -1,0 +1,274 @@
+// Alertmanager 访问客户端：经 kube-apiserver service proxy（或直连）调用 AM v2 API，
+// 支持实时告警 / 静默管理 / 主配置 YAML 读写（Secret 内 alertmanager.yaml[.gz]）
+package service
+
+import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/yaml"
+
+	"kube-console/server/internal/kube"
+	"kube-console/server/internal/model"
+)
+
+// AMAlert Alertmanager /api/v2/alerts 条目
+type AMAlert struct {
+	Fingerprint  string            `json:"fingerprint"`
+	Labels       map[string]string `json:"labels"`
+	Annotations  map[string]string `json:"annotations"`
+	StartsAt     string            `json:"startsAt"`
+	EndsAt       string            `json:"endsAt"`
+	GeneratorURL string            `json:"generatorURL"`
+	Value        string            `json:"value"`
+	Status       struct {
+		State       string   `json:"state"` // active | suppressed | unprocessed
+		SilencedBy  []string `json:"silencedBy"`
+		InhibitedBy []string `json:"inhibitedBy"`
+	} `json:"status"`
+}
+
+// AMSilence Alertmanager /api/v2/silences 条目
+type AMSilence struct {
+	ID        string      `json:"id"`
+	Matchers  []AMMatcher `json:"matchers"`
+	StartsAt  string      `json:"startsAt"`
+	EndsAt    string      `json:"endsAt"`
+	CreatedBy string      `json:"createdBy"`
+	Comment   string      `json:"comment"`
+	Status    struct {
+		State string `json:"state"` // expired | active | pending
+	} `json:"status"`
+}
+
+// AMMatcher 静默匹配器（AM v2 的 name/value/isRegex/isEqual 四元组）
+type AMMatcher struct {
+	Name    string `json:"name"`
+	Value   string `json:"value"`
+	IsRegex bool   `json:"isRegex"`
+	IsEqual bool   `json:"isEqual"`
+}
+
+// amRequest 访问 Alertmanager（DirectURL 直连或 apiserver proxy），返回原始响应体
+func amRequest(ctx context.Context, c *kube.Client, cfg *model.AlertmanagerConfig, method, path string, body []byte) ([]byte, error) {
+	path = strings.TrimLeft(path, "/")
+	var u string
+	var httpClient *http.Client
+	var err error
+	if cfg.DirectURL != "" {
+		u = strings.TrimRight(cfg.DirectURL, "/") + "/" + path
+		httpClient = &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.Insecure}},
+		}
+	} else {
+		base := strings.TrimRight(c.Config.Host, "/")
+		u = fmt.Sprintf("%s/api/v1/namespaces/%s/services/%s:%d/proxy/%s",
+			base, cfg.Namespace, cfg.Service, cfg.Port, path)
+		httpClient, err = rest.HTTPClientFor(c.Config)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, rdr)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	// 直连无认证头；代理模式下透传 apiserver 凭证
+	if cfg.DirectURL == "" {
+		if bearer := c.Config.BearerToken; bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Alertmanager 不可达（请检查集群的 Alertmanager 配置）: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("Alertmanager 返回 %d: %s", resp.StatusCode, truncateStr(string(raw), 300))
+	}
+	return raw, nil
+}
+
+// AMStatus 连通性测试（GET /api/v2/status）
+func AMStatus(ctx context.Context, c *kube.Client, cfg *model.AlertmanagerConfig) error {
+	_, err := amRequest(ctx, c, cfg, http.MethodGet, "/api/v2/status", nil)
+	return err
+}
+
+// AMAlerts 拉取当前全部活动告警（含被静默/抑制的，firing 与恢复中的都在内）
+func AMAlerts(ctx context.Context, c *kube.Client, cfg *model.AlertmanagerConfig) ([]AMAlert, error) {
+	raw, err := amRequest(ctx, c, cfg, http.MethodGet, "/api/v2/alerts?active=true&silenced=true&inhibited=true", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []AMAlert
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("解析 Alertmanager 告警失败: %w", err)
+	}
+	return out, nil
+}
+
+// AMSilences 列出静默规则
+func AMSilences(ctx context.Context, c *kube.Client, cfg *model.AlertmanagerConfig) ([]AMSilence, error) {
+	raw, err := amRequest(ctx, c, cfg, http.MethodGet, "/api/v2/silences", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []AMSilence
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("解析静默列表失败: %w", err)
+	}
+	return out, nil
+}
+
+// AMCreateSilence 创建静默（body 为 POST /api/v2/silences 的 JSON）
+func AMCreateSilence(ctx context.Context, c *kube.Client, cfg *model.AlertmanagerConfig, body []byte) error {
+	_, err := amRequest(ctx, c, cfg, http.MethodPost, "/api/v2/silences", body)
+	return err
+}
+
+// AMDeleteSilence 删除（过期）静默
+func AMDeleteSilence(ctx context.Context, c *kube.Client, cfg *model.AlertmanagerConfig, id string) error {
+	_, err := amRequest(ctx, c, cfg, http.MethodDelete, "/api/v2/silence/"+strings.TrimLeft(id, "/"), nil)
+	return err
+}
+
+// ------------------- AM 主配置 YAML 读写（Secret） -------------------
+
+// AMConfigYAML 集群 AM 主配置内容
+type AMConfigYAML struct {
+	Secret string `json:"secret"` // "ns/name"
+	Key    string `json:"key"`    // 实际使用的 data key（alertmanager.yaml | alertmanager.yaml.gz）
+	Gzip   bool   `json:"gzip"`   // 是否为 gzip 存储（operator generated secret）
+	YAML   string `json:"yaml"`
+}
+
+const amConfigKeyPlain = "alertmanager.yaml"
+const amConfigKeyGzip = "alertmanager.yaml.gz"
+
+// splitSecretRef "ns/name" -> (ns, name, error)；name 不得再含斜杠
+func splitSecretRef(ref string) (string, string, error) {
+	parts := strings.SplitN(strings.TrimSpace(ref), "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("Secret 引用格式应为 ns/name，当前 %q", ref)
+	}
+	if strings.Contains(parts[1], "/") {
+		return "", "", fmt.Errorf("Secret 引用格式应为 ns/name，当前 %q", ref)
+	}
+	return parts[0], parts[1], nil
+}
+
+// validateYAML 校验 YAML 语法（能解析为任意合法结构即通过）
+func validateYAML(text string) error {
+	var out map[string]interface{}
+	return yaml.Unmarshal([]byte(text), &out)
+}
+
+// amConfigDecode 从 Secret data 提取配置明文（自动识别 gzip / 明文两种 key）
+func amConfigDecode(data map[string][]byte) (yamlText, key string, err error) {
+	if gz, ok := data[amConfigKeyGzip]; ok {
+		zr, err := gzip.NewReader(bytes.NewReader(gz))
+		if err != nil {
+			return "", "", fmt.Errorf("解压 %s 失败: %w", amConfigKeyGzip, err)
+		}
+		raw, err := io.ReadAll(zr)
+		if err != nil {
+			return "", "", err
+		}
+		return string(raw), amConfigKeyGzip, nil
+	}
+	if raw, ok := data[amConfigKeyPlain]; ok {
+		return string(raw), amConfigKeyPlain, nil
+	}
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	return "", "", fmt.Errorf("Secret 中不含 %s / %s（现有 key: %v）", amConfigKeyPlain, amConfigKeyGzip, keys)
+}
+
+// amConfigEncode 保持原 key 与 gzip 格式把配置写回 data（原 Secret 无标准 key 时按明文补齐）
+func amConfigEncode(data map[string][]byte, yamlText string) error {
+	switch {
+	case data[amConfigKeyGzip] != nil:
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, err := zw.Write([]byte(yamlText)); err != nil {
+			return err
+		}
+		if err := zw.Close(); err != nil {
+			return err
+		}
+		data[amConfigKeyGzip] = buf.Bytes()
+	case data[amConfigKeyPlain] != nil:
+		data[amConfigKeyPlain] = []byte(yamlText)
+	default:
+		data[amConfigKeyPlain] = []byte(yamlText)
+	}
+	return nil
+}
+
+// LoadAMConfigYAML 读取 AM 主配置（自动识别明文与 gzip 两种存储格式）
+func LoadAMConfigYAML(ctx context.Context, c *kube.Client, ref string) (*AMConfigYAML, error) {
+	ns, name, err := splitSecretRef(ref)
+	if err != nil {
+		return nil, err
+	}
+	secret, err := c.Clientset.CoreV1().Secrets(ns).Get(ctx, name, v1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("读取 Secret %s 失败: %w", ref, err)
+	}
+	text, key, err := amConfigDecode(secret.Data)
+	if err != nil {
+		return nil, fmt.Errorf("Secret %s: %w", ref, err)
+	}
+	return &AMConfigYAML{Secret: ref, Key: key, Gzip: key == amConfigKeyGzip, YAML: text}, nil
+}
+
+// SaveAMConfigYAML 写回 AM 主配置（保持原 key 与 gzip 格式；保存前做 YAML 语法校验）
+func SaveAMConfigYAML(ctx context.Context, c *kube.Client, ref, yamlText string) error {
+	if err := validateYAML(yamlText); err != nil {
+		return fmt.Errorf("YAML 语法校验失败: %w", err)
+	}
+	ns, name, err := splitSecretRef(ref)
+	if err != nil {
+		return err
+	}
+	secret, err := c.Clientset.CoreV1().Secrets(ns).Get(ctx, name, v1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("读取 Secret %s 失败: %w", ref, err)
+	}
+	if secret.Data == nil {
+		secret.Data = map[string][]byte{}
+	}
+	if err := amConfigEncode(secret.Data, yamlText); err != nil {
+		return err
+	}
+	if _, err := c.Clientset.CoreV1().Secrets(ns).Update(ctx, secret, v1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("写回 Secret %s 失败: %w", ref, err)
+	}
+	return nil
+}

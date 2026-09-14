@@ -17,7 +17,7 @@
             <span class="group-title">{{ g.group || 'core (v1)' }}</span>
             <el-tag size="small" style="margin-left: 8px">{{ g.resources.length }}</el-tag>
           </template>
-          <el-table :data="g.resources" size="small" stripe>
+          <el-table border :data="g.resources" size="small" stripe>
             <el-table-column label="资源" min-width="220">
               <template #default="{ row }">
                 <el-link type="primary" @click="openResource(g, row)">{{ row.resource }}</el-link>

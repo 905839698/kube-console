@@ -15,6 +15,7 @@ const router = createRouter({
         { path: 'overview', name: 'overview', component: () => import('../views/Overview.vue'), meta: { title: '集群总览' } },
         { path: 'monitor', name: 'monitor', component: () => import('../views/Monitor.vue'), meta: { title: '监控' } },
         { path: 'monitor/alerts', name: 'alerts', component: () => import('../views/AlertList.vue'), meta: { title: '告警' } },
+        { path: 'monitor/grafana', name: 'grafana', component: () => import('../views/GrafanaEmbed.vue'), meta: { title: 'Grafana 面板' } },
         { path: 'monitor/namespace/:name', name: 'namespaceMonitor', component: () => import('../views/NamespaceMonitor.vue'), meta: { title: '命名空间监控' } },
         { path: 'clusters', name: 'clusters', component: () => import('../views/ClusterList.vue'), meta: { title: '集群管理' } },
         { path: 'namespaces', name: 'namespaces', component: () => import('../views/NamespaceList.vue'), meta: { title: '命名空间' } },
@@ -43,11 +44,15 @@ const router = createRouter({
 { path: 'ci', name: 'ci', component: () => import('../views/CIPipelines.vue'), meta: { title: 'CI 流水线' } },
         { path: 'argocd', name: 'argocd', component: () => import('../views/ArgoCDApps.vue'), meta: { title: 'ArgoCD 应用' } },
         { path: 'argocd/repos', name: 'argocdRepos', component: () => import('../views/ArgoCDRepos.vue'), meta: { title: 'ArgoCD 仓库' } },
+        // 微服务（Nacos）：跟随顶栏全局命名空间选择
+        { path: 'micro/services', name: 'nacosServices', component: () => import('../views/micro/NacosServices.vue'), meta: { title: '服务发现' } },
+        { path: 'micro/configs', name: 'nacosConfigs', component: () => import('../views/micro/NacosConfigs.vue'), meta: { title: '配置管理' } },
         // 平台管理（仅管理员）
         { path: 'users', name: 'users', component: () => import('../views/UserList.vue'), meta: { title: '用户管理', admin: true } },
         { path: 'authz', name: 'authz', component: () => import('../views/AuthzList.vue'), meta: { title: '授权管理', admin: true } },
         { path: 'audit', name: 'audit', component: () => import('../views/AuditList.vue'), meta: { title: '审计日志', admin: true } },
         { path: 'notify', name: 'notify', component: () => import('../views/NotifyAdmin.vue'), meta: { title: '通知管理', admin: true } },
+        { path: 'nacos', name: 'nacos', component: () => import('../views/NacosList.vue'), meta: { title: 'Nacos 管理', admin: true } },
         { path: 'registry', name: 'registry', component: () => import('../views/RegistryList.vue'), meta: { title: '镜像仓库', admin: true } },
         { path: 'usage', name: 'usage', component: () => import('../views/UsageReport.vue'), meta: { title: '用量报表', admin: true } },
         { path: 'backups', name: 'backups', component: () => import('../views/BackupList.vue'), meta: { title: '备份概览', admin: true } },

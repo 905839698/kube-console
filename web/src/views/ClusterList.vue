@@ -4,13 +4,16 @@
       <template #header>
         <div class="card-header">
           <span>集群管理</span>
-          <el-button type="primary" size="small" @click="openAdd">
-            <el-icon><Plus /></el-icon>&nbsp;添加集群
-          </el-button>
+          <div class="header-right">
+            <el-button :icon="Refresh" circle @click="load" />
+            <el-button type="primary" size="small" @click="openAdd">
+              <el-icon><Plus /></el-icon>&nbsp;添加集群
+            </el-button>
+          </div>
         </div>
       </template>
 
-      <el-table :data="clusterStore.clusters" v-loading="loading" stripe>
+      <el-table border :data="clusterStore.clusters" v-loading="loading" stripe>
         <el-table-column prop="name" label="名称" min-width="160" />
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
@@ -62,6 +65,10 @@
         <el-form-item label="端口">
           <el-input-number v-model="form.prometheusPort" :min="1" :max="65535" style="width: 160px" />
         </el-form-item>
+        <el-divider content-position="left">Grafana 面板（可选，iframe 直连内嵌）</el-divider>
+        <el-form-item label="Grafana 地址">
+          <el-input v-model="form.grafanaURL" placeholder="如 http://grafana.kuboard:3000（需开启 allow_embedding + 匿名只读）" style="width: 420px" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -75,7 +82,8 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadFile } from 'element-plus'
-import { clusterApi, k8sApi, type Cluster } from '../api'
+import { Refresh } from '@element-plus/icons-vue'
+import { clusterApi, grafanaApi, k8sApi, type Cluster } from '../api'
 import { useClusterStore } from '../store/cluster'
 import StatusTag from '../components/StatusTag.vue'
 
@@ -84,7 +92,7 @@ const loading = ref(false)
 const dialogVisible = ref(false)
 const editing = ref(false)
 const saving = ref(false)
-const form = reactive({ name: '', kubeconfig: '', prometheusNamespace: '', prometheusService: '', prometheusPort: 9090 })
+const form = reactive({ name: '', kubeconfig: '', prometheusNamespace: '', prometheusService: '', prometheusPort: 9090, grafanaURL: '' })
 
 onMounted(load)
 
@@ -108,6 +116,7 @@ function openAdd() {
   form.prometheusNamespace = ''
   form.prometheusService = ''
   form.prometheusPort = 9090
+  form.grafanaURL = ''
   dialogVisible.value = true
 }
 
@@ -118,6 +127,7 @@ function openEdit(row: Cluster) {
   form.prometheusNamespace = row.prometheusNamespace || ''
   form.prometheusService = row.prometheusService || ''
   form.prometheusPort = row.prometheusPort || 9090
+  form.grafanaURL = row.grafanaURL || ''
   dialogVisible.value = true
 }
 
@@ -145,6 +155,7 @@ async function save() {
         prometheusService: form.prometheusService,
         prometheusPort: form.prometheusPort,
       })
+      await grafanaSync(form.name)
       ElMessage.success('集群已更新')
     } else {
       await clusterApi.create(form.name.trim(), form.kubeconfig)
@@ -155,6 +166,7 @@ async function save() {
           prometheusPort: form.prometheusPort,
         })
       }
+      await grafanaSync(form.name.trim())
       ElMessage.success('集群添加成功')
     }
     dialogVisible.value = false
@@ -169,6 +181,14 @@ async function save() {
 async function testPrometheus(row: Cluster) {
   await k8sApi.monitorCheck()
   ElMessage.success('Prometheus 连接正常')
+}
+
+// Grafana 地址变化时才调用保存接口
+async function grafanaSync(name: string) {
+  const current = clusterStore.clusters.find((c) => c.name === name)?.grafanaURL || ''
+  if (form.grafanaURL !== current) {
+    await grafanaApi.update(name, form.grafanaURL)
+  }
 }
 
 async function testConn(row: Cluster) {

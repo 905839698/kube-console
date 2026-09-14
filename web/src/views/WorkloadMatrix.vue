@@ -7,7 +7,7 @@
       </div>
     </template>
 
-    <el-table :data="rows" size="small" stripe :row-class-name="rowClass">
+    <el-table border :data="rows" size="small" stripe :row-class-name="rowClass">
       <!-- 命名空间列 -->
       <el-table-column label="命名空间" min-width="180" fixed="left">
         <template #default="{ row }">
@@ -105,7 +105,7 @@ function goList(ns: string, kind: string) {
   cursor: pointer;
   font-size: 13px;
 }
-.cell-ok { background: #e6f7f5; color: #00b8a9; font-weight: 600; }
+.cell-ok { background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-weight: 600; }
 .cell-warn { background: #fdf6ec; color: #e6a23c; font-weight: 600; }
 .cell-error { background: #fef0f0; color: #f56c6c; font-weight: 600; }
 .cell-empty { color: #dcdfe6; }

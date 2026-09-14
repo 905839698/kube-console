@@ -107,3 +107,20 @@ func (h *ClusterHandler) Connectivity(c *gin.Context) {
 	}
 	response.OK(c, cluster)
 }
+
+// UpdateGrafana 更新集群 Grafana 地址（iframe 直连内嵌用）
+func (h *ClusterHandler) UpdateGrafana(c *gin.Context) {
+	var req struct {
+		GrafanaURL string `json:"grafanaURL"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, 400, 400, "请求体无效")
+		return
+	}
+	cluster, err := h.clusters.UpdateGrafana(c.Param("name"), req.GrafanaURL)
+	if err != nil {
+		response.Fail(c, 400, 400, err.Error())
+		return
+	}
+	response.OK(c, cluster)
+}

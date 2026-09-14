@@ -10,7 +10,7 @@ results:
     description: "产物路径（workspace 内）"
 steps:
   - name: build
-    image: harbor.cqyxpt.site:8443/library/python:{{pythonVersion}}
+    image: {{imageRegistry}}/python:{{pythonVersion}}
     script: |
       #!/bin/sh
       set -e

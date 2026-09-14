@@ -13,94 +13,102 @@
           <el-menu-item index="/overview"><el-icon><Odometer /></el-icon><span>集群总览</span></el-menu-item>
           <el-sub-menu index="cluster-group">
             <template #title><el-icon><Connection /></el-icon><span>集群</span></template>
-            <el-menu-item index="/clusters">集群管理</el-menu-item>
-            <el-menu-item index="/namespaces">命名空间</el-menu-item>
-            <el-menu-item index="/nodes">节点</el-menu-item>
-            <el-menu-item index="/resources">自定义资源</el-menu-item>
+            <el-menu-item index="/clusters"><el-icon><Coordinate /></el-icon><span>集群管理</span></el-menu-item>
+            <el-menu-item index="/namespaces"><el-icon><Folder /></el-icon><span>命名空间</span></el-menu-item>
+            <el-menu-item index="/nodes"><el-icon><Cpu /></el-icon><span>节点</span></el-menu-item>
+            <el-menu-item index="/resources"><el-icon><Files /></el-icon><span>自定义资源</span></el-menu-item>
           </el-sub-menu>
           <el-sub-menu index="workload-group">
-            <template #title><el-icon><Box /></el-icon><span>工作负载</span></template>
-            <el-menu-item index="/workloads/matrix">矩阵视图</el-menu-item>
-            <el-menu-item index="/workloads/deployments">Deployment</el-menu-item>
-            <el-menu-item index="/workloads/statefulsets">StatefulSet</el-menu-item>
-            <el-menu-item index="/workloads/daemonsets">DaemonSet</el-menu-item>
-            <el-menu-item index="/workloads/cronjobs">CronJob</el-menu-item>
-            <el-menu-item index="/workloads/jobs">Job</el-menu-item>
-            <el-menu-item index="/workloads/pods">Pod</el-menu-item>
-            <el-menu-item index="/resources/horizontalpodautoscalers">HPA</el-menu-item>
+            <template #title><el-icon><Suitcase /></el-icon><span>工作负载</span></template>
+            <el-menu-item index="/workloads/matrix"><el-icon><Grid /></el-icon><span>矩阵视图</span></el-menu-item>
+            <el-menu-item index="/workloads/deployments"><el-icon><Box /></el-icon><span>Deployment</span></el-menu-item>
+            <el-menu-item index="/workloads/statefulsets"><el-icon><Collection /></el-icon><span>StatefulSet</span></el-menu-item>
+            <el-menu-item index="/workloads/daemonsets"><el-icon><Operation /></el-icon><span>DaemonSet</span></el-menu-item>
+            <el-menu-item index="/workloads/cronjobs"><el-icon><Timer /></el-icon><span>CronJob</span></el-menu-item>
+            <el-menu-item index="/workloads/jobs"><el-icon><Tickets /></el-icon><span>Job</span></el-menu-item>
+            <el-menu-item index="/workloads/pods"><el-icon><Cherry /></el-icon><span>Pod</span></el-menu-item>
+            <el-menu-item index="/resources/horizontalpodautoscalers"><el-icon><Sort /></el-icon><span>HPA</span></el-menu-item>
           </el-sub-menu>
           <el-sub-menu index="observe-group">
             <template #title><el-icon><TrendCharts /></el-icon><span>可观测性</span></template>
-            <el-menu-item index="/monitor">监控</el-menu-item>
-            <el-menu-item index="/monitor/alerts">告警</el-menu-item>
-            <el-menu-item index="/events">事件中心</el-menu-item>
-            <el-menu-item index="/logsearch">日志检索</el-menu-item>
+            <el-menu-item index="/monitor"><el-icon><DataLine /></el-icon><span>监控</span></el-menu-item>
+            <el-menu-item index="/monitor/alerts"><el-icon><Bell /></el-icon><span>告警</span></el-menu-item>
+            <el-menu-item index="/monitor/grafana"><el-icon><DataBoard /></el-icon><span>Grafana 面板</span></el-menu-item>
+            <el-menu-item index="/events"><el-icon><Warning /></el-icon><span>事件中心</span></el-menu-item>
+            <el-menu-item index="/logsearch"><el-icon><Document /></el-icon><span>日志检索</span></el-menu-item>
           </el-sub-menu>
           <el-sub-menu index="cicd-group">
             <template #title><el-icon><Promotion /></el-icon><span>CI / CD</span></template>
-            <el-menu-item index="/ci">CI 流水线</el-menu-item>
-            <el-menu-item index="/argocd">ArgoCD 应用</el-menu-item>
-            <el-menu-item index="/argocd/repos">ArgoCD 仓库</el-menu-item>
-            <el-menu-item index="/helm/releases">Helm Releases</el-menu-item>
-            <el-menu-item index="/helm/repos">Chart 仓库</el-menu-item>
+            <el-menu-item index="/ci"><el-icon><SetUp /></el-icon><span>CI 流水线</span></el-menu-item>
+            <el-menu-item index="/argocd"><el-icon><Compass /></el-icon><span>ArgoCD 应用</span></el-menu-item>
+            <el-menu-item index="/argocd/repos"><el-icon><FolderChecked /></el-icon><span>ArgoCD 仓库</span></el-menu-item>
+            <el-menu-item index="/helm/releases"><el-icon><Download /></el-icon><span>Helm Releases</span></el-menu-item>
+            <el-menu-item index="/helm/repos"><el-icon><FolderOpened /></el-icon><span>Chart 仓库</span></el-menu-item>
+          </el-sub-menu>
+          <el-sub-menu index="micro-group">
+            <template #title><el-icon><Coin /></el-icon><span>微服务</span></template>
+            <el-menu-item index="/micro/services"><el-icon><Connection /></el-icon><span>服务发现</span></el-menu-item>
+            <el-menu-item index="/micro/configs"><el-icon><Document /></el-icon><span>配置管理</span></el-menu-item>
           </el-sub-menu>
           <el-sub-menu index="network-group">
             <template #title><el-icon><Share /></el-icon><span>服务与网络</span></template>
             <el-sub-menu index="net-route-group">
-              <template #title><span class="sub-title">服务与路由</span></template>
-              <el-menu-item index="/resources/services">服务</el-menu-item>
-              <el-menu-item index="/resources/routes">路由</el-menu-item>
-              <el-menu-item index="/resources/ingresses">Ingress 类</el-menu-item>
+              <template #title><el-icon><Position /></el-icon><span class="sub-title">服务与路由</span></template>
+              <el-menu-item index="/resources/services"><el-icon><Connection /></el-icon><span>服务</span></el-menu-item>
+              <el-menu-item index="/resources/endpointslices"><el-icon><Guide /></el-icon><span>EndpointSlice</span></el-menu-item>
+              <el-menu-item index="/resources/routes"><el-icon><Share /></el-icon><span>路由</span></el-menu-item>
+              <el-menu-item index="/resources/ingresses"><el-icon><Link /></el-icon><span>Ingress 类</span></el-menu-item>
             </el-sub-menu>
             <el-sub-menu index="net-gateway-group">
-              <template #title><span class="sub-title">网关</span></template>
-              <el-menu-item index="/resources/gatewayclasses">网关类</el-menu-item>
-              <el-menu-item index="/resources/gateways">网关</el-menu-item>
-              <el-menu-item index="/resources/httproutes">HTTP 路由</el-menu-item>
-              <el-menu-item index="/resources/tcproutes">TCP 路由</el-menu-item>
-              <el-menu-item index="/resources/tlsroutes">TLS 路由</el-menu-item>
-              <el-menu-item index="/resources/udproutes">UDP 路由</el-menu-item>
-              <el-menu-item index="/resources/grpcroutes">GRPC 路由</el-menu-item>
-              <el-menu-item index="/resources/referencegrants">跨命名空间引用</el-menu-item>
+              <template #title><el-icon><Collection /></el-icon><span class="sub-title">网关</span></template>
+              <el-menu-item index="/resources/gatewayclasses"><el-icon><Files /></el-icon><span>网关类</span></el-menu-item>
+              <el-menu-item index="/resources/gateways"><el-icon><OfficeBuilding /></el-icon><span>网关</span></el-menu-item>
+              <el-menu-item index="/resources/httproutes"><el-icon><Link /></el-icon><span>HTTP 路由</span></el-menu-item>
+              <el-menu-item index="/resources/tcproutes"><el-icon><Connection /></el-icon><span>TCP 路由</span></el-menu-item>
+              <el-menu-item index="/resources/tlsroutes"><el-icon><Lock /></el-icon><span>TLS 路由</span></el-menu-item>
+              <el-menu-item index="/resources/udproutes"><el-icon><Message /></el-icon><span>UDP 路由</span></el-menu-item>
+              <el-menu-item index="/resources/grpcroutes"><el-icon><ChatDotRound /></el-icon><span>GRPC 路由</span></el-menu-item>
+              <el-menu-item index="/resources/referencegrants"><el-icon><Unlock /></el-icon><span>跨命名空间引用</span></el-menu-item>
             </el-sub-menu>
             <el-sub-menu index="net-policy-group">
-              <template #title><span class="sub-title">网络策略</span></template>
-              <el-menu-item index="/resources/networkpolicies">NetworkPolicy</el-menu-item>
+              <template #title><el-icon><Lock /></el-icon><span class="sub-title">网络策略</span></template>
+              <el-menu-item index="/resources/networkpolicies"><el-icon><Filter /></el-icon><span>NetworkPolicy</span></el-menu-item>
             </el-sub-menu>
           </el-sub-menu>
           <el-sub-menu index="config-group">
             <template #title><el-icon><Setting /></el-icon><span>配置中心</span></template>
-            <el-menu-item index="/resources/configmaps">ConfigMap</el-menu-item>
-            <el-menu-item index="/resources/secrets">Secret</el-menu-item>
-            <el-menu-item index="/resources/serviceaccounts">ServiceAccount</el-menu-item>
+            <el-menu-item index="/resources/configmaps"><el-icon><Document /></el-icon><span>ConfigMap</span></el-menu-item>
+            <el-menu-item index="/resources/secrets"><el-icon><Key /></el-icon><span>Secret</span></el-menu-item>
+            <el-menu-item index="/resources/serviceaccounts"><el-icon><User /></el-icon><span>ServiceAccount</span></el-menu-item>
           </el-sub-menu>
           <el-sub-menu index="storage-group">
             <template #title><el-icon><Coin /></el-icon><span>存储</span></template>
-            <el-menu-item index="/resources/persistentvolumeclaims">PVC</el-menu-item>
-            <el-menu-item index="/resources/persistentvolumes">PV</el-menu-item>
-            <el-menu-item index="/resources/storageclasses">StorageClass</el-menu-item>
+            <el-menu-item index="/resources/persistentvolumeclaims"><el-icon><Files /></el-icon><span>PVC</span></el-menu-item>
+            <el-menu-item index="/resources/persistentvolumes"><el-icon><FolderOpened /></el-icon><span>PV</span></el-menu-item>
+            <el-menu-item index="/resources/storageclasses"><el-icon><Collection /></el-icon><span>StorageClass</span></el-menu-item>
           </el-sub-menu>
           <el-sub-menu index="security-group">
             <template #title><el-icon><UserFilled /></el-icon><span>安全 (RBAC)</span></template>
-            <el-menu-item index="/resources/roles">Role</el-menu-item>
-            <el-menu-item index="/resources/rolebindings">RoleBinding</el-menu-item>
-            <el-menu-item index="/resources/clusterroles">ClusterRole</el-menu-item>
-            <el-menu-item index="/resources/clusterrolebindings">ClusterRoleBinding</el-menu-item>
+            <el-menu-item index="/resources/roles"><el-icon><Avatar /></el-icon><span>Role</span></el-menu-item>
+            <el-menu-item index="/resources/rolebindings"><el-icon><Connection /></el-icon><span>RoleBinding</span></el-menu-item>
+            <el-menu-item index="/resources/clusterroles"><el-icon><User /></el-icon><span>ClusterRole</span></el-menu-item>
+            <el-menu-item index="/resources/clusterrolebindings"><el-icon><Link /></el-icon><span>ClusterRoleBinding</span></el-menu-item>
           </el-sub-menu>
           <el-sub-menu index="quota-group">
             <template #title><el-icon><ScaleToOriginal /></el-icon><span>配额</span></template>
-            <el-menu-item index="/quotas">ResourceQuota</el-menu-item>
-            <el-menu-item index="/resources/limitranges">LimitRange</el-menu-item>
+            <el-menu-item index="/quotas"><el-icon><PieChart /></el-icon><span>ResourceQuota</span></el-menu-item>
+            <el-menu-item index="/resources/limitranges"><el-icon><Filter /></el-icon><span>LimitRange</span></el-menu-item>
           </el-sub-menu>
           <el-sub-menu v-if="userStore.isAdmin" index="platform-group">
-            <template #title><el-icon><Setting /></el-icon><span>平台管理</span></template>
-            <el-menu-item index="/users">用户管理</el-menu-item>
-            <el-menu-item index="/authz">授权管理</el-menu-item>
-            <el-menu-item index="/audit">审计日志</el-menu-item>
-            <el-menu-item index="/notify">通知管理</el-menu-item>
-            <el-menu-item index="/registry">镜像仓库</el-menu-item>
-            <el-menu-item index="/usage">用量报表</el-menu-item>
-            <el-menu-item index="/backups">备份概览</el-menu-item>
+            <template #title><el-icon><Tools /></el-icon><span>平台管理</span></template>
+            <el-menu-item index="/users"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>
+            <el-menu-item index="/authz"><el-icon><Key /></el-icon><span>授权管理</span></el-menu-item>
+            <el-menu-item index="/audit"><el-icon><Tickets /></el-icon><span>审计日志</span></el-menu-item>
+            <el-menu-item index="/notify"><el-icon><Bell /></el-icon><span>通知管理</span></el-menu-item>
+            <el-menu-item index="/nacos"><el-icon><Connection /></el-icon><span>Nacos 管理</span></el-menu-item>
+            <el-menu-item index="/registry"><el-icon><Picture /></el-icon><span>镜像仓库</span></el-menu-item>
+            <el-menu-item index="/usage"><el-icon><DataAnalysis /></el-icon><span>用量报表</span></el-menu-item>
+            <el-menu-item index="/backups"><el-icon><CopyDocument /></el-icon><span>备份概览</span></el-menu-item>
           </el-sub-menu>
         </el-menu>
       </el-scrollbar>
@@ -167,7 +175,7 @@
         <div style="margin-bottom: 10px">
           <el-button type="primary" size="small" @click="createTokenDlg = true">新建 Token</el-button>
         </div>
-        <el-table :data="tokens" size="small">
+        <el-table border :data="tokens" size="small">
           <el-table-column prop="name" label="名称" min-width="140" />
           <el-table-column label="过期时间" width="170">
             <template #default="{ row }">{{ row.expiresAt ? row.expiresAt.replace('T', ' ').slice(0, 19) : '永不过期' }}</template>
@@ -216,8 +224,8 @@
           <el-icon class="is-loading" :size="22"><Loading /></el-icon>
           <span>正在加载集群…</span>
         </div>
-        <!-- 已就绪但尚无可用集群 -->
-        <div v-else-if="!clusterStore.current" class="main-loading">
+        <!-- 已就绪但尚无可用集群（集群管理页豁免：那正是添加集群的入口） -->
+        <div v-else-if="!clusterStore.current && route.path !== '/clusters'" class="main-loading">
           <el-icon :size="22"><Warning /></el-icon>
           <span>暂无可用集群，请先到「集群管理」添加集群</span>
         </div>
@@ -409,7 +417,6 @@ async function savePassword() {
 .layout { height: 100%; }
 .aside {
   background: var(--kc-sidebar-bg);
-  border-right: 1px solid var(--kc-border);
   display: flex;
   flex-direction: column;
 }
@@ -419,10 +426,10 @@ async function savePassword() {
   align-items: center;
   gap: 8px;
   padding: 0 16px;
-  color: #1f2937;
+  color: #ffffff;
   font-size: 16px;
   font-weight: 700;
-  border-bottom: 1px solid var(--kc-border);
+  border-bottom: 1px solid var(--kc-sidebar-border);
 }
 .logo-icon {
   width: 30px;
@@ -439,17 +446,27 @@ async function savePassword() {
   border-right: none;
   padding: 8px;
   --el-menu-item-height: 42px;
+  /* 关键：EP 菜单默认白底会盖住深色侧边栏，置透明让 aside 底色透出 */
+  --el-menu-bg-color: transparent;
+  --el-menu-hover-bg-color: transparent;
+  background-color: transparent;
 }
 .menu :deep(.el-menu-item) {
   border-radius: 6px;
   margin-bottom: 2px;
   color: var(--kc-sidebar-text);
+  font-size: 13.5px;
 }
-.menu :deep(.el-menu-item:hover) {
-  background: #f0fdfb;
+.menu :deep(.el-menu-item .el-icon) {
+  font-size: 15px;
+}
+.menu :deep(.el-menu-item:hover),
+.menu :deep(.el-sub-menu__title:hover) {
+  background: var(--kc-sidebar-hover);
+  color: #e3ecf1;
 }
 .menu :deep(.el-menu-item.is-active) {
-  background: var(--el-color-primary-light-9);
+  background: var(--kc-sidebar-active-bg);
   color: var(--kc-sidebar-text-active);
   font-weight: 600;
 }
@@ -461,14 +478,13 @@ async function savePassword() {
   bottom: 20%;
   width: 3px;
   border-radius: 2px;
-  background: var(--kc-logo-gradient);
+  background: var(--kc-sidebar-accent);
 }
 .menu :deep(.el-sub-menu__title) {
   border-radius: 6px;
-  color: var(--kc-sidebar-text);
-}
-.menu :deep(.el-sub-menu__title:hover) {
-  background: #f0fdfb;
+  color: #c2d2da;
+  font-weight: 600;
+  font-size: 13.5px;
 }
 .menu :deep(.el-sub-menu .el-menu-item) {
   min-width: 212px;
@@ -478,10 +494,10 @@ async function savePassword() {
 .menu :deep(.el-sub-menu .el-sub-menu .el-menu-item) {
   padding-left: 72px !important;
 }
-.sub-title { font-size: 13px; color: var(--kc-sidebar-text); }
+.sub-title { font-size: 13px; color: var(--kc-sidebar-text); font-weight: 400; }
 .header {
   background: var(--kc-header-bg);
-  border-bottom: 1px solid var(--kc-border);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
   display: flex;
   align-items: center;
   height: 56px;

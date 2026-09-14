@@ -1,0 +1,26 @@
+# kube-console 服务端配置示例
+# 复制为 configs/config.yaml 后按需修改；所有字段均可通过 KC_ 前缀环境变量覆盖
+# （如 KC_DB_DSN、KC_JWT_SECRET、KC_ADMIN_PASSWORD）
+
+server:
+  port: 8080
+
+database:
+  # 驱动: sqlite | mysql | postgres
+  # 开发环境用 sqlite（纯 Go 驱动，无需安装数据库）；生产建议 MySQL/PostgreSQL
+  driver: sqlite
+  dsn: ./data/kube-console.db
+  # MySQL 示例: root:password@tcp(127.0.0.1:3306)/kube_console?charset=utf8mb4&parseTime=True&loc=Local
+  # PostgreSQL 示例: host=127.0.0.1 user=admin password=xxx dbname=kube_console port=5432 sslmode=disable TimeZone=Asia/Shanghai
+
+jwt:
+  secret: change-me-to-a-long-random-string
+  expireIn: 24 # token 有效期（小时）
+
+admin:
+  username: admin
+  password: admin123
+
+k8s:
+  # 终端调试容器镜像（内网集群需用私有仓库可拉取的镜像）
+  debugImage: busybox:1.36

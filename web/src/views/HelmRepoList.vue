@@ -10,7 +10,7 @@
       </div>
     </template>
 
-    <el-table :data="repos" v-loading="loading" stripe>
+    <el-table border :data="repos" v-loading="loading" stripe>
       <el-table-column prop="name" label="名称" min-width="160" sortable />
       <el-table-column prop="url" label="URL" min-width="260">
         <template #default="{ row }">
@@ -59,7 +59,7 @@
     <!-- 浏览 chart -->
     <el-dialog v-model="browseVisible" :title="`Chart 列表 - ${browseRepo?.name || ''}`" width="720px" destroy-on-close>
       <el-input v-model="browseSearch" placeholder="搜索 chart..." :prefix-icon="Search" clearable style="width: 240px; margin-bottom: 12px" @input="loadCharts" />
-      <el-table :data="charts" v-loading="chartsLoading" stripe size="small" max-height="440">
+      <el-table border :data="charts" v-loading="chartsLoading" stripe size="small" max-height="440">
         <el-table-column prop="name" label="Chart" min-width="180">
           <template #default="{ row }">
             <el-link type="primary" @click="openInstall(row)">{{ row.name }}</el-link>

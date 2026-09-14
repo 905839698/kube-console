@@ -59,11 +59,12 @@
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
             <el-button :icon="Refresh" circle @click="load" style="margin-left: 12px" />
+            <el-button type="primary" @click="createDlg = true" style="margin-left: 12px">新建规则</el-button>
           </div>
         </div>
       </template>
 
-      <el-table :data="paged" size="default" stripe :default-sort="{ prop: 'state', order: 'ascending' }">
+      <el-table border :data="paged" size="default" stripe :default-sort="{ prop: 'state', order: 'ascending' }">
         <el-table-column label="状态" width="100" sortable :sort-method="stateSort">
           <template #default="{ row }">
             <el-tag :type="stateTag(row.state)" size="small">{{ stateLabel(row.state) }}</el-tag>
@@ -105,6 +106,17 @@
             <span class="muted">{{ fmtDuration(row.duration) }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="操作" width="132" fixed="right" align="center" class-name="op-col">
+          <template #default="{ row }">
+            <el-tooltip :disabled="!!row.source" content="未找到 PrometheusRule 源（规则可能直接来自 rulefiles）">
+              <span class="op-group">
+                <el-button link type="primary" size="small" :disabled="!row.source" @click="openRule(row, false)">查看</el-button>
+                <el-button link type="primary" size="small" :disabled="!row.source" @click="openRule(row, true)">编辑</el-button>
+                <el-button link type="danger" size="small" :disabled="!row.source || removing" @click="removeRule(row)">删除</el-button>
+              </span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
 
         <template #expand="{ row }">
           <div class="expand-body">
@@ -117,6 +129,9 @@
               </el-descriptions-item>
               <el-descriptions-item v-if="row.runbook" label="Runbook">
                 <a :href="row.runbook" target="_blank" rel="noopener">{{ row.runbook }}</a>
+              </el-descriptions-item>
+              <el-descriptions-item v-if="row.source" label="规则源">
+                <span class="muted">PrometheusRule {{ row.source }}</span>
               </el-descriptions-item>
             </el-descriptions>
 
@@ -167,29 +182,120 @@
       <el-tab-pane label="规则检查" name="lint">
         <AlertLint :rules="data?.rules || []" />
       </el-tab-pane>
+
+      <!-- 实时告警（Alertmanager） -->
+      <el-tab-pane label="实时告警" name="am" lazy>
+        <AmAlerts />
+      </el-tab-pane>
+
+      <!-- 静默管理 -->
+      <el-tab-pane label="静默" name="silences" lazy>
+        <AmSilences />
+      </el-tab-pane>
+
+      <!-- 告警历史 -->
+      <el-tab-pane label="告警历史" name="history" lazy>
+        <AlertHistory />
+      </el-tab-pane>
     </el-tabs>
+
+    <!-- 规则查看/编辑（v-if 重建实例，每次打开重新拉取源 CR） -->
+    <AlertRuleDialog
+      v-if="ruleDlg.visible"
+      v-model="ruleDlg.visible"
+      :group="ruleDlg.group"
+      :alert="ruleDlg.alert"
+      :source="ruleDlg.source"
+      :initial-editing="ruleDlg.editing"
+      @saved="load"
+    />
+    <!-- 新建规则 -->
+    <AlertRuleCreateDialog v-if="createDlg" v-model="createDlg" @saved="load" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { Search, Refresh, AlarmClock } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { load as yamlLoad, dump as yamlDump } from 'js-yaml'
 import { k8sApi } from '../api'
 import { useClusterStore } from '../store/cluster'
 import AlertGroups from './alert/AlertGroups.vue'
 import AlertLint from './alert/AlertLint.vue'
+import AlertRuleDialog from './alert/AlertRuleDialog.vue'
+import AlertRuleCreateDialog from './alert/AlertRuleCreateDialog.vue'
+import AmAlerts from './alert/AmAlerts.vue'
+import AmSilences from './alert/AmSilences.vue'
+import AlertHistory from './alert/AlertHistory.vue'
 import type { AlertRulesResponse, AlertRule, AlertSummary } from '../api'
 
 const clusterStore = useClusterStore()
 const data = ref<AlertRulesResponse>()
 const loading = ref(false)
-const tab = ref<'rules' | 'groups' | 'lint'>('rules')
+const tab = ref<'rules' | 'groups' | 'lint' | 'am' | 'silences' | 'history'>('rules')
 const stateFilter = ref<'all' | 'firing' | 'pending' | 'inactive'>('all')
 const sevFilter = ref('')
 const search = ref('')
 const page = ref(1)
 const pageSize = 20
+
+// 规则查看/编辑对话框
+const ruleDlg = reactive({ visible: false, group: '', alert: '', source: '', editing: false })
+function openRule(row: AlertRule, editing: boolean) {
+  if (!row.source) return
+  ruleDlg.group = row.group
+  ruleDlg.alert = row.alertName
+  ruleDlg.source = row.source
+  ruleDlg.editing = editing
+  ruleDlg.visible = true
+}
+
+// 新建规则
+const createDlg = ref(false)
+
+// 删除规则：从源 CR 移除该条；分组变空连带删除分组，CR 变空连带删除 CR
+const removing = ref(false)
+const PROM_RULE_GVR = { group: 'monitoring.coreos.com', version: 'v1', resource: 'prometheusrules' }
+async function removeRule(row: AlertRule) {
+  if (!row.source) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除告警规则 ${row.alertName}？\n将从 PrometheusRule ${row.source} 中移除；所属分组/CR 因此变空时一并删除。若该 CR 由 Helm chart 管理，下次 chart 升级可能恢复。`,
+      '删除规则',
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  removing.value = true
+  try {
+    const [ns, ...rest] = row.source.split('/')
+    const { yaml } = await k8sApi.genericYaml(PROM_RULE_GVR.group, PROM_RULE_GVR.version, PROM_RULE_GVR.resource, ns, rest.join('/'))
+    const cr: any = yamlLoad(yaml)
+    const crGroups: any[] = cr?.spec?.groups || []
+    const gi = crGroups.findIndex((g) => g.name === row.group)
+    const ri = gi >= 0 ? (crGroups[gi].rules || []).findIndex((r: any) => r.alert === row.alertName) : -1
+    if (gi < 0 || ri < 0) throw new Error('定位规则失败（源 CR 可能已变化），请刷新后重试')
+    ;(crGroups[gi].rules as any[]).splice(ri, 1)
+    let deleteCr = false
+    if (crGroups[gi].rules.length === 0) {
+      crGroups.splice(gi, 1)
+      if (crGroups.length === 0) deleteCr = true
+    }
+    if (deleteCr) {
+      await k8sApi.genericDelete(PROM_RULE_GVR.group, PROM_RULE_GVR.version, PROM_RULE_GVR.resource, ns, rest.join('/'))
+    } else {
+      await k8sApi.applyYaml(yamlDump(cr, { lineWidth: 120, noRefs: true }))
+    }
+    ElMessage.success('规则已删除，prometheus-operator 将自动同步')
+    load()
+  } catch (e: any) {
+    ElMessage.error(`删除失败：${e?.message || e}`)
+  } finally {
+    removing.value = false
+  }
+}
 
 // 从分组页跳转：把该分组的规则作为搜索关键词带到规则页
 function onViewGroupRules(group: string) {
@@ -294,6 +400,8 @@ onMounted(load)
 
 .alert-name { font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .fire-icon { color: #f56c6c; }
+.op-group { white-space: nowrap; }
+.op-col .cell { padding: 0 8px; }
 .alert-group { color: #c0c4cc; font-size: 12px; margin-top: 2px; }
 .muted { color: #c0c4cc; }
 

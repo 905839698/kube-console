@@ -1,0 +1,86 @@
+# kube-console 前后端 Service + Gateway API（Gateway + HTTPRoute，同一域名按路径分发：/api→后端，/→前端）
+# 集群 GatewayClass 为 higress（higress.io/gateway-controller）。
+# 说明：
+#   - WebSocket（Pod 终端/CI 运行推送/端口转发）由 Higress 原生透传 Upgrade 头
+#   - SSE（CI 日志流）经 Higress 流式转发，无需额外缓冲配置
+#   - 长连接（终端）如需更长空闲超时，可在 Higress 侧调整对应监听/路由的 timeout
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-console-server
+  namespace: kube-console
+spec:
+  selector:
+    app: kube-console
+  ports:
+    - port: 8080
+      targetPort: 8080
+    # Nacos Pod 注入 Admission Webhook（HTTPS，自签证书在容器内 ./data 持久化）
+    # service 回调模式（Nacos 连接配置 webhookMode=service）时 kube-apiserver 经此端口回调 /inject/<cluster>
+    - name: webhook
+      port: 9443
+      targetPort: 9443
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-console-web
+  namespace: kube-console
+spec:
+  selector:
+    app: kube-console-web
+  ports:
+    - port: 80
+      targetPort: 80
+---
+# Gateway：绑定 higress 网关类，暴露 80（HTTPS 见文件末尾说明）
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: kube-console
+  namespace: kube-console
+spec:
+  gatewayClassName: higress
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      hostname: kube-console.example.com
+---
+# HTTPRoute：/api 走后端，其余走前端（Vue Router history 回落由前端 Nginx 的 try_files 处理）
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kube-console
+  namespace: kube-console
+spec:
+  parentRefs:
+    - name: kube-console
+      namespace: kube-console
+  hostnames:
+    - kube-console.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: kube-console-server
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: kube-console-web
+          port: 80
+# ---
+# 启用 HTTPS：给上面的 Gateway listener 改为 protocol: TLS + port: 443，
+# 并配置 certificates 指向证书 Secret（kubectl -n kube-console create secret tls kc-tls
+#   --cert=fullchain.pem --key=privkey.pem），listener 增加:
+#   tls:
+#     mode: Terminate
+#     certificateRefs:
+#       - name: kc-tls
+# 后端保持内网纯 HTTP 不变。
+# 不用网关时：把 kube-console-web 服务改 NodePort 直接暴露，前端镜像内的 /api 反代自动兜底。

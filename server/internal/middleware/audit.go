@@ -24,10 +24,10 @@ func AuditRequired(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 
-		// 写操作截取请求体摘要（截断 2KB、敏感字段打码）供审计追溯
+		// 写操作读取完整请求体并回填（截断仅在审计存储时进行）
 		body := ""
 		if c.Request.Method != "GET" && c.Request.Method != "HEAD" && c.Request.Method != "OPTIONS" && c.Request.Body != nil {
-			buf, err := io.ReadAll(io.LimitReader(c.Request.Body, 4*1024))
+			buf, err := io.ReadAll(c.Request.Body)
 			if err == nil {
 				// 必须回填 Body 供后续 handler 读取
 				c.Request.Body = io.NopCloser(bytes.NewBuffer(buf))

@@ -30,10 +30,18 @@ import (
 // Loader 扫描节点目录，加载全部节点插件并注册。
 type Loader struct {
 	reg nodetype.Registry
+	// globals 平台级全局模板变量（如 imageRegistry），渲染时注入且优先于节点参数
+	globals map[string]interface{}
 }
 
 // NewLoader 创建加载器。reg 通常是 CI 依赖集里的节点注册表。
 func NewLoader(reg nodetype.Registry) *Loader { return &Loader{reg: reg} }
+
+// WithGlobals 设置全局模板变量（编译期 {{key}} 替换的最高优先级来源）。
+func (l *Loader) WithGlobals(m map[string]interface{}) *Loader {
+	l.globals = m
+	return l
+}
 
 // LoadEmbedded 从内嵌 FS 加载全部节点插件（fsys 须以 nodes 目录为根，
 // 即 fs.Sub(node.NodesFS, "nodes")）。
@@ -122,6 +130,7 @@ func (l *Loader) loadOne(fsys fs.FS, dir string) error {
 		schemaRaw: schemaRaw,
 		taskRaw:   string(taskRaw),
 		resultRaw: string(resultRaw),
+		globals:   l.globals,
 	}
 	l.reg.Register(n)
 	return nil
@@ -163,6 +172,7 @@ type fileNode struct {
 	schemaRaw []byte
 	taskRaw   string
 	resultRaw string
+	globals   map[string]interface{}
 }
 
 func (f *fileNode) Meta() nodetype.Meta {
@@ -259,6 +269,11 @@ func (f *fileNode) RenderTask(params map[string]interface{}) (nodetype.TaskSpec,
 		if v == nil {
 			continue // nil 不当有效值：不覆盖默认值，也不参与渲染
 		}
+		merged[k] = v
+	}
+	// 全局变量（imageRegistry 等）最后注入：平台级配置优先于节点参数，
+	// 防止流水线图里误填同名参数把镜像仓库改坏
+	for k, v := range f.globals {
 		merged[k] = v
 	}
 	rendered := renderTemplate(f.taskRaw, merged)

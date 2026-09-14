@@ -3,15 +3,18 @@
     <template #header>
       <div class="card-header">
         <span>命名空间</span>
-        <el-button type="primary" size="small" @click="openCreate">
-          <el-icon><Plus /></el-icon>&nbsp;新建命名空间
-        </el-button>
+        <div class="header-right">
+          <el-button :icon="Refresh" circle @click="load" />
+          <el-button type="primary" size="small" @click="openCreate">
+            <el-icon><Plus /></el-icon>&nbsp;新建命名空间
+          </el-button>
+        </div>
       </div>
     </template>
 
     <el-input v-model="search" placeholder="搜索命名空间..." :prefix-icon="Search" clearable style="width: 260px; margin-bottom: 12px" @input="load" />
 
-    <el-table :data="items" v-loading="loading" stripe>
+    <el-table border :data="items" v-loading="loading" stripe>
       <el-table-column prop="name" label="名称" min-width="180" sortable>
         <template #default="{ row }">
           <el-link type="primary" @click="goPods(row.name)">{{ row.name }}</el-link>
@@ -42,7 +45,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
+import { Refresh, Search } from '@element-plus/icons-vue'
 import { k8sApi, type NamespaceItem } from '../api'
 import StatusTag from '../components/StatusTag.vue'
 import { useClusterStore } from '../store/cluster'

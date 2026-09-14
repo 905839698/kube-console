@@ -1,0 +1,181 @@
+
+> kube-console-web@0.1.0 dev
+> vite --port 5174 --strictPort
+
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m566[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5174[22m/[39m
+[2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[2m16:38:38[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue, /src/views/CIPipelines.vue?vue&type=style&index=0&scoped=7bb572a8&lang.css[22m
+[2m16:39:07[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue[22m
+[2m16:39:16[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue[22m
+[2m16:39:23[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue[22m
+[2m16:39:50[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/router/index.ts[22m
+[2m16:40:25[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/MainLayout.vue, /src/views/GenericResourceList.vue, /src/views/Overview.vue, /src/views/WorkloadList.vue, /src/components/WebTerminal.vue, /src/views/AlertList.vue, /src/views/ArgoCDApps.vue, /src/views/Monitor.vue, /src/views/WorkloadMatrix.vue, /src/views/WorkloadDetail.vue, /src/views/PodDetail.vue, /src/views/ClusterList.vue, /src/components/NamespaceSelect.vue, /src/components/GlobalSearch.vue, /src/components/ObjectEditor.vue, /src/components/forms/GatewayRouteForm.vue, /src/components/forms/ContainerCard.vue, /src/components/PodLogsDrawer.vue, /src/components/YamlDialog.vue, /src/views/AuditList.vue, /src/views/NotifyAdmin.vue, /src/views/CIPipelines.vue, /src/views/HelmRepoList.vue, /src/views/HelmList.vue, /src/views/RegistryList.vue, /src/components/FileBrowser.vue, /src/components/PortForwardDialog.vue, /src/components/VulnChip.vue, /src/views/alert/AlertGroups.vue[22m
+[2m16:42:50[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue, /src/views/CIPipelines.vue?vue&type=style&index=0&scoped=7bb572a8&lang.css[22m
+Re-optimizing dependencies because lockfile has changed
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m584[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5174[22m/[39m
+[2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[2m16:45:38[22m [36m[1m[vite][22m[39m [32m✨ new dependencies optimized: [33melement-plus/es/components/container/style/css, element-plus/es/components/main/style/css, element-plus/es/components/card/style/css, element-plus/es/components/alert/style/css, element-plus/es/components/table/style/css, element-plus/es/components/table-column/style/css, element-plus/es/components/dialog/style/css, element-plus/es/components/button/style/css, element-plus/es/components/form/style/css, element-plus/es/components/form-item/style/css, element-plus/es/components/input/style/css, element-plus/es/components/header/style/css, element-plus/es/components/dropdown/style/css, element-plus/es/components/dropdown-menu/style/css, element-plus/es/components/dropdown-item/style/css, element-plus/es/components/avatar/style/css, element-plus/es/components/select/style/css, element-plus/es/components/option/style/css, element-plus/es/components/tag/style/css, element-plus/es/components/breadcrumb/style/css, element-plus/es/components/breadcrumb-item/style/css, element-plus/es/components/aside/style/css, element-plus/es/components/scrollbar/style/css, element-plus/es/components/menu/style/css, element-plus/es/components/sub-menu/style/css, element-plus/es/components/menu-item/style/css, element-plus/es/components/icon/style/css, element-plus/es/components/loading/style/css, element-plus/es/components/row/style/css, element-plus/es/components/col/style/css[32m[39m
+[2m16:45:38[22m [36m[1m[vite][22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m16:45:53[22m [36m[1m[vite][22m[39m [32m✨ new dependencies optimized: [33melement-plus/es/components/switch/style/css, element-plus/es/components/empty/style/css, element-plus/es/components/link/style/css, element-plus/es/components/steps/style/css, element-plus/es/components/step/style/css[32m[39m
+[2m16:45:53[22m [36m[1m[vite][22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m16:46:01[22m [36m[1m[vite][22m[39m [32m✨ new dependencies optimized: [33melement-plus/es/components/radio-group/style/css, element-plus/es/components/radio-button/style/css, element-plus/es/components/drawer/style/css, element-plus/es/components/timeline/style/css, element-plus/es/components/timeline-item/style/css, element-plus/es/components/descriptions/style/css, element-plus/es/components/descriptions-item/style/css, element-plus/es/components/tabs/style/css, element-plus/es/components/tooltip/style/css, element-plus/es/components/tab-pane/style/css, element-plus/es/components/pagination/style/css[32m[39m
+[2m16:46:01[22m [36m[1m[vite][22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m16:46:51[22m [36m[1m[vite][22m[39m [32m✨ new dependencies optimized: [33melement-plus/es/components/divider/style/css, element-plus/es/components/input-number/style/css[32m[39m
+[2m16:46:51[22m [36m[1m[vite][22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m16:47:43[22m [31m[1m[vite][22m[39m [31mws proxy socket error:[39m
+Error: write ECONNABORTED
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Writable.write (node:internal/streams/writable:508:10)
+    at Socket.ondata (node:internal/streams/readable:1008:24)
+    at Socket.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+[2m16:50:29[22m [36m[1m[vite][22m[39m [32m✨ new dependencies optimized: [33melement-plus/es/components/upload/style/css[32m[39m
+[2m16:50:29[22m [36m[1m[vite][22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m16:51:00[22m [36m[1m[vite][22m[39m [32m✨ new dependencies optimized: [33melement-plus/es/components/collapse/style/css, element-plus/es/components/collapse-item/style/css[32m[39m
+[2m16:51:00[22m [36m[1m[vite][22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m16:51:02[22m [31m[1m[vite][22m[39m [31mws proxy socket error:[39m
+Error: write ECONNABORTED
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Writable.write (node:internal/streams/writable:508:10)
+    at Socket.ondata (node:internal/streams/readable:1008:24)
+    at Socket.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+[2m16:51:03[22m [31m[1m[vite][22m[39m [31mws proxy socket error:[39m
+Error: write ECONNABORTED
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Writable.write (node:internal/streams/writable:508:10)
+    at Socket.ondata (node:internal/streams/readable:1008:24)
+    at Socket.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+[2m16:51:29[22m [31m[1m[vite][22m[39m [31mws proxy socket error:[39m
+Error: write ECONNABORTED
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Writable.write (node:internal/streams/writable:508:10)
+    at Socket.ondata (node:internal/streams/readable:1008:24)
+    at Socket.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+[2m17:05:31[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue, /src/views/ci/designer/CiCanvas.vue, /src/views/ci/designer/NodePanel.vue, /src/views/ci/designer/PropertyPanel.vue, /src/views/ci/RunLog.vue, /src/views/ci/designer/Designer.vue[22m
+[2m17:06:18[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue[22m
+[2m17:08:48[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/ci/designer/Designer.vue, /src/views/ci/designer/Designer.vue?vue&type=style&index=0&scoped=aeb2d4f0&lang.css[22m
+[2m17:11:00[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/ci/designer/Designer.vue[22m
+[2m17:22:29[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue, /src/views/ci/designer/CiCanvas.vue, /src/views/ci/designer/NodePanel.vue, /src/views/ci/designer/PropertyPanel.vue, /src/views/ci/RunLog.vue, /src/views/ci/designer/Designer.vue[22m
+[2m17:24:34[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue[22m
+[2m17:24:56[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue[22m
+[2m17:25:23[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue[22m
+[2m17:25:59[22m [31m[1m[vite][22m[39m [31mws proxy error:[39m
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+[2m17:25:59[22m [31m[1m[vite][22m[39m [31mws proxy error:[39m
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+[2m17:25:59[22m [31m[1m[vite][22m[39m [31mws proxy error:[39m
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+[2m17:25:59[22m [31m[1m[vite][22m[39m [31mws proxy error:[39m
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+[2m17:40:37[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/CIPipelines.vue, /src/views/ci/designer/CiCanvas.vue, /src/views/ci/designer/NodePanel.vue, /src/views/ci/designer/PropertyPanel.vue, /src/views/ci/RunLog.vue, /src/views/ci/designer/Designer.vue[22m
+[2m20:21:04[22m [36m[1m[vite][22m[39m [32m✨ new dependencies optimized: [33melement-plus/es/components/page-header/style/css[32m[39m
+[2m20:21:04[22m [36m[1m[vite][22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m20:21:29[22m [31m[1m[vite][22m[39m [31mws proxy socket error:[39m
+Error: write ECONNABORTED
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Writable.write (node:internal/streams/writable:508:10)
+    at Socket.ondata (node:internal/streams/readable:1008:24)
+    at Socket.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+[2m20:21:30[22m [31m[1m[vite][22m[39m [31mws proxy socket error:[39m
+Error: write ECONNABORTED
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Writable.write (node:internal/streams/writable:508:10)
+    at Socket.ondata (node:internal/streams/readable:1008:24)
+    at Socket.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+[2m20:21:37[22m [31m[1m[vite][22m[39m [31mws proxy socket error:[39m
+Error: write ECONNABORTED
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    at Socket._write (node:net:978:8)
+    at writeOrBuffer (node:internal/streams/writable:570:12)
+    at _write (node:internal/streams/writable:499:10)
+    at Writable.write (node:internal/streams/writable:508:10)
+    at Socket.ondata (node:internal/streams/readable:1008:24)
+    at Socket.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+[2m20:50:45[22m [36m[1m[vite][22m[39m [32m✨ new dependencies optimized: [33melement-plus/es/components/checkbox/style/css[32m[39m
+[2m20:50:45[22m [36m[1m[vite][22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m09:09:30[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/MainLayout.vue, /src/views/Overview.vue, /src/views/ClusterList.vue, /src/views/NamespaceList.vue, /src/views/NodeList.vue, /src/components/WebTerminal.vue, /src/views/ResourceBrowser.vue, /src/views/NodeDetail.vue, /src/views/ArgoCDApps.vue, /src/components/NamespaceSelect.vue, /src/components/GlobalSearch.vue, /src/views/RegistryList.vue, /src/views/ci/designer/PropertyPanel.vue, /src/views/HelmList.vue, /src/views/HelmRepoList.vue[22m
+[2m09:10:08[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/HelmList.vue, /src/views/HelmList.vue?vue&type=style&index=0&scoped=29cac054&lang.css[22m
+[2m09:11:04[22m [31m[1m[vite][22m[39m [31mws proxy error:[39m
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+[2m09:11:04[22m [31m[1m[vite][22m[39m [31mws proxy error:[39m
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+[2m09:11:04[22m [31m[1m[vite][22m[39m [31mws proxy error:[39m
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m728[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5174[22m/[39m
+[2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[2m09:37:44[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/MainLayout.vue, /src/views/HelmRepoList.vue, /src/views/ArgoCDApps.vue, /src/views/Login.vue, /src/views/Overview.vue, /src/components/NamespaceSelect.vue, /src/components/GlobalSearch.vue, /src/views/HelmList.vue, /src/views/HelmDetail.vue[22m
+[2m09:37:44[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/HelmList.vue[22m
+[2m09:38:17[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/HelmList.vue[22m
+[2m09:49:13[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/MainLayout.vue, /src/views/HelmRepoList.vue, /src/views/ArgoCDApps.vue, /src/views/Login.vue, /src/views/Overview.vue, /src/components/NamespaceSelect.vue, /src/components/GlobalSearch.vue, /src/views/HelmList.vue, /src/views/HelmDetail.vue[22m
+[2m09:50:59[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/ArgoCDApps.vue[22m
+[2m09:51:03[22m [36m[1m[vite][22m[39m [32m✨ new dependencies optimized: [33melement-plus/es/components/checkbox-group/style/css[32m[39m
+[2m09:51:03[22m [36m[1m[vite][22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m10:05:40[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/MainLayout.vue, /src/views/HelmRepoList.vue, /src/views/ArgoCDApps.vue, /src/views/Login.vue, /src/views/Overview.vue, /src/components/NamespaceSelect.vue, /src/components/GlobalSearch.vue, /src/views/HelmList.vue, /src/views/HelmDetail.vue, /src/components/ObjectEditor.vue, /src/components/forms/GatewayRouteForm.vue, /src/components/forms/ContainerCard.vue[22m
+[2m10:07:05[22m [36m[1m[vite][22m[39m [32mpage reload [39m[2msrc/router/index.ts[22m
+[2m10:07:05[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/MainLayout.vue[22m
+[2m10:07:34[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/ArgoCDApps.vue[22m
+[2m10:21:51[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/MainLayout.vue, /src/views/HelmRepoList.vue, /src/views/ArgoCDApps.vue, /src/views/Login.vue, /src/views/Overview.vue, /src/components/NamespaceSelect.vue, /src/components/GlobalSearch.vue, /src/views/HelmList.vue, /src/views/HelmDetail.vue, /src/components/ObjectEditor.vue, /src/components/forms/GatewayRouteForm.vue, /src/components/forms/ContainerCard.vue, /src/views/ci/designer/PropertyPanel.vue[22m
+[2m10:26:22[22m [36m[1m[vite][22m[39m [32m✨ new dependencies optimized: [33melement-plus/es/components/radio/style/css[32m[39m
+[2m10:26:22[22m [36m[1m[vite][22m[39m [32m✨ optimized dependencies changed. reloading[39m
+[2m10:31:10[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/ArgoCDRepos.vue[22m
+[2m10:35:49[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/MainLayout.vue, /src/views/HelmRepoList.vue, /src/views/ArgoCDApps.vue, /src/views/Login.vue, /src/views/Overview.vue, /src/views/ArgoCDRepos.vue, /src/components/NamespaceSelect.vue, /src/components/GlobalSearch.vue, /src/views/HelmList.vue, /src/views/HelmDetail.vue, /src/components/ObjectEditor.vue, /src/components/forms/GatewayRouteForm.vue, /src/components/forms/ContainerCard.vue, /src/views/ci/designer/PropertyPanel.vue[22m
+[2m10:36:11[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/ArgoCDRepos.vue?vue&type=style&index=0&scoped=28e7e4a0&lang.css, /src/views/ArgoCDRepos.vue[22m
+[2m13:34:09[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/LogSearch.vue[22m
+[2m13:34:27[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/LogSearch.vue?vue&type=style&index=0&scoped=db9aa115&lang.css[22m
+[2m14:00:02[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/LogSearch.vue[22m
+[2m14:00:20[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/layouts/MainLayout.vue, /src/views/HelmRepoList.vue, /src/views/ArgoCDApps.vue, /src/views/Login.vue, /src/views/Overview.vue, /src/views/ArgoCDRepos.vue, /src/views/ClusterList.vue, /src/views/NamespaceList.vue, /src/views/NodeList.vue, /src/components/WebTerminal.vue, /src/views/LogSearch.vue, /src/components/NamespaceSelect.vue, /src/components/GlobalSearch.vue, /src/views/HelmList.vue, /src/views/HelmDetail.vue, /src/components/ObjectEditor.vue, /src/components/forms/GatewayRouteForm.vue, /src/components/forms/ContainerCard.vue, /src/views/ci/designer/PropertyPanel.vue, /src/views/RegistryList.vue, /src/views/EventList.vue[22m
+[2m14:00:20[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/views/LogSearch.vue[22m

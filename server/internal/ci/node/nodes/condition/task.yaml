@@ -4,7 +4,7 @@ name: condition
 description: "control node (no-op)"
 steps:
   - name: noop
-    image: harbor.cqyxpt.site:8443/library/alpine:3.19
+    image: {{imageRegistry}}/alpine:3.19
     script: |
       #!/bin/sh
       true

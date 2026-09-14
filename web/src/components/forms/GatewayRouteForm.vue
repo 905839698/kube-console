@@ -51,9 +51,26 @@
 
     <!-- HTTPRoute / GRPCRoute / TLSRoute / TCPRoutes / UDPRoutes -->
     <template v-else>
-      <el-form label-width="110px" size="small">
+      <el-form label-width="110px">
         <el-form-item label="名称"><el-input v-model="o.metadata.name" /></el-form-item>
-        <el-form-item label="命名空间"><el-input v-model="o.metadata.namespace" /></el-form-item>
+        <el-form-item label="命名空间">
+          <el-select v-model="o.metadata.namespace" style="width: 100%">
+            <el-option v-for="n in namespaces" :key="n" :label="n" :value="n" />
+          </el-select>
+        </el-form-item>
+        <!-- 父网关（parentRefs）：命名空间 → Gateway 列表 -->
+        <el-form-item label="父网关">
+          <!-- width:100% 必须显式：本行直接位于 el-form-item__content（flex 容器）内，
+               不定宽时按内容收缩，内部百分比宽度的 select 会被挤成几像素 -->
+          <div class="kv-row" style="width: 100%">
+            <el-select v-model="o.spec.parentRefs[0].namespace" style="width: 40%" @change="onParentNsChange">
+              <el-option v-for="n in namespaces" :key="n" :label="n" :value="n" />
+            </el-select>
+            <el-select v-model="o.spec.parentRefs[0].name" style="width: 55%" placeholder="选择 Gateway" filterable>
+              <el-option v-for="g in gateways" :key="g" :label="g" :value="g" />
+            </el-select>
+          </div>
+        </el-form-item>
         <!-- TCPRoutes / UDPRoutes 无 hostnames，仅 backendRefs -->
         <template v-if="kind === 'tcproutes' || kind === 'udproutes'">
           <el-form-item label="协议">
@@ -74,13 +91,17 @@
             </div>
             <!-- TCPRoutes / UDPRoutes：仅后端 -->
             <template v-if="kind === 'tcproutes' || kind === 'udproutes'">
-              <div class="rule-label">后端服务</div>
+              <div class="rule-label">后端服务（命名空间 → 服务 → 端口）</div>
               <div v-for="(b, bi) in r.backendRefs || []" :key="bi" class="kv-row">
-                <el-input v-model="b.name" placeholder="Service 名称" size="small" style="width: 24%" />
-                <el-select v-model="b.namespace" size="small" style="width: 20%">
+                <el-select v-model="b.namespace" size="small" style="width: 18%" placeholder="命名空间" @change="onBackendNsChange(b)">
                   <el-option v-for="n in namespaces" :key="n" :label="n" :value="n" />
                 </el-select>
-                <el-input-number v-model="b.port" :min="1" :max="65535" size="small" style="width: 16%" placeholder="端口" />
+                <el-select v-model="b.name" size="small" style="width: 26%" placeholder="选择 Service" filterable allow-create @change="onBackendSvcChange(b)">
+                  <el-option v-for="s in servicesByNs[b.namespace] || []" :key="s" :label="s" :value="s" />
+                </el-select>
+                <el-select :model-value="b.port" size="small" style="width: 24%" placeholder="端口" filterable allow-create @update:model-value="(v) => setBackendPort(b, v)">
+                  <el-option v-for="p in portsBySvc[b.namespace + '/' + b.name] || []" :key="p.port" :label="portLabel(p)" :value="p.port" />
+                </el-select>
                 <el-input-number v-model="b.weight" :min="0" :max="1000" size="small" style="width: 14%" placeholder="权重" />
                 <el-button size="small" type="danger" text @click="r.backendRefs.splice(bi, 1)"><el-icon><Delete /></el-icon></el-button>
               </div>
@@ -115,13 +136,17 @@
             </template>
             <!-- 后端（HTTP/GRPC/TLS 路由；TCP/UDP 后端已在上方单独渲染） -->
             <template v-if="kind === 'httproutes' || kind === 'grpcroutes' || kind === 'tlsroutes'">
-              <div class="rule-label" style="margin-top: 8px">后端服务</div>
+              <div class="rule-label" style="margin-top: 8px">后端服务（命名空间 → 服务 → 端口）</div>
               <div v-for="(b, bi) in r.backendRefs || []" :key="bi" class="kv-row">
-                <el-input v-model="b.name" placeholder="Service 名称" size="small" style="width: 24%" />
-                <el-select v-model="b.namespace" size="small" style="width: 20%">
+                <el-select v-model="b.namespace" size="small" style="width: 18%" placeholder="命名空间" @change="onBackendNsChange(b)">
                   <el-option v-for="n in namespaces" :key="n" :label="n" :value="n" />
                 </el-select>
-                <el-input-number v-model="b.port" :min="1" :max="65535" size="small" style="width: 16%" placeholder="端口" />
+                <el-select v-model="b.name" size="small" style="width: 26%" placeholder="选择 Service" filterable allow-create @change="onBackendSvcChange(b)">
+                  <el-option v-for="s in servicesByNs[b.namespace] || []" :key="s" :label="s" :value="s" />
+                </el-select>
+                <el-select :model-value="b.port" size="small" style="width: 24%" placeholder="端口" filterable allow-create @update:model-value="(v) => setBackendPort(b, v)">
+                  <el-option v-for="p in portsBySvc[b.namespace + '/' + b.name] || []" :key="p.port" :label="portLabel(p)" :value="p.port" />
+                </el-select>
                 <el-input-number v-model="b.weight" :min="0" :max="1000" size="small" style="width: 14%" placeholder="权重" />
                 <el-button size="small" type="danger" text @click="r.backendRefs.splice(bi, 1)"><el-icon><Delete /></el-icon></el-button>
               </div>
@@ -138,6 +163,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
+import { load as yamlLoad } from 'js-yaml'
 import { k8sApi } from '../../api'
 
 const props = defineProps<{ modelValue: any; kind: string }>()
@@ -148,6 +174,89 @@ const o = computed({
 })
 
 const namespaces = ref<string[]>([])
+const gateways = ref<string[]>([])
+
+async function loadGateways(ns: string) {
+  if (!ns) { gateways.value = []; return }
+  try {
+    const list = await k8sApi.resources('gateways', ns)
+    gateways.value = list.map((g) => g.name)
+  } catch {
+    gateways.value = []
+  }
+}
+
+function onParentNsChange(ns: string) {
+  o.value.spec.parentRefs[0].name = ''
+  loadGateways(ns)
+}
+
+// ---- 后端服务级联选择：命名空间 → Service → 端口（名称） ----
+// 服务列表按命名空间缓存；端口取自所选 Service 的 spec.ports（拉 YAML 解析），按 ns/name 缓存
+const servicesByNs = ref<Record<string, string[]>>({})
+const portsBySvc = ref<Record<string, { name?: string; port: number }[]>>({})
+const svcInflight: Record<string, boolean> = {}
+const portInflight: Record<string, boolean> = {}
+
+async function loadServices(ns: string) {
+  if (!ns || servicesByNs.value[ns] || svcInflight[ns]) return
+  svcInflight[ns] = true
+  try {
+    const list = await k8sApi.resources('services', ns)
+    servicesByNs.value = { ...servicesByNs.value, [ns]: list.map((x) => x.name) }
+  } catch {
+    servicesByNs.value = { ...servicesByNs.value, [ns]: [] }
+  } finally {
+    delete svcInflight[ns]
+  }
+}
+
+async function loadPorts(ns: string, name: string) {
+  const key = `${ns}/${name}`
+  if (!ns || !name || portsBySvc.value[key] || portInflight[key]) return
+  portInflight[key] = true
+  try {
+    const r = await k8sApi.resourceYaml('services', ns, name)
+    const obj: any = yamlLoad(r.yaml)
+    portsBySvc.value = { ...portsBySvc.value, [key]: obj?.spec?.ports || [] }
+  } catch {
+    portsBySvc.value = { ...portsBySvc.value, [key]: [] }
+  } finally {
+    delete portInflight[key]
+  }
+}
+
+// 端口选项标签：命名端口显示「名称 (端口)」，未命名显示端口号
+function portLabel(p: { name?: string; port: number }): string {
+  return p.name ? `${p.name} (${p.port})` : String(p.port)
+}
+
+// 切换命名空间：服务/端口引用失效，清空后加载新列表
+function onBackendNsChange(b: any) {
+  b.name = ''
+  b.port = undefined
+  loadServices(b.namespace)
+}
+
+// 切换服务：加载端口列表；当前端口不在列表中时自动选第一个
+async function onBackendSvcChange(b: any) {
+  await loadPorts(b.namespace, b.name)
+  const ports = portsBySvc.value[`${b.namespace}/${b.name}`]
+  if (ports?.length && !ports.some((p) => p.port === b.port)) {
+    b.port = ports[0].port
+  }
+}
+
+// 端口值写入（allow-create 手输的是字符串，统一转数字）
+function setBackendPort(b: any, v: any) {
+  if (v === '' || v === null || v === undefined) {
+    b.port = undefined
+    return
+  }
+  const n = Number(v)
+  b.port = Number.isFinite(n) ? n : v
+}
+
 const hostnamesText = computed<string>({
   get: () => (o.value.spec?.hostnames || []).join(', '),
   set: (v) => {
@@ -187,6 +296,29 @@ onMounted(async () => {
   } catch {
     namespaces.value = ['default']
   }
+  // 非 Gateway 表单（路由类型）：确保 parentRefs 完整并加载 Gateway 列表
+  if (props.kind !== 'gateways') {
+    o.value.spec = o.value.spec || {}
+    o.value.spec.parentRefs = o.value.spec.parentRefs || []
+    if (o.value.spec.parentRefs.length === 0) {
+      o.value.spec.parentRefs.push({ name: '', namespace: o.value.metadata?.namespace || 'default' })
+    }
+    const pr = o.value.spec.parentRefs[0]
+    if (!pr.namespace) {
+      pr.namespace = o.value.metadata?.namespace || 'default'
+    }
+    loadGateways(pr.namespace)
+    // 后端引用：补全命名空间（空 = 同命名空间，与 parentRefs 同策略显式化）并预载服务列表与端口，
+    // 编辑既有路由时三个下拉直接显示可选值
+    const routeNs = o.value.metadata?.namespace || 'default'
+    for (const rule of o.value.spec.rules || []) {
+      for (const b of rule.backendRefs || []) {
+        if (!b.namespace) b.namespace = routeNs
+        loadServices(b.namespace)
+        if (b.name) loadPorts(b.namespace, b.name)
+      }
+    }
+  }
 })
 
 function addListener() {
@@ -219,7 +351,9 @@ function addGrpcMatch(rule: any) {
 
 function addBackend(rule: any) {
   rule.backendRefs = rule.backendRefs || []
-  rule.backendRefs.push({ name: '', namespace: 'default', port: 80, weight: 1 })
+  const ns = o.value.metadata?.namespace || 'default'
+  rule.backendRefs.push({ name: '', namespace: ns, port: undefined, weight: 1 })
+  loadServices(ns)
 }
 </script>
 

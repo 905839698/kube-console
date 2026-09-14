@@ -22,7 +22,7 @@ results:
     description: "verified / failed"
 steps:
   - name: verify
-    image: harbor.cqyxpt.site:8443/library/cosign:2.2.3
+    image: {{imageRegistry}}/cosign:2.2.3
     env:
       # 非交互环境，避免 cosign 回退到 keyless（Fulcio/Rekor）
       - name: COSIGN_EXPERIMENTAL

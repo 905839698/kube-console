@@ -1114,6 +1114,55 @@ func (s *K8sService) ListGeneric(ctx context.Context, c *kube.Client, kind, name
 	return items, nil
 }
 
+// ExportGeneric 导出筛选后的资源为多文档 YAML（kind 模式，与列表页同参：namespace 逗号分隔多选、search 名称过滤）。
+// 每个对象做 CleanForExport 深度清洗（去 uid/resourceVersion/managedFields/status/last-applied 注解），
+// 导出文件可直接再导入。
+func (s *K8sService) ExportGeneric(ctx context.Context, c *kube.Client, kind, namespace, search string) (string, error) {
+	gvr, ok, err := kube.ResolveGVR(ctx, c, kind)
+	if !ok {
+		if kind == "routes" {
+			gvr = configmapGVR()
+		} else if err != nil {
+			return "", err
+		} else {
+			return "", fmt.Errorf("不支持的资源类型: %s", kind)
+		}
+	}
+	var b strings.Builder
+	for _, ns := range splitNamespaces(namespace) {
+		if kube.IsClusterScoped(kind) {
+			ns = ""
+		}
+		list, err := c.Dynamic.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return "", err
+		}
+		for i := range list.Items {
+			u := &list.Items[i]
+			if kind == "routes" && !hasRoutesAnnotation(u) {
+				continue
+			}
+			if !searchMatch(u.GetName(), search) {
+				continue
+			}
+			obj := u.DeepCopy()
+			kube.CleanForExport(obj)
+			data, err := yaml.Marshal(obj.Object)
+			if err != nil {
+				return "", err
+			}
+			if b.Len() > 0 {
+				b.WriteString("---\n")
+			}
+			b.Write(data)
+		}
+		if kube.IsClusterScoped(kind) {
+			break
+		}
+	}
+	return b.String(), nil
+}
+
 // routesGVR 应用层路由使用的底层 GVR（ConfigMap）
 func configmapGVR() schema.GroupVersionResource {
 	return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
@@ -1312,7 +1361,103 @@ func (s *K8sService) DeleteGeneric(ctx context.Context, c *kube.Client, kind, na
 
 // ApplyYAML 应用 YAML（create-or-update），返回是否新建
 func (s *K8sService) ApplyYAML(ctx context.Context, c *kube.Client, yamlStr string) (bool, error) {
+	// Gateway API 资源：版本随渠道变化（v1/v1beta1/v1alphaN），需通过 discovery
+	// 解析集群实际提供的版本，避免硬编码 apiVersion 导致 404。
+	var m map[string]interface{}
+	if err := yaml.Unmarshal([]byte(yamlStr), &m); err == nil {
+		yamlKind, _ := m["kind"].(string)
+		if resource, isGW := kube.IsGatewayKindFromYAML(yamlKind); isGW {
+			gvr, ok, err := kube.ResolveGVR(ctx, c, resource)
+			if !ok {
+				return false, err
+			}
+			expected := gvr.Group + "/" + gvr.Version
+			if apiVersion, _ := m["apiVersion"].(string); apiVersion != expected {
+				m["apiVersion"] = expected
+				data, err := yaml.Marshal(m)
+				if err != nil {
+					return false, err
+				}
+				yamlStr = string(data)
+			}
+		}
+	}
 	return kube.ApplyYAML(ctx, c.Dynamic, yamlStr)
+}
+
+// routeKinds 属于 Gateway API 的路由资源（支持 parentRefs 跨命名空间引用）
+var routeKinds = map[string]bool{
+	"HTTPRoute": true, "GRPCRoute": true, "TLSRoute": true, "TCPRoute": true, "UDPRoute": true,
+}
+
+// SyncReferenceGrant 当 Route 的 parentRefs 引用了其他命名空间的 Gateway 时，
+// 自动在 Gateway 所在命名空间创建 ReferenceGrant 授权（静默失败，不影响主流程）。
+func (s *K8sService) SyncReferenceGrant(ctx context.Context, c *kube.Client, yamlStr string) error {
+	var m map[string]interface{}
+	if err := yaml.Unmarshal([]byte(yamlStr), &m); err != nil {
+		return nil
+	}
+	obj := &unstructured.Unstructured{Object: m}
+	kind := obj.GetKind()
+	if !routeKinds[kind] {
+		return nil
+	}
+	routeNS := obj.GetNamespace()
+	if routeNS == "" {
+		routeNS = "default"
+	}
+	// 取 parentRefs[0].namespace 和 name
+	parentRefs, found, _ := unstructured.NestedSlice(obj.Object, "spec", "parentRefs")
+	if !found || len(parentRefs) == 0 {
+		return nil
+	}
+	ref, ok := parentRefs[0].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	gwNS, _ := ref["namespace"].(string)
+	gwName, _ := ref["name"].(string)
+	if gwName == "" || gwNS == "" || gwNS == routeNS {
+		return nil // 同命名空间或无引用，不需要授权
+	}
+	// 构建 ReferenceGrant（放在 Gateway 所在命名空间）
+	grantName := fmt.Sprintf("allow-%s-%s", strings.ToLower(kind), routeNS)
+	grant := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "gateway.networking.k8s.io/v1",
+		"kind":       "ReferenceGrant",
+		"metadata": map[string]interface{}{
+			"name":      grantName,
+			"namespace": gwNS,
+			"labels": map[string]interface{}{
+				"kube-console.io/managed-by": "auto",
+			},
+		},
+		"spec": map[string]interface{}{
+			"from": []interface{}{map[string]interface{}{
+				"group":     "gateway.networking.k8s.io",
+				"kind":      kind,
+				"namespace": routeNS,
+			}},
+			"to": []interface{}{map[string]interface{}{
+				"group": "gateway.networking.k8s.io",
+				"kind":  "Gateway",
+				"name":  gwName,
+			}},
+		},
+	}}
+	// create-or-update
+	gvr := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "referencegrants"}
+	existing, err := c.Dynamic.Resource(gvr).Namespace(gwNS).Get(ctx, grantName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			_, err = c.Dynamic.Resource(gvr).Namespace(gwNS).Create(ctx, grant, metav1.CreateOptions{})
+			return err
+		}
+		return err
+	}
+	grant.SetResourceVersion(existing.GetResourceVersion())
+	_, err = c.Dynamic.Resource(gvr).Namespace(gwNS).Update(ctx, grant, metav1.UpdateOptions{})
+	return err
 }
 
 // SyncServiceMonitor 根据 Service 的监控 annotation 自动创建/更新/删除 ServiceMonitor

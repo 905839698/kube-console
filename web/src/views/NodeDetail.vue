@@ -27,7 +27,7 @@
       <el-tabs v-model="tab" style="margin-top: 12px">
         <!-- 容量 -->
         <el-tab-pane label="容量" name="capacity">
-          <el-table :data="capacityRows" size="small" stripe>
+          <el-table border :data="capacityRows" size="small" stripe>
             <el-table-column prop="resource" label="资源" width="120" />
             <el-table-column prop="capacity" label="容量" width="160" />
             <el-table-column prop="allocatable" label="可分配" />
@@ -36,7 +36,7 @@
 
         <!-- 条件 -->
         <el-tab-pane label="Conditions" name="conditions">
-          <el-table :data="detail?.conditions || []" size="small" stripe>
+          <el-table border :data="detail?.conditions || []" size="small" stripe>
             <el-table-column prop="type" label="类型" width="180" />
             <el-table-column label="状态" width="100">
               <template #default="{ row }"><StatusTag :status="row.status === 'True' ? 'Ready' : 'NotReady'" :text="row.status" /></template>
@@ -81,7 +81,7 @@
 
         <!-- Pod -->
         <el-tab-pane :label="`Pod (${detail?.pods?.length || 0})`" name="pods">
-          <el-table :data="detail?.pods || []" size="small" stripe>
+          <el-table border :data="detail?.pods || []" size="small" stripe>
             <el-table-column label="名称" min-width="220">
               <template #default="{ row }">
                 <el-link type="primary" @click="goPod(row)">{{ row.name }}</el-link>
@@ -107,6 +107,11 @@
             <RangeSwitch v-model="range" @change="loadMonitor" />
           </div>
           <MetricPanel :cards="monitorCards" :charts="monitorCharts" :loading="monitorLoading" />
+          <!-- Kubelet 运行时（无 node 标签的采集环境自动隐藏） -->
+          <template v-if="monitor?.kubelet">
+            <div class="kubelet-title">Kubelet 运行时</div>
+            <MetricPanel :cards="kubeletCards" :charts="[]" :loading="monitorLoading" />
+          </template>
         </el-tab-pane>
       </el-tabs>
     </el-card>
@@ -145,6 +150,13 @@ const monitorCards = computed<MetricCardDef[]>(() => [
   { label: '磁盘使用率', value: monitor.value?.diskUsagePct ?? null, unit: '%', color: '#e6a23c' },
   { label: '网络接收', value: monitor.value?.netRxMBs ?? null, unit: 'MB/s', color: '#f56c6c' },
   { label: '网络发送', value: monitor.value?.netTxMBs ?? null, unit: 'MB/s', color: '#909399' },
+  { label: '负载 (1m)', value: monitor.value?.load1 ?? null, unit: '', decimals: 2, color: '#9254de', sub: `5m ${fmtNum(monitor.value?.load5)} / 15m ${fmtNum(monitor.value?.load15)}` },
+  { label: 'Swap 使用率', value: monitor.value?.swapUsagePct ?? null, unit: '%', decimals: 1, color: '#c059cf' },
+  { label: '磁盘读 IOPS', value: monitor.value?.diskReadIops ?? null, unit: '次/s', decimals: 1, color: '#409eff', sub: `写 ${fmtNum(monitor.value?.diskWriteIops)} 次/s` },
+  { label: '磁盘读吞吐', value: monitor.value?.diskReadMBs ?? null, unit: 'MB/s', decimals: 2, color: '#67c23a', sub: `写 ${fmtNum(monitor.value?.diskWriteMBs)} MB/s` },
+  { label: '磁盘 IO 利用率', value: monitor.value?.ioUtilPct ?? null, unit: '%', decimals: 1, color: '#e6a23c' },
+  { label: '网络丢包', value: monitor.value?.netDropRate ?? null, unit: '次/s', decimals: 2, color: '#f56c6c' },
+  { label: 'TCP 连接', value: monitor.value?.tcpEstablished ?? null, unit: '条', decimals: 0, color: '#00aa55' },
 ])
 
 const monitorCharts = computed<MetricChartDef[]>(() => [
@@ -159,7 +171,45 @@ const monitorCharts = computed<MetricChartDef[]>(() => [
     ],
     yAxisName: 'MB/s',
   },
+  {
+    title: '系统负载 (load1)',
+    series: [{ name: 'load1', data: monitor.value?.load1Trend || [], color: '#9254de', unit: '' }],
+    yAxisName: '',
+  },
+  {
+    title: '磁盘 IOPS',
+    series: [
+      { name: '读', data: monitor.value?.diskIopsTrend || [], color: '#409eff', unit: '次/s' },
+    ],
+    yAxisName: '次/s',
+  },
+  {
+    title: '磁盘吞吐',
+    series: [{ name: '读写合计', data: monitor.value?.diskThroughputTrend || [], color: '#67c23a', unit: 'MB/s' }],
+    yAxisName: 'MB/s',
+  },
+  {
+    title: '磁盘 IO 利用率',
+    series: [{ name: 'IO 利用率', data: monitor.value?.ioUtilTrend || [], color: '#e6a23c', unit: '%' }],
+    yAxisName: '%',
+  },
+  {
+    title: '网络丢包',
+    series: [{ name: '丢包(收+发)', data: monitor.value?.netDropTrend || [], color: '#f56c6c', unit: '次/s' }],
+    yAxisName: '次/s',
+  },
 ])
+
+const kubeletCards = computed<MetricCardDef[]>(() => [
+  { label: '运行中 Pod', value: monitor.value?.kubelet?.runningPods ?? null, unit: '个', decimals: 0, color: '#409eff' },
+  { label: '运行中容器', value: monitor.value?.kubelet?.runningContainers ?? null, unit: '个', decimals: 0, color: '#67c23a' },
+  { label: 'PLEG Relist', value: monitor.value?.kubelet?.relistRate ?? null, unit: '次/s', decimals: 2, color: '#e6a23c' },
+  { label: '运行时操作错误', value: monitor.value?.kubelet?.runtimeErrorsRate ?? null, unit: '次/s', decimals: 2, color: '#f56c6c' },
+])
+
+function fmtNum(v?: number | null): string {
+  return v == null ? '-' : v.toFixed(2)
+}
 
 const capacityRows = computed(() => {
   const d = detail.value
@@ -269,6 +319,7 @@ async function evictPod(pod: PodItem) {
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .monitor-toolbar { margin-bottom: 12px; display: flex; justify-content: flex-end; }
+.kubelet-title { font-weight: 600; font-size: 14px; margin: 16px 0 8px; }
 .taint-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 .taint-actions { display: flex; gap: 8px; margin-top: 8px; }
 .taint-tip { color: #909399; font-size: 12px; margin-top: 10px; }

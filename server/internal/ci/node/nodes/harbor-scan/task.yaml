@@ -27,7 +27,7 @@ results:
     description: "Harbor 扫描状态（Success/Error）"
 steps:
   - name: scan
-    image: harbor.cqyxpt.site:8443/library/git:2.43.4
+    image: {{imageRegistry}}/git:2.43.4
     script: |
       #!/bin/sh
       # 不 set -e：网络调用需自行判断状态码；按 failSeverity 决定最终退出码

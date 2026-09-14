@@ -1,23 +1,28 @@
-/* Kube Console 主题：云厂商控制台浅色风 + 青绿色主色 */
+/* Kube Console 主题：KubeSphere 4.2 风格 —— 品牌绿主色 + 深色侧边栏 + 浅灰内容区 */
 :root {
-  /* 青绿色主色系 */
-  --el-color-primary: #00b8a9;
-  --el-color-primary-light-3: #33c9bd;
-  --el-color-primary-light-5: #66d7ce;
-  --el-color-primary-light-7: #99e4de;
-  --el-color-primary-light-8: #b3ebe7;
-  --el-color-primary-light-9: #e6f7f5;
-  --el-color-primary-dark-2: #009387;
+  /* KubeSphere 品牌绿主色系 */
+  --el-color-primary: #00aa55;
+  --el-color-primary-light-3: #4dc388;
+  --el-color-primary-light-5: #7fd5aa;
+  --el-color-primary-light-7: #b3e8cc;
+  --el-color-primary-light-8: #ccf1dd;
+  --el-color-primary-light-9: #e6f9ee;
+  --el-color-primary-dark-2: #008844;
 
   /* 全局浅色背景 */
-  --kc-bg: #f5f7fa;
-  --kc-sidebar-bg: #ffffff;
-  --kc-sidebar-text: #4b5563;
-  --kc-sidebar-text-active: #00b8a9;
+  --kc-bg: #f5f6f8;
+  /* 深色侧边栏（KubeSphere 风格，两种主题下均为深色） */
+  --kc-sidebar-bg: #1b2c33;
+  --kc-sidebar-text: #9fb3be;
+  --kc-sidebar-text-active: #ffffff;
+  --kc-sidebar-border: rgba(255, 255, 255, 0.08);
+  --kc-sidebar-hover: rgba(255, 255, 255, 0.06);
+  --kc-sidebar-active-bg: rgba(47, 191, 113, 0.16);
+  --kc-sidebar-accent: #2fbf71;
   --kc-header-bg: #ffffff;
   --kc-border: #e8eaef;
   --kc-card-radius: 8px;
-  --kc-logo-gradient: linear-gradient(135deg, #00b8a9 0%, #00d2c0 100%);
+  --kc-logo-gradient: linear-gradient(135deg, #2fbf71 0%, #00aa55 100%);
 }
 
 html, body, #app {
@@ -79,31 +84,26 @@ body {
 
 /* ------------------- 暗色模式（html.dark） ------------------- */
 html.dark {
-  --el-color-primary: #00b8a9;
-  --el-color-primary-light-3: #1fa899;
-  --el-color-primary-light-5: #157f74;
-  --el-color-primary-light-7: #11574f;
-  --el-color-primary-light-8: #0e463f;
-  --el-color-primary-light-9: #0a3530;
-  --el-color-primary-dark-2: #33c9bd;
+  --el-color-primary: #2fbf71;
+  --el-color-primary-light-3: #27a55f;
+  --el-color-primary-light-5: #1d8049;
+  --el-color-primary-light-7: #145c34;
+  --el-color-primary-light-8: #0f4727;
+  --el-color-primary-light-9: #0a331c;
+  --el-color-primary-dark-2: #4fcc85;
 
   --kc-bg: #0f1419;
-  --kc-sidebar-bg: #161b22;
-  --kc-sidebar-text: #9ca3af;
-  --kc-sidebar-text-active: #2dd4bf;
+  --kc-sidebar-bg: #1b2c33;
+  --kc-sidebar-text: #9fb3be;
+  --kc-sidebar-text-active: #ffffff;
   --kc-header-bg: #161b22;
   --kc-border: #2d333b;
-  --kc-logo-gradient: linear-gradient(135deg, #00b8a9 0%, #0d9488 100%);
+  --kc-logo-gradient: linear-gradient(135deg, #2fbf71 0%, #00aa55 100%);
 }
 
 html.dark body {
   background: var(--kc-bg);
   color: #c9d1d9;
-}
-
-html.dark .menu :deep(.el-menu-item:hover),
-html.dark .menu :deep(.el-sub-menu__title:hover) {
-  background: #1c2128;
 }
 
 html.dark .el-card {

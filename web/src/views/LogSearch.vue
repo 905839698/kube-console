@@ -3,7 +3,10 @@
     <template #header>
       <div class="card-header">
         <span>日志检索（Elasticsearch 历史日志）</span>
-        <el-button v-if="userStore.isAdmin" size="small" @click="cfgVisible = true">日志源配置</el-button>
+        <div class="header-right">
+          <el-button :icon="Refresh" circle size="small" @click="doSearch(1)" />
+          <el-button v-if="userStore.isAdmin" size="small" @click="cfgVisible = true">日志源配置</el-button>
+        </div>
       </div>
     </template>
 
@@ -78,48 +81,22 @@
     </div>
     <el-empty v-else description="输入条件后检索（依赖 fluentd→ES 日志链路）" />
 
-    <!-- 日志源配置（管理员） -->
-    <el-dialog v-model="cfgVisible" title="日志源配置（Elasticsearch）" width="560px">
-      <el-form label-width="110px" size="small">
-        <el-form-item label="集群">
-          <el-select v-model="cfg.clusterName" style="width: 100%">
-            <el-option v-for="cl in clusters" :key="cl" :label="cl" :value="cl" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="ES 命名空间"><el-input v-model="cfg.namespace" placeholder="如 prd-public-service" /></el-form-item>
-        <el-form-item label="ES 服务名"><el-input v-model="cfg.service" placeholder="如 elasticsearch-es-http" /></el-form-item>
-        <el-form-item label="ES 端口"><el-input-number v-model="cfg.port" :min="1" :max="65535" /></el-form-item>
-        <el-form-item label="直连地址">
-          <el-input v-model="cfg.directURL" placeholder="如 http://节点IP:NodePort（可选）" />
-          <div class="form-tip">留空则经 apiserver 服务代理访问。ES 开启安全认证（填了用户名）时必须走直连——代理会剥离认证头导致 401。做法：把 ES 服务改为 NodePort，填 http://任一节点IP:nodePort。</div>
-        </el-form-item>
-        <el-form-item label="索引前缀">
-          <el-input v-model="cfg.indexPrefix" placeholder="如 logstash- 或 k8s-{namespace}-（空=logstash-*）" />
-          <div class="form-tip">索引按命名空间拆分时用 {namespace} 占位符，如 k8s-{namespace}-：选命名空间检索时自动展开为 k8s-dev*，不限命名空间时展开为 k8s-*。</div>
-        </el-form-item>
-        <el-form-item label="用户名"><el-input v-model="cfg.username" placeholder="ES basic auth（可选）" /></el-form-item>
-        <el-form-item label="密码"><el-input v-model="cfg.password" type="password" show-password placeholder="留空保持不变" /></el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="testSource" :loading="testing">测试连通</el-button>
-        <el-button @click="cfgVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveSource">保存</el-button>
-      </template>
-    </el-dialog>
+    <!-- 日志源配置（管理员，与事件归档共用） -->
+    <LogSourceDialog v-model="cfgVisible" title="日志源配置（Elasticsearch）" />
   </el-card>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { logsApi, clusterApi, k8sApi, type LogSearchResult, type LogSourceItem } from '../api'
+import { Refresh } from '@element-plus/icons-vue'
+import { logsApi, k8sApi, type LogSearchResult } from '../api'
 import { useClusterStore } from '../store/cluster'
 import { useUserStore } from '../store/user'
+import LogSourceDialog from '../components/LogSourceDialog.vue'
 
 const userStore = useUserStore()
 const clusterStore = useClusterStore()
 
-const clusters = ref<string[]>([])
 const nsOptions = ref<string[]>([])
 const loading = ref(false)
 const page = ref(1)
@@ -129,9 +106,6 @@ const q = reactive<{ namespace: string; pod: string; container: string; keyword:
 })
 
 const cfgVisible = ref(false)
-const saving = ref(false)
-const testing = ref(false)
-const cfg = reactive<Partial<LogSourceItem> & { password?: string }>({ clusterName: '', namespace: '', service: '', port: 9200, directURL: '', indexPrefix: '', username: '', password: '' })
 
 function fmtRange(m: number) {
   if (m < 60) return `${m} 分钟`
@@ -174,46 +148,10 @@ function downloadCsv() {
   a.click()
 }
 
-async function loadConfig() {
-  try {
-    const list = await logsApi.sources()
-    const cur = list.find((s) => s.clusterName === clusterStore.current)
-    if (cur) Object.assign(cfg, cur, { password: '' })
-  } catch { /* ignore */ }
-}
-
-async function saveSource() {
-  saving.value = true
-  try {
-    await logsApi.saveSource({ ...cfg, clusterName: cfg.clusterName || clusterStore.current || '' })
-    ElMessage.success('已保存')
-    cfgVisible.value = false
-  } finally {
-    saving.value = false
-  }
-}
-
-async function testSource() {
-  testing.value = true
-  try {
-    await logsApi.testSource({ ...cfg, clusterName: cfg.clusterName || clusterStore.current || '' })
-    ElMessage.success('连通成功')
-  } catch {
-    /* 拦截器已提示 */
-  } finally {
-    testing.value = false
-  }
-}
-
 onMounted(async () => {
-  try {
-    const list = await clusterApi.list()
-    clusters.value = list.map((c) => c.name)
-  } catch { /* ignore */ }
   try {
     nsOptions.value = (await k8sApi.namespaces()).map((n: any) => n.name)
   } catch { /* ignore */ }
-  loadConfig()
 })
 </script>
 

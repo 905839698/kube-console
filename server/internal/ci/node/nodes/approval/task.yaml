@@ -12,7 +12,7 @@ results:
     description: "approved / rejected / timeout"
 steps:
   - name: wait-approval
-    image: harbor.cqyxpt.site:8443/library/alpine:3.19
+    image: {{imageRegistry}}/alpine:3.19
     env:
       - name: ANNOT_KEY
         value: "ci-platform.io/approval"

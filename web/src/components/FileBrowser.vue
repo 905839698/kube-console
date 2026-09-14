@@ -22,7 +22,7 @@
       </div>
     </div>
 
-    <el-table :data="entries" v-loading="loading" size="small" @row-dblclick="(row: FileEntryItem) => row.type === 'dir' && cd(joinPath(currentPath, row.name))">
+    <el-table border :data="entries" v-loading="loading" size="small" @row-dblclick="(row: FileEntryItem) => row.type === 'dir' && cd(joinPath(currentPath, row.name))">
       <el-table-column label="名称" min-width="280">
         <template #default="{ row }">
           <el-icon v-if="row.type === 'dir'" style="vertical-align: -2px"><FolderOpened /></el-icon>

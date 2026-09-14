@@ -1,84 +1,17 @@
-// 端口转发与容器文件浏览器接口
+// 容器文件浏览器接口
 package handler
 
 import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
-	"kube-console/server/internal/middleware"
 	"kube-console/server/internal/service"
 	"kube-console/server/pkg/response"
 )
-
-// PortForwardHandler 端口转发
-type PortForwardHandler struct {
-	clusters *service.ClusterManager
-	pf       *service.PortForwardService
-}
-
-func NewPortForwardHandler(clusters *service.ClusterManager, pf *service.PortForwardService) *PortForwardHandler {
-	return &PortForwardHandler{clusters: clusters, pf: pf}
-}
-
-// List GET /portforwards
-func (h *PortForwardHandler) List(c *gin.Context) {
-	items := make([]gin.H, 0)
-	for _, t := range h.pf.List() {
-		items = append(items, gin.H{
-			"id": t.ID, "cluster": t.Cluster, "namespace": t.Namespace, "pod": t.Pod,
-			"localPort": t.LocalPort, "remotePort": t.RemotePort, "createdAt": t.CreatedAt,
-		})
-	}
-	response.OK(c, items)
-}
-
-// Start POST /portforwards {namespace,pod,localPort?,port}
-func (h *PortForwardHandler) Start(c *gin.Context) {
-	cluster := middleware.ClusterName(c)
-	if cluster == "" {
-		response.Fail(c, 400, 400, "缺少 X-Cluster 请求头")
-		return
-	}
-	client, err := h.clusters.ClientChecked(cluster)
-	if err != nil {
-		response.Fail(c, 400, 400, err.Error())
-		return
-	}
-	var req struct {
-		Namespace string `json:"namespace" binding:"required"`
-		Pod       string `json:"pod" binding:"required"`
-		LocalPort int    `json:"localPort"`
-		Port      int    `json:"port" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, 400, 400, "参数错误：需要 namespace / pod / port")
-		return
-	}
-	t, err := h.pf.Start(client, cluster, req.Namespace, req.Pod, req.LocalPort, req.Port)
-	if err != nil {
-		response.Fail(c, 400, 400, "建立转发失败: "+err.Error())
-		return
-	}
-	response.OK(c, gin.H{
-		"id": t.ID, "cluster": t.Cluster, "namespace": t.Namespace, "pod": t.Pod,
-		"localPort": t.LocalPort, "remotePort": t.RemotePort, "createdAt": t.CreatedAt,
-	})
-}
-
-// Stop DELETE /portforwards/:id
-func (h *PortForwardHandler) Stop(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil || !h.pf.Stop(id) {
-		response.Fail(c, 404, 404, "转发不存在或已停止")
-		return
-	}
-	response.OK(c, nil)
-}
 
 // ------------------- 容器文件浏览器 -------------------
 

@@ -11,7 +11,7 @@
         </div>
       </template>
 
-      <el-table :data="items" v-loading="loading" stripe size="small">
+      <el-table border :data="items" v-loading="loading" stripe size="small">
         <el-table-column prop="namespace" label="命名空间" min-width="170" sortable />
         <el-table-column label="配额名称" min-width="170">
           <template #default="{ row }">

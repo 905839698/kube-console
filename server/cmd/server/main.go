@@ -50,6 +50,13 @@ func main() {
 
 	clusters := service.NewClusterManager(db)
 
+	// 告警历史归档：轮询各集群 Alertmanager，firing→resolved 状态机落库
+	archive := service.NewAlertArchiveService(db, clusters, cfg.Obs.AlertIntervalSec, cfg.Obs.AlertRetentionDays)
+	archive.Start()
+	// 事件归档：轮询各集群 K8s Events 增量写入 ES（复用日志源连接，按日志源开关启用）
+	eventArchive := service.NewEventArchiveService(db, clusters, cfg.Obs.EventIntervalSec, cfg.Obs.EventRetentionDays)
+	eventArchive.Start()
+
 	// 内置 CI（Tekton）：加载内嵌节点插件 + 构建执行/凭证服务；后台循环（syncer/reconciler）
 	ciDeps, err := ci.NewDeps(db, &cfg.CI, clusters)
 	if err != nil {
@@ -75,7 +82,11 @@ func main() {
 		}
 	}()
 
-	r := router.Setup(db, cfg, clusters, ciDeps)
+	// Nacos 微服务集成：ns 自动同步 + Pod 注入 Admission Webhook（HTTPS :webhookPort）
+	nacosSvc := service.NewNacosService(db, clusters, cfg.Nacos)
+	nacosSvc.Start()
+
+	r := router.Setup(db, cfg, clusters, ciDeps, archive, eventArchive, nacosSvc)
 
 	port := cfg.Server.Port
 	if port == 0 {
@@ -127,6 +138,7 @@ func initDB(c *config.DatabaseConfig) (*gorm.DB, error) {
 	}
 	if err := db.AutoMigrate(&model.User{}, &model.Cluster{}, &model.HelmRepo{}, &model.AuditLog{},
 		&model.LogSource{}, &model.NotifyChannel{}, &model.NotifyLog{}, &model.ApiToken{}, &model.UserGroup{}, &model.RegistryConfig{}, &model.CIIntegration{},
+		&model.AlertmanagerConfig{}, &model.AlertEvent{}, &model.NacosConfig{}, &model.NacosNamespace{},
 		&model.CIProject{}, &model.CIPipeline{}, &model.CIPipelineVersion{}, &model.CIRunCounter{},
 		&model.CIRun{}, &model.CITaskRun{}, &model.CICredential{}, &model.CIGlobalVar{},
 		&model.CISchedule{}, &model.CIWebhook{}, &model.CIWebhookDelivery{},
