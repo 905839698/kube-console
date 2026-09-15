@@ -130,7 +130,9 @@ func (c *NacosClient) doOnce(ctx context.Context, method, path string, form url.
 		return nil, fmt.Errorf("Nacos 不可达: %w", err)
 	}
 	if status >= 300 {
-		return raw, fmt.Errorf("Nacos 返回 %d: %s", status, truncateStr(string(raw), 200))
+		// 500 足以覆盖 Spring 错误体 + 根因（如 MySQL Duplicate entry，通常出现在第 ~200 字符之后），
+		// 过短会把幂等冲突关键词截掉（见 nacosAlreadyExists）
+		return raw, fmt.Errorf("Nacos 返回 %d: %s", status, truncateStr(string(raw), 500))
 	}
 	return raw, nil
 }
@@ -329,6 +331,22 @@ func (c *NacosClient) ListUsers(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+// nacosAlreadyExists 判断 Nacos 错误是否为"已存在/已绑定"类幂等冲突，可安全忽略：
+// v1/v3 应用层文案为 "already exist(s)"、"already bound to the role/resource"；
+// v3 直连落库无应用层预检查时表现为数据库唯一约束冲突（MySQL "Duplicate entry"、Derby "duplicate key"）
+func nacosAlreadyExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, kw := range []string{"already exist", "already bound to the role", "already bound to the resource", "duplicate entry", "duplicate key"} {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *NacosClient) CreateUser(ctx context.Context, username, password string) error {
 	if err := c.ensureLogin(ctx); err != nil {
 		return err
@@ -338,11 +356,13 @@ func (c *NacosClient) CreateUser(ctx context.Context, username, password string)
 		path = "/nacos/v3/auth/user"
 	}
 	form := url.Values{"username": {username}, "password": {password}}
-	err := c.doWrite(ctx, http.MethodPost, path, form)
-	if err != nil && strings.Contains(err.Error(), "already exist") {
-		return nil
+	if err := c.doWrite(ctx, http.MethodPost, path, form); err != nil {
+		if nacosAlreadyExists(err) {
+			return nil
+		}
+		return err
 	}
-	return err
+	return nil
 }
 
 // UpdateUser 重置 Nacos 用户密码
@@ -367,11 +387,13 @@ func (c *NacosClient) CreateRole(ctx context.Context, role, username string) err
 		path = "/nacos/v3/auth/role"
 	}
 	form := url.Values{"role": {role}, "username": {username}}
-	err := c.doWrite(ctx, http.MethodPost, path, form)
-	if err != nil && strings.Contains(err.Error(), "already exist") {
-		return nil
+	if err := c.doWrite(ctx, http.MethodPost, path, form); err != nil {
+		if nacosAlreadyExists(err) {
+			return nil
+		}
+		return err
 	}
-	return err
+	return nil
 }
 
 func (c *NacosClient) GrantPermission(ctx context.Context, role, resource, action string) error {
@@ -383,11 +405,13 @@ func (c *NacosClient) GrantPermission(ctx context.Context, role, resource, actio
 		path = "/nacos/v3/auth/permission"
 	}
 	form := url.Values{"role": {role}, "resource": {resource}, "action": {action}}
-	err := c.doWrite(ctx, http.MethodPost, path, form)
-	if err != nil && strings.Contains(err.Error(), "already exist") {
-		return nil
+	if err := c.doWrite(ctx, http.MethodPost, path, form); err != nil {
+		if nacosAlreadyExists(err) {
+			return nil
+		}
+		return err
 	}
-	return err
+	return nil
 }
 
 // NacosServiceInfo 服务发现视图（v1 老版本仅名称，计数为 0）

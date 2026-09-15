@@ -172,6 +172,7 @@ import NodePanel from './NodePanel.vue'
 import PropertyPanel from './PropertyPanel.vue'
 import { normalizeDuplicateIds } from '../graphUtils'
 import { ciDesignDirty, setCiDesignGuard } from '../dirtyGuard'
+import { confirmDelete } from '../../../utils/confirm'
 
 const EMPTY_GRAPH: CIGraph = { name: 'unnamed', version: 1, nodes: [], edges: [] }
 
@@ -449,7 +450,7 @@ async function toggleSchedule(row: CISchedule, v: boolean) {
   try { await ciApi.updateSchedule(row.id, { enabled: v }) } catch { row.enabled = !v }
 }
 async function delSchedule(row: CISchedule) {
-  await ElMessageBox.confirm(`删除定时任务 ${row.cron}？`, '删除', { type: 'warning' })
+  await confirmDelete(row.cron, { title: '删除定时任务' })
   await ciApi.deleteSchedule(row.id)
   schedules.value = schedules.value.filter((x) => x.id !== row.id)
 }
@@ -476,7 +477,7 @@ async function toggleWebhook(row: CIWebhook, v: boolean) {
   try { await ciApi.updateWebhook(row.id, { enabled: v }) } catch { row.enabled = !v }
 }
 async function delWebhook(row: CIWebhook) {
-  await ElMessageBox.confirm('删除该 Webhook？回调地址立即失效。', '删除', { type: 'warning' })
+  await confirmDelete(String(row.id), { title: '删除 Webhook', warning: '回调地址立即失效。请输入 Webhook ID 确认。' })
   await ciApi.deleteWebhook(row.id)
   webhooks.value = webhooks.value.filter((x) => x.id !== row.id)
 }

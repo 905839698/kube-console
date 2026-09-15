@@ -51,6 +51,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, FolderOpened, Document } from '@element-plus/icons-vue'
 import { filesApi, type FileEntryItem } from '../api'
+import { confirmDelete } from '../utils/confirm'
 
 const props = defineProps<{ namespace: string; pod: string; containers: { name: string }[] }>()
 
@@ -89,7 +90,7 @@ async function download(row: FileEntryItem) {
 }
 
 async function remove(row: FileEntryItem) {
-  await ElMessageBox.confirm(`删除 ${row.type === 'dir' ? '目录' : '文件'}「${row.name}」？`, '删除', { type: 'warning' })
+  await confirmDelete(row.name, { title: '删除', warning: `将删除${row.type === 'dir' ? '目录' : '文件'}「${row.name}」` })
   await filesApi.action(props.namespace, props.pod, container.value, { action: 'rm', path: joinPath(currentPath.value, row.name) })
   ElMessage.success('已删除')
   await cd(currentPath.value)

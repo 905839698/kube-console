@@ -166,6 +166,7 @@ import {
   type NacosNsInfo,
 } from '../api'
 import { useClusterStore } from '../store/cluster'
+import { confirmDelete } from '../utils/confirm'
 
 const clusterStore = useClusterStore()
 const cluster = ref(clusterStore.current || '')
@@ -250,7 +251,7 @@ async function test() {
 
 async function removeCfg() {
   try {
-    await ElMessageBox.confirm(`删除集群 ${cluster.value} 的 Nacos 配置？将同时移除注入 Webhook 与同步映射（Nacos 侧数据保留）。`, '删除配置', { type: 'warning' })
+    await confirmDelete(cluster.value, { title: '删除 Nacos 配置', warning: '将同时移除注入 Webhook 与同步映射（Nacos 侧数据保留）。' })
   } catch {
     return
   }

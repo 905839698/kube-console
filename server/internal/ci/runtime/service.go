@@ -305,18 +305,22 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 	runName := fmt.Sprintf("run-%d-%d-%s", p.ID, runNo, suffix)
 	pvcName := fmt.Sprintf("ci-ws-%d-%d-%s", p.ID, runNo, suffix)
 
-	pullSecrets := s.injectCredentials(ctx, spec, graph, p.ProjectID) // 凭证注入
+	pipelineCRName := fmt.Sprintf("pl-%d-v%d", p.ID, version.Version)
+
+	// 4) ensure 项目 ns + apply Pipeline CR（幂等覆盖，失败无需回滚）。
+	//    ns 必须先于凭证注入创建：凭据 Secret 按需拉齐到 run ns 需要 ns 已存在。
+	if err := k8s.EnsureNamespace(ctx, ns); err != nil {
+		return nil, errcode.Newf(errcode.DepUnavailable, "确保项目 ns 失败: %v", err)
+	}
+	pullSecrets, err := s.injectCredentials(ctx, spec, graph, p.ProjectID, p.ClusterName, ns) // 凭证注入 + Secret 拉齐到 run ns
+	if err != nil {
+		return nil, err
+	}
 	if s.cfg.ImagePullSecret != "" {
 		pullSecrets = appendUniqueString(pullSecrets, s.cfg.ImagePullSecret)
 	}
 	s.injectTaskRunEnv(spec, runName) // 注入 CI_TASK_RUN（审批节点自发现用）
 
-	pipelineCRName := fmt.Sprintf("pl-%d-v%d", p.ID, version.Version)
-
-	// 4) ensure 项目 ns + apply Pipeline CR（幂等覆盖，失败无需回滚）
-	if err := k8s.EnsureNamespace(ctx, ns); err != nil {
-		return nil, errcode.Newf(errcode.DepUnavailable, "确保项目 ns 失败: %v", err)
-	}
 	specMap, err := specToMap(spec)
 	if err != nil {
 		return nil, err

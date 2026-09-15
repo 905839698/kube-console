@@ -229,6 +229,7 @@ import AmAlerts from './alert/AmAlerts.vue'
 import AmSilences from './alert/AmSilences.vue'
 import AlertHistory from './alert/AlertHistory.vue'
 import type { AlertRulesResponse, AlertRule, AlertSummary } from '../api'
+import { confirmDelete } from '../utils/confirm'
 
 const clusterStore = useClusterStore()
 const data = ref<AlertRulesResponse>()
@@ -260,11 +261,10 @@ const PROM_RULE_GVR = { group: 'monitoring.coreos.com', version: 'v1', resource:
 async function removeRule(row: AlertRule) {
   if (!row.source) return
   try {
-    await ElMessageBox.confirm(
-      `确定删除告警规则 ${row.alertName}？\n将从 PrometheusRule ${row.source} 中移除；所属分组/CR 因此变空时一并删除。若该 CR 由 Helm chart 管理，下次 chart 升级可能恢复。`,
-      '删除规则',
-      { type: 'warning' },
-    )
+    await confirmDelete(row.alertName, {
+      title: '删除规则',
+      warning: `将从 PrometheusRule ${row.source} 中移除；所属分组/CR 因此变空时一并删除。若该 CR 由 Helm chart 管理，下次 chart 升级可能恢复。`,
+    })
   } catch {
     return
   }

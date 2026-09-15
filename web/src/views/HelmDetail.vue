@@ -58,6 +58,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { helmApi, type HelmReleaseInfo, type HelmReleaseHistory } from '../api'
 import YamlEditor from '../components/YamlEditor.vue'
+import { confirmDelete } from '../utils/confirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -110,7 +111,7 @@ function goBack() {
 
 async function doUninstall() {
   try {
-    await ElMessageBox.confirm(`确定卸载应用 ${name.value}？该操作不可恢复`, '卸载', { type: 'warning' })
+    await confirmDelete(name.value, { title: '卸载应用', warning: '卸载不可恢复。' })
   } catch {
     return
   }

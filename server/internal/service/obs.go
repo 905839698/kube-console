@@ -62,15 +62,20 @@ func esRequest(ctx context.Context, c *kube.Client, src *model.LogSource, method
 	var u string
 	var httpClient *http.Client
 	var err error
-	if src.DirectURL != "" {
-		// 直连：apiserver service proxy 会剥离 Authorization 头，开启安全认证的 ES 走代理永远 401
+	autoDirect := false
+	switch {
+	case src.DirectURL != "":
+		// 显式直连：apiserver service proxy 会剥离 Authorization 头，开启安全认证的 ES 走代理永远 401
 		u = strings.TrimRight(src.DirectURL, "/") + "/" + path
-		httpClient = &http.Client{
-			// 不限命名空间时 k8s-* 全量索引检索较慢，超时对齐 handler 的 45s 上下文
-			Timeout:   60 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-		}
-	} else {
+		httpClient = directHTTPClient()
+	case src.Username != "":
+		// 安全 ES（配置了账号）但未填直连地址：代理会剥离 Authorization 头（永远 401），
+		// 自动改走集群内 Service DNS 直连（控制台与 ES 同集群部署时可用；跨集群请显式填直连地址）
+		autoDirect = true
+		u = fmt.Sprintf("http://%s.%s.svc:%d/%s", src.Service, src.Namespace, src.Port, path)
+		httpClient = directHTTPClient()
+	default:
+		// 匿名 ES：经 apiserver 代理访问，无需凭证
 		base := strings.TrimRight(c.Config.Host, "/")
 		u = fmt.Sprintf("%s/api/v1/namespaces/%s/services/%s:%d/proxy/%s",
 			base, src.Namespace, src.Service, src.Port, path)
@@ -93,13 +98,17 @@ func esRequest(ctx context.Context, c *kube.Client, src *model.LogSource, method
 	// ES basic auth 优先；代理模式下无账号时透传 apiserver 凭证
 	if src.Username != "" {
 		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(src.Username+":"+src.Password)))
-	} else if src.DirectURL == "" {
+	} else if src.DirectURL == "" && !autoDirect {
 		if bearer := c.Config.BearerToken; bearer != "" {
 			req.Header.Set("Authorization", "Bearer "+bearer)
 		}
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		if autoDirect {
+			return nil, fmt.Errorf("ES 集群内直连失败（%s.%s.svc:%d 不可达，控制台可能未与 ES 同集群）：请在「直连地址」填写 ES 实际可达地址后重试: %w",
+				src.Service, src.Namespace, src.Port, err)
+		}
 		return nil, fmt.Errorf("ES 访问失败: %w", err)
 	}
 	defer resp.Body.Close()
@@ -107,10 +116,23 @@ func esRequest(ctx context.Context, c *kube.Client, src *model.LogSource, method
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("ES 返回 401：认证被拒绝，请检查用户名密码是否正确（安全 ES 不能经 apiserver 代理访问——代理会剥离认证头，请使用直连地址）: %s",
+			truncateStr(string(raw), 200))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("ES 返回 %d: %s", resp.StatusCode, truncateStr(string(raw), 300))
 	}
 	return raw, nil
+}
+
+// directHTTPClient 直连 HTTP 客户端：不限命名空间时 k8s-* 全量索引检索较慢，
+// 超时对齐 handler 的 45s 上下文；自签证书跳过校验
+func directHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:   60 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	}
 }
 
 // SearchLogs 检索历史日志（fluentd 字段约定：kubernetes.pod_name 等）

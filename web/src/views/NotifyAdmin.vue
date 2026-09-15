@@ -94,6 +94,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { notifyApi, type NotifyChannelItem, type NotifyLogItem } from '../api'
+import { confirmDelete } from '../utils/confirm'
 
 const tab = ref('channels')
 const channels = ref<NotifyChannelItem[]>([])
@@ -147,7 +148,7 @@ async function testCh(row: NotifyChannelItem) {
 }
 
 async function removeCh(row: NotifyChannelItem) {
-  await ElMessageBox.confirm(`删除渠道「${row.name}」？`, '删除', { type: 'warning' })
+  await confirmDelete(row.name, { title: '删除通知渠道' })
   await notifyApi.deleteChannel(row.id)
   await load()
 }

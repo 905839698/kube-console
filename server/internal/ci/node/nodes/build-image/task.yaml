@@ -95,7 +95,10 @@ steps:
       EOF
           export DOCKER_CONFIG=/tmp/docker-cfg
         else
-          echo "WARN: 未注入 registry 凭证（DOCKER_CONFIG 文件或 username/password）；仅匿名可推送的仓库能成功"
+          echo "WARN: 未注入 registry 凭证（无 DOCKER_CONFIG 文件，也无 username/password 环境变量）" >&2
+          echo "  常见原因 1：节点选择的凭证引用已悬空（凭证被删除/改名或属其它项目）——更新后的服务端会在运行启动时报出明确错误" >&2
+          echo "  常见原因 2：凭证形态不是「账密/DockerConfig」——Token/KubeConfig/AK-SK 形态不含 username/password；Harbor 机器人账号请建为账密（用户名形如 robot\$xxx，密码=secret）" >&2
+          echo "  仅匿名可拉取/推送的仓库能不带凭证成功" >&2
         fi
       fi
       # 构建前把上游产物/配置文件拷入构建上下文（go/java 场景：go build 产物
@@ -198,6 +201,22 @@ steps:
         exit 0
       fi
       IMAGE=$(printf '%s' "{{registry}}/{{repository}}:{{tag}}" | tr -d '[:space:]')
+      # Registry 认证：syft 拉取刚推送的私有镜像需要凭证。引用 $username/$password
+      # 使 runtime 的按 key 匹配把 envFrom 注入到本 step（与 build-and-push 同源），
+      # 拼临时 docker config 供 syft（go-containerregistry 读 $DOCKER_CONFIG）；
+      # dockerconfig 形态凭证由 runtime 直接挂载 $DOCKER_CONFIG/config.json，此段自动跳过
+      if [ -z "$DOCKER_CONFIG" ] || [ ! -f "$DOCKER_CONFIG/config.json" ]; then
+        if [ -n "$username" ] && [ -n "$password" ]; then
+          mkdir -p /tmp/syft-cfg
+          AUTH=$(printf '%s:%s' "$username" "$password" | base64)
+          cat > /tmp/syft-cfg/config.json <<EOF
+      {"auths":{"{{registry}}":{"username":"$username","password":"$password","auth":"$AUTH"}}}
+      EOF
+          export DOCKER_CONFIG=/tmp/syft-cfg
+        else
+          echo "WARN: syft 未拿到 registry 凭证，私有仓库的 SBOM 生成将失败（镜像本身已推送成功）" >&2
+        fi
+      fi
       SBOM_DIR=$(workspaces.source.path)/sbom
       mkdir -p "$SBOM_DIR"
       syft "$IMAGE" -o spdx-json="$SBOM_DIR/spdx.json"

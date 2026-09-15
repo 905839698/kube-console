@@ -130,6 +130,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { argocdApi, type ArgoCDRepo } from '../api'
 import { useClusterStore } from '../store/cluster'
 import { useUserStore } from '../store/user'
+import { confirmDelete } from '../utils/confirm'
 
 const userStore = useUserStore()
 const clusterStore = useClusterStore()
@@ -235,7 +236,7 @@ async function save() {
   }
 }
 async function remove(row: ArgoCDRepo) {
-  await ElMessageBox.confirm(`删除仓库 ${row.name} 后，引用它的 ArgoCD 应用将失去凭据、同步失败。确认删除？`, '删除仓库', { type: 'warning' })
+  await confirmDelete(row.name, { title: '删除仓库', warning: '删除仓库后，引用它的 ArgoCD 应用将失去凭据、同步失败。' })
   await argocdApi.repoDelete(row.name, row.namespace)
   ElMessage.success('已删除')
   load()

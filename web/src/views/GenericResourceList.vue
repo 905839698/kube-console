@@ -7,10 +7,9 @@
           <el-input v-model="search" placeholder="搜索..." :prefix-icon="Search" clearable style="width: 200px" @input="load" />
           <el-button :icon="Refresh" circle @click="load" />
           <template v-if="!isGvr && !unavailable">
-            <el-button size="default" :loading="exporting" @click="doExport">导出</el-button>
-            <el-button size="default" @click="fileInput?.click()">导入</el-button>
+            <el-button size="default" @click="exportVisible = true">导出</el-button>
+            <el-button size="default" @click="importDlg?.pick()">导入</el-button>
           </template>
-          <input ref="fileInput" type="file" accept=".yaml,.yml" style="display: none" @change="onImportFile" />
           <el-button v-if="!unavailable" type="primary" size="default" @click="openCreate">
             <el-icon><Plus /></el-icon>&nbsp;新建
           </el-button>
@@ -109,33 +108,11 @@
       <el-empty v-if="!podsLoading && !podItems.length" description="无匹配的 Pod（选择器可能未命中任何 Pod）" />
     </el-dialog>
 
+    <!-- Kuboard 式导出（逐层选择：ns → 控制器/服务/配置/其他） -->
+    <ResourceExportDialog v-model="exportVisible" />
+
     <!-- 导入（多文档 YAML 预览 + 逐个应用） -->
-    <el-dialog v-model="importVisible" title="导入资源" width="760px" :close-on-click-modal="false">
-      <el-alert type="info" :closable="false" style="margin-bottom: 10px"
-        :title="`按 create-or-update 逐个应用以下 ${importDocs.length} 个资源（已存在的更新，不存在的创建）`" />
-      <el-table border :data="importDocs" size="small" max-height="360">
-        <el-table-column label="Kind" width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row?.kind || row?.apiVersion }}</template>
-        </el-table-column>
-        <el-table-column label="名称" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }">{{ row?.metadata?.name }}</template>
-        </el-table-column>
-        <el-table-column label="命名空间" width="150">
-          <template #default="{ row }">{{ row?.metadata?.namespace || 'default' }}</template>
-        </el-table-column>
-        <el-table-column label="结果" width="150">
-          <template #default="{ $index }">
-            <span v-if="importResults[$index] === undefined" class="summary">待应用</span>
-            <el-tag v-else-if="!importResults[$index]" size="small" type="success">成功</el-tag>
-            <el-tooltip v-else :content="importResults[$index]"><el-tag size="small" type="danger">失败</el-tag></el-tooltip>
-          </template>
-        </el-table-column>
-      </el-table>
-      <template #footer>
-        <el-button @click="importVisible = false">关闭</el-button>
-        <el-button type="primary" :loading="importing" :disabled="!importDocs.length || importDone" @click="doImport">应用</el-button>
-      </template>
-    </el-dialog>
+    <ResourceImportDialog ref="importDlg" @done="load" />
 
   </el-card>
 </template>
@@ -146,14 +123,16 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ElPagination } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
-import { load as yamlLoad, loadAll as yamlLoadAll, dump as yamlDump } from 'js-yaml'
+import { load as yamlLoad } from 'js-yaml'
 import { k8sApi, nsParam, type GenericItem, type GatewayAvailability, type WorkloadItem } from '../api'
 import ObjectEditor from '../components/ObjectEditor.vue'
 import StatusTag from '../components/StatusTag.vue'
-import { downloadText } from '../utils/download'
+import ResourceExportDialog from '../components/ResourceExportDialog.vue'
+import ResourceImportDialog from '../components/ResourceImportDialog.vue'
 import { useClusterStore } from '../store/cluster'
 import { useNamespaceStore } from '../store/namespace'
 import { parseDuration } from '../utils/sort'
+import { confirmDelete } from '../utils/confirm'
 
 // Gateway API 资源：版本随渠道变化，需 discovery 确认当前集群是否提供
 const GATEWAY_KINDS = new Set(['gatewayclasses', 'gateways', 'httproutes', 'grpcroutes', 'tlsroutes', 'tcproutes', 'udproutes', 'referencegrants'])
@@ -394,7 +373,7 @@ async function removeFromDetail() {
 
 async function doRemove(name: string, ns: string) {
   try {
-    await ElMessageBox.confirm(`确定删除 ${title.value} ${name}？`, '删除', { type: 'warning' })
+    await confirmDelete(name, { title: `删除${title.value}` })
   } catch {
     return
   }
@@ -410,74 +389,10 @@ function openCreate() {
   createVisible.value = true
 }
 
-// ---- 导入 / 导出（kind 模式；导出跟随当前命名空间筛选与搜索，深度清洗后可直接再导入） ----
-const exporting = ref(false)
-const fileInput = ref<HTMLInputElement>()
-const importVisible = ref(false)
-const importing = ref(false)
-const importDone = ref(false)
-const importDocs = ref<any[]>([])
-const importResults = ref<Record<number, string>>({})
-
-async function doExport() {
-  if (!items.value.length) {
-    ElMessage.warning('当前列表为空，无可导出资源')
-    return
-  }
-  exporting.value = true
-  try {
-    const { yaml } = await k8sApi.exportYaml(kind.value, nsParam(namespace.value), search.value)
-    if (!yaml.trim()) {
-      ElMessage.warning('无可导出资源')
-      return
-    }
-    const ns = (nsParam(namespace.value) || 'all').replace(/[^a-zA-Z0-9_-]/g, '-')
-    downloadText(yaml, `${kind.value}_${ns}.yaml`, 'text/yaml;charset=utf-8')
-  } catch {
-    /* 拦截器已提示 */
-  } finally {
-    exporting.value = false
-  }
-}
-
-async function onImportFile(ev: Event) {
-  const input = ev.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = '' // 允许再次选择同一文件
-  if (!file) return
-  try {
-    const docs = (yamlLoadAll(await file.text()) as any[]).filter((d) => d && typeof d === 'object' && d.metadata?.name)
-    if (!docs.length) {
-      ElMessage.warning('文件中未找到资源定义（需带 apiVersion/kind/metadata.name）')
-      return
-    }
-    importDocs.value = docs
-    importResults.value = {}
-    importDone.value = false
-    importVisible.value = true
-  } catch (e) {
-    ElMessage.error(`解析文件失败：${(e as Error).message || e}`)
-  }
-}
-
-async function doImport() {
-  importing.value = true
-  let ok = 0
-  for (let i = 0; i < importDocs.value.length; i++) {
-    try {
-      await k8sApi.applyYaml(yamlDump(importDocs.value[i]))
-      importResults.value[i] = ''
-      ok++
-    } catch (e) {
-      importResults.value[i] = (e as Error).message || String(e)
-    }
-  }
-  importing.value = false
-  importDone.value = true
-  if (ok === importDocs.value.length) ElMessage.success(`已应用 ${ok} 个资源`)
-  else ElMessage.warning(`应用完成：成功 ${ok} / ${importDocs.value.length}，失败项见列表`)
-  load()
-}
+// ---- 导入 / 导出 ----
+// 导出为 Kuboard 式分层勾选对话框（ResourceExportDialog）；导入为 ResourceImportDialog（多文档 YAML 逐个应用）
+const exportVisible = ref(false)
+const importDlg = ref<InstanceType<typeof ResourceImportDialog>>()
 
 function onSaved() {
   detailVisible.value = false

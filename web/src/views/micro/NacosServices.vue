@@ -87,6 +87,7 @@ import { useClusterStore } from '../../store/cluster'
 import { useNamespaceStore } from '../../store/namespace'
 import { useUserStore } from '../../store/user'
 import NamespaceSelect from '../../components/NamespaceSelect.vue'
+import { confirmDelete } from '../../utils/confirm'
 
 const clusterStore = useClusterStore()
 const nsStore = useNamespaceStore()
@@ -156,11 +157,10 @@ async function openInstances(row: NacosServiceItem) {
 
 async function removeService(row: NacosServiceItem) {
   try {
-    await ElMessageBox.confirm(
-      `删除服务 ${row.name}（分组 ${row.groupName || 'DEFAULT_GROUP'}，命名空间 ${row.namespace}）？` +
-        '仅删除 Nacos 侧注册记录，不删除任何 K8s 资源；已注册实例心跳会自动重新注册。',
-      '删除服务', { type: 'warning' },
-    )
+    await confirmDelete(row.name, {
+      title: '删除 Nacos 服务',
+      warning: `分组 ${row.groupName || 'DEFAULT_GROUP'}，命名空间 ${row.namespace}。仅删除 Nacos 侧注册记录，不删除任何 K8s 资源；已注册实例心跳会自动重新注册。`,
+    })
   } catch {
     return
   }

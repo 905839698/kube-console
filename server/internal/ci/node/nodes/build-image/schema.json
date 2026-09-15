@@ -5,7 +5,7 @@
     { "name": "context", "type": "string", "required": false, "default": ".", "description": "构建上下文" },
     { "name": "registry", "type": "string", "required": true, "description": "Registry 地址，如 harbor.example.com" },
     { "name": "repository", "type": "string", "required": true, "description": "镜像仓库名，如 project/demo" },
-    { "name": "tag", "type": "string", "required": false, "default": "$(params.git_commit)", "description": "Tag，可用 ${GIT_COMMIT}" },
+    { "name": "tag", "type": "string", "required": false, "default": "$(tasks.git-clone.results.git_commit)", "description": "Tag，默认引用 git-clone 节点的 Commit SHA 结果（$(tasks.<git-clone节点ID>.results.git_commit)，节点改名时同步修改）；流水线没有 git-clone 节点时必须手填固定值" },
     { "name": "credential", "type": "credential", "required": true, "description": "Registry 凭证" },
     { "name": "generateSBOM", "type": "boolean", "required": false, "default": true, "description": "生成 SBOM" },
     { "name": "configFiles", "type": "text", "required": false, "description": "构建前拷入构建上下文的文件或整目录（相对 workspace 根/仓库根，逗号分隔，支持 src=dst 改名；填了但都不存在时步骤直接失败。context 为仓库根时文件本就在上下文内无需填。go 示例: out/app=app,config（路径须与 go-build 产物一致，默认 out/<binaryName>）；java 示例: target/app.jar=app.jar,deploy/yml=config）" },

@@ -243,6 +243,7 @@ import ImageUpdateDialog from '../components/ImageUpdateDialog.vue'
 import MetricPanel, { type MetricCardDef, type MetricChartDef } from '../components/MetricPanel.vue'
 import RangeSwitch from '../components/RangeSwitch.vue'
 import { useClusterStore } from '../store/cluster'
+import { confirmDelete } from '../utils/confirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -538,7 +539,7 @@ async function doRestart() {
 
 async function doDelete() {
   try {
-    await ElMessageBox.confirm(`确定删除 ${kindTitle.value} ${name.value}？`, '删除', { type: 'warning' })
+    await confirmDelete(name.value, { title: `删除${kindTitle.value}` })
   } catch {
     return
   }

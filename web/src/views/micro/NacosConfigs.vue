@@ -106,6 +106,7 @@ import { useNamespaceStore } from '../../store/namespace'
 import { useUserStore } from '../../store/user'
 import NamespaceSelect from '../../components/NamespaceSelect.vue'
 import { downloadText } from '../../utils/download'
+import { confirmDelete } from '../../utils/confirm'
 
 const clusterStore = useClusterStore()
 const nsStore = useNamespaceStore()
@@ -208,7 +209,7 @@ async function publish() {
 
 async function removeConfig(row: NacosConfigEntry) {
   try {
-    await ElMessageBox.confirm(`删除配置 ${row.dataId}（${row.group}，命名空间 ${row.namespace}）？`, '删除配置', { type: 'warning' })
+    await confirmDelete(row.dataId, { title: '删除配置', warning: `分组 ${row.group}，命名空间 ${row.namespace}` })
   } catch {
     return
   }

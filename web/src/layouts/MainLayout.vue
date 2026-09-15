@@ -262,6 +262,7 @@ import { useNamespaceStore } from '../store/namespace'
 import { authApi, tokenApi, type ApiTokenItem } from '../api'
 import GlobalSearch from '../components/GlobalSearch.vue'
 import NamespaceSelect from '../components/NamespaceSelect.vue'
+import { confirmDelete } from '../utils/confirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -365,7 +366,7 @@ async function doCreateToken() {
   }
 }
 async function revokeToken(row: ApiTokenItem) {
-  await ElMessageBox.confirm(`撤销 Token「${row.name}」？使用它的脚本将立即失效。`, '撤销', { type: 'warning' })
+  await confirmDelete(row.name, { title: '撤销 Token', warning: '撤销后使用它的脚本将立即失效。' })
   await tokenApi.revoke(row.id)
   await loadTokens()
 }

@@ -312,10 +312,10 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		authed.GET("/generic/:group/:version/:resource/:name/yaml", k8sHandler.GetGenericGVRYAML)
 		authed.DELETE("/generic/:group/:version/:resource/:name", k8sHandler.DeleteGenericGVR)
 
-			// YAML 应用与读取（export：导出筛选后的资源为多文档 YAML）
+			// YAML 应用与读取（export：按勾选的资源导出多文档 YAML，Kuboard 式逐层选择）
 			authed.POST("/yaml/apply", k8sHandler.ApplyYAML)
 			authed.GET("/yaml", k8sHandler.GetYAML)
-			authed.GET("/yaml/export", k8sHandler.ExportYAML)
+			authed.POST("/yaml/export", k8sHandler.ExportYAML)
 
 		// Helm 应用管理（release 操作通过 X-Cluster 选择集群）
 		authed.GET("/helm/releases", helmHandler.ListReleases)

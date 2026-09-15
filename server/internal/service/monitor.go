@@ -128,7 +128,52 @@ func (m *MonitorService) doProm(ctx context.Context, c *kube.Client, cfg PromCon
 	if pr.Status != "success" {
 		return nil, fmt.Errorf("Prometheus 查询失败: %s", pr.Error)
 	}
+	sanitizeProm(&pr)
 	return &pr, nil
+}
+
+// sanitizeProm 剔除 NaN/Inf 样本：Prometheus 对 0/0 等（如无 swap 节点的 swap 使用率）返回 "NaN"，
+// strconv.ParseFloat("NaN") 会成功，而 encoding/json 无法序列化 NaN/Inf——任一指标带 NaN 整个监控
+// 接口 500（节点级一次返回 20+ 指标最易触发）。NaN 按无数据语义剔除：瞬时样本整条剔除，区间样本逐点剔除（图表留空隙）。
+func sanitizeProm(pr *promResponse) {
+	kept := pr.Data.Result[:0]
+	for _, r := range pr.Data.Result {
+		if r.Value != nil && len(r.Value) >= 2 && isNaNSample(r.Value[1]) {
+			continue
+		}
+		if r.Values != nil {
+			vals := r.Values[:0]
+			for _, v := range r.Values {
+				if !(len(v) >= 2 && isNaNSample(v[1])) {
+					vals = append(vals, v)
+				}
+			}
+			r.Values = vals
+			if len(r.Values) == 0 {
+				continue // 区间序列清洗后为空 → 整条剔除
+			}
+		}
+		kept = append(kept, r)
+	}
+	pr.Data.Result = kept
+}
+
+// isNaNSample Prometheus 样本值是否 NaN/Inf（JSON 里以字符串 "NaN"/"+Inf" 形式出现）
+func isNaNSample(v interface{}) bool {
+	var f float64
+	switch x := v.(type) {
+	case float64:
+		f = x
+	case string:
+		p, err := strconv.ParseFloat(x, 64)
+		if err != nil {
+			return false
+		}
+		f = p
+	default:
+		return false
+	}
+	return math.IsNaN(f) || math.IsInf(f, 0)
 }
 
 // Query 瞬时查询
@@ -487,6 +532,12 @@ func nodeSel(expr, nodeName string) string {
 func nodeMemQL(nodeName string) string {
 	expr := `(1 - node_memory_MemAvailable_bytes/node_memory_MemTotal_bytes) * 100`
 	return fmt.Sprintf(`avg by(nodename)(%s)`, nodeSel(expr, nodeName))
+}
+
+// nodeAgg 节点指标聚合：expr 先按 instance 聚合 → join node_uname_info 得 nodename → 按 nodename 汇总。
+// 内层聚合必须带 by(instance)：不带 by 的 sum/avg 会剥掉 instance 标签，on(instance) 匹配不到导致恒为空
+func nodeAgg(expr, agg, nodeName string) string {
+	return fmt.Sprintf(`%s by(nodename)(%s)`, agg, nodeSel(expr, nodeName))
 }
 
 // series 提取范围查询结果为时序数据（前端图表用）
@@ -987,19 +1038,21 @@ func (m *MonitorService) Node(ctx context.Context, c *kube.Client, cluster *mode
 		out.SwapUsagePct = &v
 	}
 
-	// 磁盘 IO：IOPS（读/写）、吞吐（读/写 MB/s）、IO 利用率
-	out.DiskReadIops, _ = q(nodeSel(`sum(rate(node_disk_reads_completed_total[5m]))`, name))
-	out.DiskWriteIops, _ = q(nodeSel(`sum(rate(node_disk_writes_completed_total[5m]))`, name))
-	out.DiskIopsTrend = qr(nodeSel(`sum(rate(node_disk_reads_completed_total[5m])) + sum(rate(node_disk_writes_completed_total[5m]))`, name))
-	out.DiskReadMBs, _ = q(nodeSel(`sum(rate(node_disk_read_bytes_total[5m])) / 1024 / 1024`, name))
-	out.DiskWriteMBs, _ = q(nodeSel(`sum(rate(node_disk_written_bytes_total[5m])) / 1024 / 1024`, name))
-	out.DiskThroughputTrend = qr(nodeSel(`(sum(rate(node_disk_read_bytes_total[5m])) + sum(rate(node_disk_written_bytes_total[5m]))) / 1024 / 1024`, name))
-	out.IoUtilPct, _ = q(nodeSel(`sum(rate(node_disk_io_time_seconds_total[5m])) * 100`, name))
-	out.IoUtilTrend = qr(nodeSel(`sum(rate(node_disk_io_time_seconds_total[5m])) * 100`, name))
+	// 磁盘 IO：IOPS（读/写）、吞吐（读/写 MB/s）、IO 利用率。
+	// 注意聚合必须先 by(instance) 再 join（不带 by 的 sum 会剥掉 instance 标签，on(instance) 匹配不到导致恒为空）
+	out.DiskReadIops, _ = q(nodeAgg(`sum by(instance)(rate(node_disk_reads_completed_total[5m]))`, "sum", name))
+	out.DiskWriteIops, _ = q(nodeAgg(`sum by(instance)(rate(node_disk_writes_completed_total[5m]))`, "sum", name))
+	out.DiskIopsTrend = qr(nodeAgg(`sum by(instance)(rate(node_disk_reads_completed_total[5m])) + sum by(instance)(rate(node_disk_writes_completed_total[5m]))`, "sum", name))
+	out.DiskReadMBs, _ = q(nodeAgg(`sum by(instance)(rate(node_disk_read_bytes_total[5m])) / 1024 / 1024`, "sum", name))
+	out.DiskWriteMBs, _ = q(nodeAgg(`sum by(instance)(rate(node_disk_written_bytes_total[5m])) / 1024 / 1024`, "sum", name))
+	out.DiskThroughputTrend = qr(nodeAgg(`(sum by(instance)(rate(node_disk_read_bytes_total[5m])) + sum by(instance)(rate(node_disk_written_bytes_total[5m]))) / 1024 / 1024`, "sum", name))
+	// IO 利用率取各盘均值的语义（sum 会多盘相加超过 100%）
+	out.IoUtilPct, _ = q(nodeAgg(`avg by(instance)(rate(node_disk_io_time_seconds_total[5m])) * 100`, "avg", name))
+	out.IoUtilTrend = qr(nodeAgg(`avg by(instance)(rate(node_disk_io_time_seconds_total[5m])) * 100`, "avg", name))
 
-	// 网络丢包（收+发 次/s）与 TCP 连接数
-	out.NetDropRate, _ = q(nodeSel(`sum(rate(node_network_receive_drop_total[5m])) + sum(rate(node_network_transmit_drop_total[5m]))`, name))
-	out.NetDropTrend = qr(nodeSel(`sum(rate(node_network_receive_drop_total[5m])) + sum(rate(node_network_transmit_drop_total[5m]))`, name))
+	// 网络丢包（收+发 次/s，全部网卡合计）与 TCP 连接数
+	out.NetDropRate, _ = q(nodeAgg(`sum by(instance)(rate(node_network_receive_drop_total[5m])) + sum by(instance)(rate(node_network_transmit_drop_total[5m]))`, "sum", name))
+	out.NetDropTrend = qr(nodeAgg(`sum by(instance)(rate(node_network_receive_drop_total[5m])) + sum by(instance)(rate(node_network_transmit_drop_total[5m]))`, "sum", name))
 	out.TcpEstablished, _ = q(nodeSel(`node_netstat_Tcp_CurrEstab`, name))
 
 	// ---- Kubelet 运行时（kube-prometheus-stack 会给 kubelet 指标打 node 标签；无标签时整块降级） ----

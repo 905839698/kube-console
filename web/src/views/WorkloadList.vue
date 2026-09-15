@@ -8,6 +8,8 @@
           <el-button v-if="selected.length" size="small" type="danger" plain @click="batchDelete">删除选中 ({{ selected.length }})</el-button>
           <el-input v-model="search" placeholder="搜索..." :prefix-icon="Search" clearable style="width: 200px" @input="load" />
           <el-button :icon="Refresh" circle @click="load" />
+          <el-button size="default" @click="exportVisible = true">导出</el-button>
+          <el-button size="default" @click="importDlg?.pick()">导入</el-button>
           <el-button v-if="!isPod" type="primary" size="default" @click="openCreate">
             <el-icon><Plus /></el-icon>&nbsp;新建
           </el-button>
@@ -133,6 +135,11 @@
       :name="imageTarget?.name || ''"
       @saved="load"
     />
+
+    <!-- Kuboard 式导出（逐层选择：ns → 控制器/服务/配置/其他） -->
+    <ResourceExportDialog v-model="exportVisible" />
+    <!-- 导入（多文档 YAML 预览 + 逐个应用） -->
+    <ResourceImportDialog ref="importDlg" @done="load" />
   </el-card>
 </template>
 
@@ -149,9 +156,12 @@ import StatusTag from '../components/StatusTag.vue'
 import PodLogsDrawer from '../components/PodLogsDrawer.vue'
 import WebTerminal from '../components/WebTerminal.vue'
 import ImageUpdateDialog from '../components/ImageUpdateDialog.vue'
+import ResourceExportDialog from '../components/ResourceExportDialog.vue'
+import ResourceImportDialog from '../components/ResourceImportDialog.vue'
 import { useClusterStore } from '../store/cluster'
 import { useNamespaceStore } from '../store/namespace'
 import { parseDuration } from '../utils/sort'
+import { confirmDelete, confirmDeleteCount } from '../utils/confirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -184,7 +194,7 @@ const nsOf = (row: WorkloadItem) => row.namespace || namespace.value[0] || 'defa
 
 async function batchDelete() {
   if (!selected.value.length) return
-  await ElMessageBox.confirm(`确定删除选中的 ${selected.value.length} 个 ${kindTitle.value}？`, '批量删除', { type: 'warning' })
+  await confirmDeleteCount(selected.value.length, { title: '批量删除', warning: `将删除选中的 ${selected.value.length} 个 ${kindTitle.value}，不可恢复。` })
   for (const w of selected.value) {
     try { await k8sApi.deleteWorkload(kind.value, nsOf(w), w.name) } catch { /* 拦截器已提示 */ }
   }
@@ -216,6 +226,9 @@ const search = ref(String(route.query.search || ''))
 const loading = ref(false)
 
 const createVisible = ref(false)
+// 导入 / 导出（导出为 Kuboard 式分层勾选对话框，与当前列表 kind 无关）
+const exportVisible = ref(false)
+const importDlg = ref<InstanceType<typeof ResourceImportDialog>>()
 // 新建默认命名空间：全选时用 default，否则用第一个选中
 const createNs = computed(() => (nsParam(namespace.value) === '*' ? 'default' : namespace.value[0] || 'default'))
 const editVisible = ref(false)
@@ -359,11 +372,12 @@ async function onCommand(cmd: string, row: WorkloadItem) {
       imageVisible.value = true
       break
     case 'delete':
-      await confirmAndDo(`确定删除 ${kindTitle.value} ${row.name}？`, async () => {
+      await confirmDelete(row.name, { title: `删除${kindTitle.value}`, warning: `命名空间 ${row.namespace || namespace.value[0] || 'default'}` })
+      try {
         await k8sApi.deleteWorkload(kind.value, row.namespace || namespace.value[0] || 'default', row.name)
         ElMessage.success('已删除')
-        load()
-      })
+      } catch { /* 拦截器已提示 */ }
+      load()
       break
   }
 }

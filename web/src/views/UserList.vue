@@ -104,6 +104,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { userApi, groupApi, type PlatformUser, type UserGroupItem } from '../api'
 import { useUserStore } from '../store/user'
+import { confirmDelete } from '../utils/confirm'
 
 const userStore = useUserStore()
 const users = ref<PlatformUser[]>([])
@@ -136,7 +137,7 @@ async function saveGroup() {
 }
 
 async function removeGroup(row: UserGroupItem) {
-  await ElMessageBox.confirm(`删除用户组「${row.name}」？组内用户将变为未分组。`, '删除', { type: 'warning' })
+  await confirmDelete(row.name, { title: '删除用户组', warning: '组内用户将变为未分组。' })
   await groupApi.remove(row.id)
   await Promise.all([loadGroups(), load()])
 }
@@ -206,7 +207,7 @@ async function toggleRole(row: PlatformUser) {
 }
 
 async function removeUser(row: PlatformUser) {
-  await ElMessageBox.confirm(`确认删除用户「${row.username}」？`, '删除用户', { type: 'warning' })
+  await confirmDelete(row.username, { title: '删除用户' })
   await userApi.remove(row.id)
   ElMessage.success('已删除')
   await load()

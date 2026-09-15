@@ -109,7 +109,7 @@ kind: `services | ingresses | configmaps | secrets | persistentvolumeclaims | pe
 | --- | --- | --- |
 | POST | `/yaml/apply` | 应用 YAML（create-or-update：先查再改，已存在则更新、不存在则创建）`{"yaml"}` → `{created}`；Service/工作负载携带监控注解时自动联动创建 ServiceMonitor/PodMonitor，Route 跨命名空间引用自动创建 ReferenceGrant |
 | GET | `/yaml?resource=&namespace=&name=` | 读取任意资源 YAML |
-| GET | `/yaml/export?kind=&namespace=&search=` | 导出筛选后的资源为多文档 YAML（`---` 分隔）；跟随列表页同款命名空间筛选（`*` 或逗号分隔多选）与搜索；深度清洗（uid/resourceVersion/generation/creationTimestamp/managedFields/status/last-applied 注解），导出文件可直接再导入 |
+| POST | `/yaml/export` | 按勾选导出资源为多文档 YAML（Kuboard 式逐层选择）`{"resources":[{"kind","namespace","name"}]}`；深度清洗（uid/resourceVersion/generation/creationTimestamp/managedFields/status/last-applied 注解），导出文件可直接再导入；单项失败记入 `skipped` 并继续 |
 
 ## 监控（Prometheus，经 kube-apiserver proxy）
 

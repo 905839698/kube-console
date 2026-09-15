@@ -227,3 +227,157 @@ func TestCompileCacheWorkspaceOptional(t *testing.T) {
 		t.Error("task 级 cache workspace 未保留 optional: true（会被 Tekton 拒绝）")
 	}
 }
+
+// specNode 带固定 script 与声明参数/结果的测试节点（引用改写/校验场景用）。
+type specNode struct {
+	t       string
+	params  []string
+	results []string
+	script  string
+}
+
+func (s specNode) Meta() nodetype.Meta               { return nodetype.Meta{Type: s.t} }
+func (s specNode) Validate(map[string]interface{}) []string { return nil }
+func (s specNode) RenderTask(map[string]interface{}) (nodetype.TaskSpec, error) {
+	ts := nodetype.TaskSpec{
+		Name:  s.t,
+		Steps: []nodetype.TektonStep{{Name: "main", Image: "alpine", Script: s.script}},
+	}
+	for _, p := range s.params {
+		ts.Params = append(ts.Params, nodetype.TektonParam{Name: p, Type: "string"})
+	}
+	for _, r := range s.results {
+		ts.Results = append(ts.Results, nodetype.TektonResult{Name: r})
+	}
+	return ts, nil
+}
+func (s specNode) ResultMapping() nodetype.ResultMap { return nodetype.ResultMap{} }
+
+func taskScriptOf(spec *PipelineSpec, name string) string {
+	for i := range spec.Spec.Tasks {
+		if spec.Spec.Tasks[i].Name == name {
+			return spec.Spec.Tasks[i].TaskSpec.Steps[0].Script
+		}
+	}
+	return ""
+}
+
+// 回归：build-image 等节点的默认 tag 曾误写 $(params.git_commit)——嵌入 taskSpec
+// 的 $(params.X) 指任务自身参数，Tekton webhook 以 non-existent variable 拒绝 apply。
+// 编译器应把历史写法改写为实际 git-clone 节点的结果引用。
+func TestCompileRewriteGitCommitRefs(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{t: "build-image", script: "IMG=repo:$(params.git_commit)"})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "git-clone", Type: "git-clone"},
+		{ID: "build", Type: "build-image"},
+	}
+	g.Edges = []model.Edge{{Source: "git-clone", Target: "build"}}
+
+	spec, err := c.Compile(g, "ns")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	script := taskScriptOf(spec, "build")
+	if strings.Contains(script, "$(params.git_commit)") {
+		t.Errorf("历史引用未改写: %s", script)
+	}
+	if !strings.Contains(script, "$(tasks.git-clone.results.git_commit)") {
+		t.Errorf("应改写为 $(tasks.git-clone.results.git_commit): %s", script)
+	}
+}
+
+// git-clone 节点被改名（如 src）后，默认值里的 $(tasks.git-clone....) 引用悬空，
+// 应改写到实际节点 ID。
+func TestCompileRewriteGitCommitRefsRenamedNode(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{t: "build-image", script: "IMG=repo:$(tasks.git-clone.results.git_commit)"})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "src", Type: "git-clone"},
+		{ID: "build", Type: "build-image"},
+	}
+	g.Edges = []model.Edge{{Source: "src", Target: "build"}}
+
+	spec, err := c.Compile(g, "ns")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if script := taskScriptOf(spec, "build"); !strings.Contains(script, "$(tasks.src.results.git_commit)") {
+		t.Errorf("应改写为 $(tasks.src.results.git_commit): %s", script)
+	}
+}
+
+// 流水线没有 git-clone 节点时，遗留引用无法解析，编译期给出可读错误
+// （而不是等 Tekton webhook 报 non-existent variable）。
+func TestCompileGitCommitRefWithoutGitClone(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "build-image", script: "IMG=repo:$(params.git_commit)"})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{{ID: "build", Type: "build-image"}}
+
+	_, err := c.Compile(g, "ns")
+	if err == nil {
+		t.Fatal("$(params.git_commit) 且无 git-clone 节点应编译失败")
+	}
+	if !strings.Contains(err.Error(), "$(params.git_commit)") {
+		t.Errorf("错误应指出非法引用: %v", err)
+	}
+}
+
+// validateTaskRefs：引用上游结果合法通过；未知任务/未知结果/引用自身结果报可读错误。
+func TestCompileValidateTaskRefs(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{t: "k8s-deploy", params: []string{"image"}, script: "kubectl apply -f manifest"})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "git-clone", Type: "git-clone"},
+		{ID: "deploy", Type: "k8s-deploy"},
+	}
+	g.Edges = []model.Edge{{Source: "git-clone", Target: "deploy"}}
+	if _, err := c.Compile(g, "ns"); err != nil {
+		t.Fatalf("合法引用不应报错: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		script string
+		want   string
+	}{
+		{"未知任务", "echo $(tasks.ghost.results.git_commit)", "没有名为 ghost"},
+		{"未知结果", "echo $(tasks.git-clone.results.nope)", "未声明该结果"},
+		{"引用自身结果", "echo $(tasks.deploy.results.image)", "自身的结果"},
+	}
+	for _, tc := range cases {
+		reg2 := newStubRegistry()
+		reg2.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+		reg2.Register(specNode{t: "k8s-deploy", params: []string{"image"}, script: tc.script})
+		c2 := New(reg2)
+		g2 := &model.Graph{Name: "p2", Version: 1}
+		g2.Nodes = []model.Node{
+			{ID: "git-clone", Type: "git-clone"},
+			{ID: "deploy", Type: "k8s-deploy"},
+		}
+		g2.Edges = []model.Edge{{Source: "git-clone", Target: "deploy"}}
+		_, err := c2.Compile(g2, "ns")
+		if err == nil {
+			t.Errorf("%s: 应编译失败", tc.name)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: 错误应含 %q，实际 %v", tc.name, tc.want, err)
+		}
+	}
+}

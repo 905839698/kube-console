@@ -55,7 +55,7 @@
       </el-col>
     </el-row>
 
-    <!-- 节点状态 + 资源趋势 -->
+    <!-- 节点状态 + 节点资源使用排行 -->
     <el-row :gutter="16" style="margin-top: 16px">
       <el-col :span="12">
         <el-card shadow="never">
@@ -75,13 +75,15 @@
       </el-col>
       <el-col :span="12">
         <el-card shadow="never">
-          <template #header>
-            <div class="card-header">
-              <span>集群资源趋势</span>
-              <RangeSwitch v-model="range" @change="loadMonitor" />
-            </div>
-          </template>
-          <MetricChart :series="chartSeries" height="340px" y-axis-name="%" />
+          <template #header>节点资源使用排行</template>
+          <el-tabs v-model="rankTab">
+            <el-tab-pane label="CPU" name="cpu">
+              <RankTable :items="monitor?.nodeCpuRank || []" unit="%" />
+            </el-tab-pane>
+            <el-tab-pane label="内存" name="mem">
+              <RankTable :items="monitor?.nodeMemRank || []" unit="%" />
+            </el-tab-pane>
+          </el-tabs>
         </el-card>
       </el-col>
     </el-row>
@@ -126,29 +128,6 @@
         </el-card>
       </el-col>
     </el-row>
-
-    <!-- 节点排行 + 命名空间排行 -->
-    <el-row :gutter="16" style="margin-top: 16px">
-      <el-col :span="12">
-        <el-card shadow="never">
-          <template #header>节点资源使用排行</template>
-          <el-tabs v-model="rankTab">
-            <el-tab-pane label="CPU" name="cpu">
-              <RankTable :items="monitor?.nodeCpuRank || []" unit="%" />
-            </el-tab-pane>
-            <el-tab-pane label="内存" name="mem">
-              <RankTable :items="monitor?.nodeMemRank || []" unit="%" />
-            </el-tab-pane>
-          </el-tabs>
-        </el-card>
-      </el-col>
-      <el-col :span="12">
-        <el-card shadow="never">
-          <template #header>命名空间 CPU 使用排行</template>
-          <RankTable :items="monitor?.namespaceCpuRank || []" unit="%" />
-        </el-card>
-      </el-col>
-    </el-row>
   </div>
 </template>
 
@@ -160,7 +139,6 @@ import { Refresh } from '@element-plus/icons-vue'
 import StatusTag from '../components/StatusTag.vue'
 import MetricCard from '../components/MetricCard.vue'
 import MetricChart, { type ChartSeries } from '../components/MetricChart.vue'
-import RangeSwitch from '../components/RangeSwitch.vue'
 import { useClusterStore } from '../store/cluster'
 
 const router = useRouter()
@@ -168,7 +146,6 @@ const clusterStore = useClusterStore()
 const stats = ref<OverviewStats>()
 const monitor = ref<MonitorOverview>()
 const loading = ref(false)
-const range = ref('6h')
 const rankTab = ref('cpu')
 
 const cards = computed(() => [
@@ -176,13 +153,6 @@ const cards = computed(() => [
   { label: 'Pod', value: stats.value ? `${stats.value.podsRunning}/${stats.value.pods}` : '-', icon: 'Grid', color: '#67c23a' },
   { label: '工作负载', value: stats.value ? stats.value.deployments + stats.value.statefulSets + stats.value.daemonSets : '-', icon: 'Box', color: '#e6a23c' },
   { label: '命名空间', value: stats.value?.namespaces ?? '-', icon: 'FolderOpened', color: '#f56c6c' },
-])
-
-const chartSeries = computed<ChartSeries[]>(() => [
-  { name: 'CPU 使用率', data: monitor.value?.cpuUsageTrend || [], color: '#409eff', unit: '%' },
-  { name: '内存使用率', data: monitor.value?.memUsageTrend || [], color: '#67c23a', unit: '%' },
-  { name: '磁盘使用率', data: monitor.value?.diskUsageTrend || [], color: '#e6a23c', unit: '%' },
-  { name: '网络接收', data: monitor.value?.netRxTrend || [], color: '#f56c6c', unit: 'MB/s' },
 ])
 
 const netTxText = computed(() =>
@@ -288,7 +258,8 @@ async function loadStats() {
 
 async function loadMonitor() {
   try {
-    monitor.value = await k8sApi.monitorOverview(range.value)
+    // 无时间范围切换控件，固定近 6h（趋势数据仍供顶部 MetricCard 迷你图使用）
+    monitor.value = await k8sApi.monitorOverview('6h')
   } catch { /* 无 Prometheus 时静默降级 */ }
 }
 
@@ -305,7 +276,6 @@ onMounted(load)
 .stat-inner { display: flex; align-items: center; gap: 14px; }
 .stat-value { font-size: 26px; font-weight: 600; color: #303133; }
 .stat-label { font-size: 13px; color: #909399; }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
 .cp-empty-tip { color: #909399; font-size: 13px; padding: 8px 0; }
 .cp-grid { display: flex; flex-wrap: wrap; gap: 12px; }
 .cp-item {

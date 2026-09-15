@@ -96,6 +96,7 @@ import { amApi, type AMSilenceItem, type AMStatusItem, type AMMatcherItem } from
 import { useClusterStore } from '../../store/cluster'
 import { useUserStore } from '../../store/user'
 import AmConfigDialog from './AmConfigDialog.vue'
+import { confirmDelete } from '../../utils/confirm'
 
 const clusterStore = useClusterStore()
 const userStore = useUserStore()
@@ -187,7 +188,7 @@ async function submit() {
 
 async function remove(row: AMSilenceItem) {
   try {
-    await ElMessageBox.confirm('确定删除该静默规则？删除后命中的告警将恢复推送。', '删除静默', { type: 'warning' })
+    await confirmDelete(String(row.id), { title: '删除静默', warning: '删除后命中的告警将恢复推送。请输入静默规则 ID 确认。' })
   } catch {
     return
   }

@@ -70,6 +70,33 @@ func (s *Service) deleteSecretAll(ctx context.Context, cluster, name string) {
 	}
 }
 
+// EnsureInNamespace 把凭证 Secret 对齐到 run 所在命名空间。幂等。
+// 仅靠创建/更新时的扇出同步不可靠：项目 ns 的副本可能缺失（新建项目），
+// 也可能存在但过期（扇出某次失败/漏发后一直留着旧版本——旧副本 envFrom
+// 取不到新加的 username/password key，Pod 起得来但任务里没有凭证，表现为
+// "未注入 registry 凭证" WARN + 401）。这里每次 run 都从平台 ns 的权威副本
+// （凭证保存时的固定落点）强制对齐（EnsureSecret 合并 patch，类型变更时删建）；
+// 平台 ns 副本也缺失（Secret 被外部删除）时返回明确错误，引导重新保存凭证。
+func (s *Service) EnsureInNamespace(ctx context.Context, cluster, namespace string, c *model.CICredential) error {
+	k8s, err := s.k8sFor(cluster)
+	if err != nil {
+		return errcode.Newf(errcode.DepUnavailable, "集群不可用: %v", err)
+	}
+	data, err := k8s.SecretData(ctx, c.SecretNS, c.SecretName)
+	if err != nil {
+		return errcode.Newf(errcode.DepUnavailable, "读取凭证 Secret 失败: %v", err)
+	}
+	if len(data) == 0 {
+		return errcode.Newf(errcode.NotFound,
+			"凭证「%s」的密钥材料缺失（Secret %s 在平台命名空间 %s 不存在，可能被外部删除），请到 CI 凭证管理重新保存该凭证",
+			c.Name, c.SecretName, c.SecretNS)
+	}
+	if err := k8s.EnsureSecret(ctx, namespace, c.SecretName, data); err != nil {
+		return errcode.Newf(errcode.DepUnavailable, "同步凭证 Secret 到命名空间 %s 失败: %v", namespace, err)
+	}
+	return nil
+}
+
 // credParamValues 返回节点实例中所有 type=credential 属性对应的凭证名。
 // 只有这些属性名承载凭证引用，扫全部 string 参数值会把任意字符串误判成凭证名。
 func credParamValues(reg nodetype.Registry, n dsl.Node) []string {
@@ -219,8 +246,9 @@ func (s *Service) List(ctx context.Context, cluster string, projectID *uint) ([]
 	return cs, nil
 }
 
-// credReferences 扫描所有流水线的最新版本 DSL，返回 凭证名 -> 引用它的流水线名列表。
-func (s *Service) credReferences(ctx context.Context) map[string][]string {
+// credReferences 扫描指定集群下流水线的最新版本 DSL，返回 凭证名 -> 引用它的流水线名列表。
+// 凭证与 Secret 都是集群隔离的，跨集群同名凭证不构成引用（否则会误拦/误报）。
+func (s *Service) credReferences(ctx context.Context, cluster string) map[string][]string {
 	out := map[string][]string{}
 	var versions []model.CIPipelineVersion
 	if err := s.db.WithContext(ctx).
@@ -229,7 +257,7 @@ func (s *Service) credReferences(ctx context.Context) map[string][]string {
 		return out
 	}
 	var pipes []model.CIPipeline
-	_ = s.db.WithContext(ctx).Find(&pipes).Error
+	_ = s.db.WithContext(ctx).Where("cluster_name = ?", cluster).Find(&pipes).Error
 	nameByID := map[uint]string{}
 	for i := range pipes {
 		nameByID[pipes[i].ID] = pipes[i].Name
@@ -252,7 +280,11 @@ func (s *Service) credReferences(ctx context.Context) map[string][]string {
 }
 
 func (s *Service) fillReferences(ctx context.Context, cs []model.CICredential) {
-	refs := s.credReferences(ctx)
+	if len(cs) == 0 {
+		return
+	}
+	// List 按集群过滤，cs 同属一个集群
+	refs := s.credReferences(ctx, cs[0].ClusterName)
 	for i := range cs {
 		if r, ok := refs[cs[i].Name]; ok {
 			cs[i].References = r
@@ -262,10 +294,11 @@ func (s *Service) fillReferences(ctx context.Context, cs []model.CICredential) {
 
 // activeRunRefs 检查进行中的 run（pending/running）是否引用该凭证，返回 run id 列表。
 // 删除凭证会连带删 K8s Secret，排队中的 TaskRun 起 Pod 时 envFrom 会失败。
-func (s *Service) activeRunRefs(ctx context.Context, credName string) []uint {
+// 按集群过滤：run 与凭证同集群，跨集群同名凭证不相关。
+func (s *Service) activeRunRefs(ctx context.Context, cluster, credName string) []uint {
 	var runs []model.CIRun
 	if err := s.db.WithContext(ctx).
-		Where("status IN ?", []string{model.CIRunStatusPending, model.CIRunStatusRunning}).
+		Where("status IN ? AND cluster_name = ?", []string{model.CIRunStatusPending, model.CIRunStatusRunning}, cluster).
 		Find(&runs).Error; err != nil {
 		return nil
 	}
@@ -452,8 +485,14 @@ func (s *Service) Delete(ctx context.Context, id uint) error {
 		return err
 	}
 	// 0) 进行中的 run 仍引用该凭证时拒绝删除（删 Secret 会让排队 TaskRun 起 Pod 失败）
-	if refs := s.activeRunRefs(ctx, c.Name); len(refs) > 0 {
+	if refs := s.activeRunRefs(ctx, c.ClusterName, c.Name); len(refs) > 0 {
 		return errcode.Newf(errcode.Conflict, "凭证被进行中的执行引用（run #%v），请等待其结束后再删除", refs)
+	}
+	// 0.5) 最新版本流水线仍引用时拒绝删除：删掉后流水线的 credential 引用悬空，
+	// 运行时注入会失败，表现为任务里"未注入 registry 凭证"之类莫名报错
+	// （文档承诺的"被引用拒绝"行为）
+	if pipes := s.credReferences(ctx, c.ClusterName)[c.Name]; len(pipes) > 0 {
+		return errcode.Newf(errcode.Conflict, "凭证被流水线 %v 的最新版本引用，请先在设计器中改选其它凭证或移除引用后再删除", pipes)
 	}
 	// 1) 删库  2) 删 K8s Secret（best effort）
 	if err := s.db.WithContext(ctx).Delete(&c).Error; err != nil {
@@ -463,10 +502,11 @@ func (s *Service) Delete(ctx context.Context, id uint) error {
 	return nil
 }
 
-// GetRef 按名称取凭证引用（供 runtime 注入 Task secretKeyRef）。
-func (s *Service) GetRef(ctx context.Context, name string) (*model.CICredential, error) {
+// GetRef 按集群+名称取凭证引用（供 runtime 注入 Task secretKeyRef）。
+// Secret 与凭证都是集群隔离的：跨集群同名凭证不可用（其 Secret 不在本集群）。
+func (s *Service) GetRef(ctx context.Context, cluster, name string) (*model.CICredential, error) {
 	var c model.CICredential
-	if err := s.db.WithContext(ctx).Where("name = ?", name).First(&c).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("cluster_name = ? AND name = ?", cluster, name).First(&c).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, errcode.Newf(errcode.NotFound, "凭证不存在: %s", name)
 		}
@@ -512,10 +552,10 @@ func (s *Service) GitAuth(ctx context.Context, c *model.CICredential) (username,
 	}
 }
 
-// GetRefByID 按 id 取凭证引用（兼容前端早期提交数字 id 的 DSL）。
-func (s *Service) GetRefByID(ctx context.Context, id uint) (*model.CICredential, error) {
+// GetRefByID 按集群+id 取凭证引用（兼容前端早期提交数字 id 的 DSL）。
+func (s *Service) GetRefByID(ctx context.Context, cluster string, id uint) (*model.CICredential, error) {
 	var c model.CICredential
-	if err := s.db.WithContext(ctx).First(&c, id).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("cluster_name = ?", cluster).First(&c, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, errcode.Newf(errcode.NotFound, "凭证不存在: id=%d", id)
 		}

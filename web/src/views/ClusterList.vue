@@ -86,6 +86,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { clusterApi, grafanaApi, k8sApi, type Cluster } from '../api'
 import { useClusterStore } from '../store/cluster'
 import StatusTag from '../components/StatusTag.vue'
+import { confirmDelete } from '../utils/confirm'
 
 const clusterStore = useClusterStore()
 const loading = ref(false)
@@ -199,7 +200,7 @@ async function testConn(row: Cluster) {
 
 async function removeCluster(row: Cluster) {
   try {
-    await ElMessageBox.confirm(`确定删除集群 ${row.name}？该操作不可恢复。`, '删除集群', { type: 'warning' })
+    await confirmDelete(row.name, { title: '删除集群', warning: '将删除集群注册信息，该操作不可恢复。' })
   } catch {
     return
   }

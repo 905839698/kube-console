@@ -1,7 +1,9 @@
 package compiler
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -243,6 +245,19 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 		}
 	}
 
+	// git-clone 节点 ID（首个）：build-image 等节点的默认 tag 引用其 git_commit
+	// 结果。历史默认值有两种坏写法，统一改写为实际节点 ID 的引用：
+	//   $(params.git_commit)                       —— 误把任务结果当 Pipeline 参数
+	//   $(tasks.git-clone.results.git_commit)      —— git-clone 节点被改名后引用悬空
+	// 没有该类型节点时交由 validateTaskRefs 报错（引用注定解析不出）。
+	gitCloneID := ""
+	for _, id := range order {
+		if !isCond[id] && byID[id].Type == "git-clone" {
+			gitCloneID = id
+			break
+		}
+	}
+
 	for _, id := range order {
 		n := byID[id]
 		if isCond[id] {
@@ -257,6 +272,7 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 			return nil, fmt.Errorf("渲染节点 %s: %w", id, err)
 		}
 		injectPreShell(&taskSpec, n.Params)
+		rewriteGitCommitRefs(&taskSpec, id, gitCloneID)
 
 		pt := TektonPTask{Name: id, TaskSpec: &taskSpec}
 		for _, ws := range taskSpec.Workspaces {
@@ -294,7 +310,103 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 		spec.Spec.Tasks = append(spec.Spec.Tasks, pt)
 	}
 
+	// 编译期校验 Tekton 变量引用，把 webhook 的笼统 "non-existent variable"
+	// 拒绝提前为指明节点与写法的平台错误
+	if err := validateTaskRefs(spec); err != nil {
+		return nil, err
+	}
+
 	return spec, nil
+}
+
+// rewriteGitCommitRefs 把任务 spec 内对 git-clone commit 结果的历史坏引用改写为
+// 实际 git-clone 节点的 $(tasks.<id>.results.git_commit)（无 git-clone 节点时不改写，
+// 交给 validateTaskRefs 报错）。经 JSON 序列化做全文替换，覆盖 script/env/args 等任意字段。
+func rewriteGitCommitRefs(spec *nodetype.TaskSpec, taskID, gitCloneID string) {
+	if gitCloneID == "" || taskID == gitCloneID {
+		return
+	}
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		return
+	}
+	s := string(raw)
+	const legacy = "$(params.git_commit)"
+	const fixed = "$(tasks.git-clone.results.git_commit)"
+	if !strings.Contains(s, legacy) && !strings.Contains(s, fixed) {
+		return
+	}
+	target := "$(tasks." + gitCloneID + ".results.git_commit)"
+	s = strings.ReplaceAll(s, legacy, target)
+	s = strings.ReplaceAll(s, fixed, target)
+	var out nodetype.TaskSpec
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return // 改写失败保持原样，由 validateTaskRefs 给出明确错误
+	}
+	*spec = out
+}
+
+// tektonRefRe 匹配 taskSpec 内的 Tekton 变量引用：$(params.X) / $(tasks.T.results.R)。
+// $(workspaces.*), $(results.*), $(context.*) 等按 Tekton 语义固定可用，不在校验范围。
+var tektonRefRe = regexp.MustCompile(`\$\((params|tasks)\.([a-zA-Z0-9._-]+)\)`)
+
+// validateTaskRefs 校验任务 spec 里的 Tekton 变量引用，替代 webhook 的
+// "non-existent variable in ..." 笼统拒绝：
+//   - $(params.NAME)：嵌入 taskSpec 内 $(params.X) 解析的是该 Task 自身声明的
+//     参数，不是 Pipeline 参数——历史默认值曾误用后者导致 apply 被 webhook 拒绝；
+//   - $(tasks.T.results.R)：T 必须是本 Pipeline 生成的任务且声明了结果 R，
+//     且不允许引用自身结果（结果只能被下游任务消费）。
+func validateTaskRefs(spec *PipelineSpec) error {
+	taskParams := map[string]map[string]bool{}
+	taskResults := map[string]map[string]bool{}
+	for i := range spec.Spec.Tasks {
+		t := &spec.Spec.Tasks[i]
+		params := map[string]bool{}
+		for _, p := range t.TaskSpec.Params {
+			params[p.Name] = true
+		}
+		results := map[string]bool{}
+		for _, r := range t.TaskSpec.Results {
+			results[r.Name] = true
+		}
+		taskParams[t.Name] = params
+		taskResults[t.Name] = results
+	}
+	for i := range spec.Spec.Tasks {
+		t := &spec.Spec.Tasks[i]
+		if t.TaskSpec == nil {
+			continue
+		}
+		raw, err := json.Marshal(t.TaskSpec)
+		if err != nil {
+			continue
+		}
+		for _, m := range tektonRefRe.FindAllStringSubmatch(string(raw), -1) {
+			switch m[1] {
+			case "params":
+				if !taskParams[t.Name][m[2]] {
+					return fmt.Errorf("任务 %s 引用了未声明的参数 $(params.%s)：嵌入 taskSpec 内 $(params.X) 只能引用该任务自身的参数；引用上游任务结果请写 $(tasks.<任务名>.results.<结果名>)", t.Name, m[2])
+				}
+			case "tasks":
+				rest := m[2]
+				dot := strings.Index(rest, ".results.")
+				if dot < 0 {
+					return fmt.Errorf("任务 %s 的引用 $(tasks.%s) 格式非法（应为 $(tasks.<任务名>.results.<结果名>)）", t.Name, rest)
+				}
+				tname, rname := rest[:dot], rest[dot+len(".results."):]
+				if tname == t.Name {
+					return fmt.Errorf("任务 %s 引用了自身的结果 $(tasks.%s.results.%s)：结果只能被下游任务引用", t.Name, tname, rname)
+				}
+				if _, ok := taskResults[tname]; !ok {
+					return fmt.Errorf("任务 %s 引用了不存在的任务结果 $(tasks.%s.results.%s)：流水线中没有名为 %s 的任务节点（可能是节点被改名/删除，请重新在参数里选择上游结果）", t.Name, tname, rname, tname)
+				}
+				if !taskResults[tname][rname] {
+					return fmt.Errorf("任务 %s 引用的结果 $(tasks.%s.results.%s) 不存在：%s 未声明该结果", t.Name, tname, rname, tname)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // condExpr 一个条件节点对某个变量的比较表达式。

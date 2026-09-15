@@ -117,6 +117,7 @@ import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { helmApi, nsParam, type HelmRepoItem, type RepoChartItem } from '../api'
 import { useNamespaceStore } from '../store/namespace'
 import YamlEditor from '../components/YamlEditor.vue'
+import { confirmDelete } from '../utils/confirm'
 
 const nsStore = useNamespaceStore()
 
@@ -185,7 +186,7 @@ async function save() {
 
 async function doRemove(row: HelmRepoItem) {
   try {
-    await ElMessageBox.confirm(`确定删除仓库 ${row.name}？`, '删除', { type: 'warning' })
+    await confirmDelete(row.name, { title: '删除 Chart 仓库' })
   } catch {
     return
   }

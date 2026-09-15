@@ -509,6 +509,7 @@ import { useUserStore } from '../store/user'
 import { activeCluster } from '../store/clusterRef'
 import { invalidateNodeTypes } from './ci/nodes'
 import RunLog from './ci/RunLog.vue'
+import { confirmDelete } from '../utils/confirm'
 
 const userStore = useUserStore()
 const route = useRoute()
@@ -860,7 +861,7 @@ async function dupPipe(p: CIPipeline) {
   await loadPipelines()
 }
 async function delPipe(p: CIPipeline) {
-  await ElMessageBox.confirm(`删除流水线「${p.name}」？执行历史保留，进行中的执行会拒绝删除。`, '删除', { type: 'warning' })
+  await confirmDelete(p.name, { title: '删除流水线', warning: '执行历史保留，进行中的执行会拒绝删除。' })
   await ciApi.deletePipeline(p.id)
   ElMessage.success('已删除')
   await loadPipelines()
@@ -892,7 +893,7 @@ async function saveProj() {
   } finally { saving.value = false }
 }
 async function delProj(p: CIProject) {
-  await ElMessageBox.confirm(`删除项目「${p.displayName || p.name}」？其下流水线需先清理，进行中的执行会拒绝删除。`, '删除', { type: 'warning' })
+  await confirmDelete(p.name, { title: '删除项目', warning: `删除项目「${p.displayName || p.name}」，其下流水线需先清理，进行中的执行会拒绝删除。` })
   await ciApi.deleteProject(p.id)
   ElMessage.success('已删除')
   await loadProjects()
@@ -953,7 +954,7 @@ async function saveCred() {
   } finally { saving.value = false }
 }
 async function delCred(row: any) {
-  await ElMessageBox.confirm(`删除凭据「${row.name}」？其 K8s Secret 一并删除；被流水线引用时会拒绝。`, '删除', { type: 'warning' })
+  await confirmDelete(row.name, { title: '删除凭据', warning: '其 K8s Secret 一并删除；被流水线引用时会拒绝。' })
   await ciApi.deleteCredential(row.id)
   ElMessage.success('已删除')
   await loadCredentials()
@@ -1030,7 +1031,7 @@ async function saveGlobal() {
   } finally { saving.value = false }
 }
 async function delGlobal(row: CIGlobalVar) {
-  await ElMessageBox.confirm(`删除全局变量 ${row.key}？引用它的流水线将保留占位符原样运行。`, '删除', { type: 'warning' })
+  await confirmDelete(row.key, { title: '删除全局变量', warning: '引用它的流水线将保留占位符原样运行。' })
   await ciApi.deleteGlobal(row.id)
   ElMessage.success('已删除')
   await loadGlobals()

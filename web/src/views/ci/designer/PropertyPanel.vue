@@ -135,8 +135,25 @@ function optionsOf(p: CIPropSchema): Opt[] {
     default:
       break
   }
-  if (p.type === 'credential') return credentials.value.map((c) => ({ value: c.name, label: c.name }))
+  if (p.type === 'credential') {
+    // 下拉标签带凭证形态：token/kubeconfig 等形态不含 username/password，
+    // 误选到 registry/构建类节点会出现"未注入 registry 凭证"的运行时 WARN
+    return credentials.value.map((c) => ({
+      value: c.name,
+      label: `${c.name}（${CRED_FORM_LABELS[c.form] ?? c.form}）`,
+    }))
+  }
   return p.options ?? []
+}
+
+// 凭证 form → 中文形态标签（与凭据管理页一致）
+const CRED_FORM_LABELS: Record<string, string> = {
+  basic: '账密',
+  token: 'Token',
+  dockerconfig: 'DockerConfig',
+  kubeconfig: 'KubeConfig',
+  aksk: 'AK/SK',
+  raw: 'RAW',
 }
 
 function metaOf(p: CIPropSchema): Meta {

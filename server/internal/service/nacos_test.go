@@ -3,6 +3,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
@@ -168,5 +169,44 @@ func TestNacosNsParam(t *testing.T) {
 	v1 := &NacosClient{}
 	if got := v1.nsParam(""); got != "" {
 		t.Fatalf("v1 nsParam(\"\") = %q, want empty", got)
+	}
+}
+
+// TestNacosAlreadyExists 幂等冲突容错：v1/v3 应用层文案 + 数据库唯一约束（MySQL/Derby）
+func TestNacosAlreadyExists(t *testing.T) {
+	tolerated := []string{
+		`Nacos 返回 500: {"message":"user 'prod' already bound to the role 'ROLE_prod'!"}`,
+		`Nacos 返回 500: {"message":"user 'prod' already exist!"}`,
+		`Nacos 返回错误 10001: role 'prod' already exists`,
+		`Nacos 返回 500: Duplicate entry 'ROLE_prod-prod-rw' for key 'uk_role_permission'`,
+		`Nacos 返回 500: The statement was aborted because it would have caused a duplicate key value in a unique or primary key constraint`,
+	}
+	for _, msg := range tolerated {
+		if !nacosAlreadyExists(fmt.Errorf("%s", msg)) {
+			t.Fatalf("应视为幂等冲突被容忍: %s", msg)
+		}
+	}
+	fatal := []string{
+		`Nacos 返回 403: unknown user!`,
+		`Nacos 返回 500: role 'prod' not found!`,
+		`Nacos 不可达: connection refused`,
+	}
+	for _, msg := range fatal {
+		if nacosAlreadyExists(fmt.Errorf("%s", msg)) {
+			t.Fatalf("不应被容忍: %s", msg)
+		}
+	}
+	if nacosAlreadyExists(nil) {
+		t.Fatal("nil 错误不应被容忍")
+	}
+}
+
+// TestNacosDuplicateMessageSurvivesTruncation 回归：真实 MySQL 幂等冲突的 Spring 错误体中
+// "Duplicate entry" 出现在第 201 字符（JSON 前缀占位），错误信息截断必须放宽到 500 才能保留关键词
+func TestNacosDuplicateMessageSurvivesTruncation(t *testing.T) {
+	body := `{"timestamp":"2026-09-14T09:19:53.127+00:00","status":500,"error":"Internal Server Error","message":"PreparedStatementCallback; SQL [INSERT INTO permissions (role, resource, action) VALUES (?, ?, ?)]; Duplicate entry 'ROLE_agentgateway-system-agentgateway-system-rw' for key 'uk_role_permission'; nested exception is com.mysql.cj.jdbc.exceptions.SQLException","path":"/nacos/v3/auth/permission"}`
+	err := fmt.Errorf("Nacos 返回 500: %s", truncateStr(body, 500))
+	if !nacosAlreadyExists(err) {
+		t.Fatalf("500 字符截断后幂等冲突关键词丢失: %s", err)
 	}
 }

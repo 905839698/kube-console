@@ -50,6 +50,7 @@ import { k8sApi, type NamespaceItem } from '../api'
 import StatusTag from '../components/StatusTag.vue'
 import { useClusterStore } from '../store/cluster'
 import { parseDuration } from '../utils/sort'
+import { confirmDelete } from '../utils/confirm'
 
 const router = useRouter()
 const route = useRoute()
@@ -103,7 +104,7 @@ async function openCreate() {
 
 async function remove(name: string) {
   try {
-    await ElMessageBox.confirm(`删除命名空间 ${name} 将同时删除其中所有资源，确定？`, '删除命名空间', { type: 'warning' })
+    await confirmDelete(name, { title: '删除命名空间', warning: '将同时删除命名空间内的所有资源，不可恢复。' })
   } catch {
     return
   }

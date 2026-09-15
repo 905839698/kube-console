@@ -554,23 +554,25 @@ func (h *K8sHandler) ApplyYAML(c *gin.Context) {
 	response.OK(c, gin.H{"created": created})
 }
 
-// ExportYAML GET /yaml/export?kind=&namespace=&search= —— 导出筛选后的资源为多文档 YAML
+// ExportYAML POST /yaml/export  {"resources":[{"kind","namespace","name"}]} → 多文档 YAML + 跳过项
 func (h *K8sHandler) ExportYAML(c *gin.Context) {
 	client := h.client(c)
 	if client == nil {
 		return
 	}
-	kind := c.Query("kind")
-	if kind == "" {
-		response.Fail(c, 400, 400, "缺少 kind 参数")
+	var req struct {
+		Resources []service.ExportRef `json:"resources"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Resources) == 0 {
+		response.Fail(c, 400, 400, "resources 不能为空")
 		return
 	}
-	yamlStr, err := h.k8s.ExportGeneric(c.Request.Context(), client, kind, queryNamespace(c), c.Query("search"))
+	yamlStr, skipped, err := h.k8s.ExportResources(c.Request.Context(), client, req.Resources)
 	if err != nil {
 		response.K8sError(c, err)
 		return
 	}
-	response.OK(c, gin.H{"yaml": yamlStr})
+	response.OK(c, gin.H{"yaml": yamlStr, "skipped": skipped})
 }
 
 // GetYAML 获取任意受支持资源的 YAML（参数: resource, namespace, name）

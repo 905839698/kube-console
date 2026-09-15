@@ -1114,53 +1114,69 @@ func (s *K8sService) ListGeneric(ctx context.Context, c *kube.Client, kind, name
 	return items, nil
 }
 
-// ExportGeneric 导出筛选后的资源为多文档 YAML（kind 模式，与列表页同参：namespace 逗号分隔多选、search 名称过滤）。
+// ExportRef 导出选中的资源引用（Kuboard 式逐层勾选：ns → 控制器/服务/配置/其他）
+type ExportRef struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// ExportSkipped 导出失败被跳过的资源（已删除/不支持等），不阻塞其余项
+type ExportSkipped struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Error     string `json:"error"`
+}
+
+// ExportResources 按显式选择导出资源为多文档 YAML（`---` 分隔）。
 // 每个对象做 CleanForExport 深度清洗（去 uid/resourceVersion/managedFields/status/last-applied 注解），
-// 导出文件可直接再导入。
-func (s *K8sService) ExportGeneric(ctx context.Context, c *kube.Client, kind, namespace, search string) (string, error) {
-	gvr, ok, err := kube.ResolveGVR(ctx, c, kind)
-	if !ok {
-		if kind == "routes" {
-			gvr = configmapGVR()
-		} else if err != nil {
-			return "", err
-		} else {
-			return "", fmt.Errorf("不支持的资源类型: %s", kind)
-		}
-	}
+// 导出文件可直接再导入；单项失败记入 skipped 并继续。
+func (s *K8sService) ExportResources(ctx context.Context, c *kube.Client, refs []ExportRef) (string, []ExportSkipped, error) {
 	var b strings.Builder
-	for _, ns := range splitNamespaces(namespace) {
-		if kube.IsClusterScoped(kind) {
+	skipped := make([]ExportSkipped, 0)
+	gvrCache := map[string]schema.GroupVersionResource{}
+	seen := map[string]bool{}
+	for _, r := range refs {
+		if r.Kind == "" || r.Name == "" {
+			continue
+		}
+		key := r.Kind + "/" + r.Namespace + "/" + r.Name
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		gvr, ok := gvrCache[r.Kind]
+		if !ok {
+			var err error
+			gvr, ok, err = kube.ResolveGVR(ctx, c, r.Kind)
+			if err != nil || !ok {
+				skipped = append(skipped, ExportSkipped{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, Error: "不支持的资源类型"})
+				continue
+			}
+			gvrCache[r.Kind] = gvr
+		}
+		ns := r.Namespace
+		if kube.IsClusterScoped(r.Kind) {
 			ns = ""
 		}
-		list, err := c.Dynamic.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{})
+		obj, err := c.Dynamic.Resource(gvr).Namespace(ns).Get(ctx, r.Name, metav1.GetOptions{})
 		if err != nil {
-			return "", err
+			skipped = append(skipped, ExportSkipped{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, Error: truncateStr(err.Error(), 200)})
+			continue
 		}
-		for i := range list.Items {
-			u := &list.Items[i]
-			if kind == "routes" && !hasRoutesAnnotation(u) {
-				continue
-			}
-			if !searchMatch(u.GetName(), search) {
-				continue
-			}
-			obj := u.DeepCopy()
-			kube.CleanForExport(obj)
-			data, err := yaml.Marshal(obj.Object)
-			if err != nil {
-				return "", err
-			}
-			if b.Len() > 0 {
-				b.WriteString("---\n")
-			}
-			b.Write(data)
+		kube.CleanForExport(obj)
+		data, err := yaml.Marshal(obj.Object)
+		if err != nil {
+			skipped = append(skipped, ExportSkipped{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, Error: truncateStr(err.Error(), 200)})
+			continue
 		}
-		if kube.IsClusterScoped(kind) {
-			break
+		if b.Len() > 0 {
+			b.WriteString("---\n")
 		}
+		b.Write(data)
 	}
-	return b.String(), nil
+	return b.String(), skipped, nil
 }
 
 // routesGVR 应用层路由使用的底层 GVR（ConfigMap）

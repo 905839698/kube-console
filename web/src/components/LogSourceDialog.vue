@@ -10,8 +10,8 @@
       <el-form-item label="ES 服务名"><el-input v-model="cfg.service" placeholder="如 elasticsearch-es-http" /></el-form-item>
       <el-form-item label="ES 端口"><el-input-number v-model="cfg.port" :min="1" :max="65535" /></el-form-item>
       <el-form-item label="直连地址">
-        <el-input v-model="cfg.directURL" placeholder="如 http://节点IP:NodePort（可选）" />
-        <div class="form-tip">留空则经 apiserver 服务代理访问。ES 开启安全认证（填了用户名）时必须走直连——代理会剥离认证头导致 401。做法：把 ES 服务改为 NodePort，填 http://任一节点IP:nodePort。</div>
+        <el-input v-model="cfg.directURL" placeholder="可选；跨集群/外部 ES 时填实际可达地址" />
+        <div class="form-tip">留空时：匿名 ES 经 apiserver 服务代理访问；安全 ES（填了用户名）自动走集群内 Service DNS 直连（控制台与 ES 同集群即可用）。注意 apiserver 代理会剥离认证头，安全 ES 无法走代理——控制台与 ES 不同集群时请填实际可达地址（如 http://节点IP:NodePort）。</div>
       </el-form-item>
       <el-form-item label="日志索引前缀">
         <el-input v-model="cfg.indexPrefix" placeholder="如 logstash- 或 k8s-{namespace}-（空=logstash-*）" />

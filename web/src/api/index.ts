@@ -535,9 +535,11 @@ export const k8sApi = {
   applyYaml: (yaml: string) => request<{ created: boolean }>({ url: '/yaml/apply', method: 'post', data: { yaml } }),
   getYaml: (resource: string, namespace: string, name: string) =>
     request<{ yaml: string }>({ url: '/yaml', params: { resource, namespace, name } }),
-  // 导出筛选后的资源为多文档 YAML（kind 模式，与资源列表页同参）
-  exportYaml: (kind: string, namespace: string, search = '') =>
-    request<{ yaml: string }>({ url: '/yaml/export', params: { kind, namespace, search } }),
+  // 导出勾选的资源为多文档 YAML（Kuboard 式逐层选择：ns → 控制器/服务/配置/其他）
+  exportYaml: (resources: { kind: string; namespace?: string; name: string }[]) =>
+    request<{ yaml: string; skipped: { kind: string; namespace?: string; name: string; error: string }[] }>(
+      { url: '/yaml/export', method: 'post', data: { resources } },
+    ),
 
   resourceDefs: (force = false) => request<GroupDef[]>({ url: '/resource-defs', params: { force: force ? 1 : undefined } }),
 

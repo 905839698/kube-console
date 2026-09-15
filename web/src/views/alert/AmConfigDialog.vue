@@ -68,6 +68,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { amApi } from '../../api'
 import { useClusterStore } from '../../store/cluster'
 import YamlEditor from '../../components/YamlEditor.vue'
+import { confirmDelete } from '../../utils/confirm'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits(['update:modelValue', 'saved'])
@@ -202,7 +203,7 @@ async function test() {
 
 async function remove() {
   try {
-    await ElMessageBox.confirm(`确定删除集群 ${clusterStore.current} 的 Alertmanager 配置？`, '删除配置', { type: 'warning' })
+    await confirmDelete(clusterStore.current, { title: '删除 Alertmanager 配置' })
   } catch {
     return
   }

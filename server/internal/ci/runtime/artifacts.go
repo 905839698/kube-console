@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"kube-console/server/internal/model"
+	"kube-console/server/internal/ci/errcode"
 	"kube-console/server/internal/ci/nodetype"
 	"kube-console/server/internal/ci/pipeline/compiler"
 	dsl "kube-console/server/internal/ci/pipeline/model"
@@ -70,11 +71,14 @@ func (s *Service) enrichGraph(g *dsl.Graph, branchOverride string) {
 //     的 step（按 $key / env://key 引用判断），而非任务内所有 step 全量可见。
 //     aksk 的 AWS 标准名（AWS_ACCESS_KEY_ID 等）已双写进 Secret，云 SDK 经 envFrom 直接读。
 //
-// 凭证名 → K8s Secret 名由 credential 服务解析；解析失败仅告警
-// （任务内会因缺凭证失败，日志可见）。返回本 run 需要的 imagePullSecrets 列表。
+// 凭证名 → K8s Secret 名由 credential 服务解析。解析失败/跨项目引用/Secret 缺失
+// 都直接报错终止启动：静默降级只会让任务在克隆/推送时以莫名的鉴权失败告终，
+// 不如启动前给出可操作的提示。返回本 run 需要的 imagePullSecrets 列表。
 // pipelineProjectID 为所属项目：项目级凭证只允许所属项目的流水线引用，
 // 否则 A 项目开发者按名引用 B 项目凭证即可把 B 的密钥注入自己的任务。
-func (s *Service) injectCredentials(ctx context.Context, spec *compiler.PipelineSpec, g *dsl.Graph, pipelineProjectID uint) []string {
+// cluster/ns 为 run 目标：注入前把凭据 Secret 按需拉齐到 run ns（凭据只在
+// 创建/更新时扇出同步，之后新建的项目 ns 没有副本，Pod 会报 secret not found）。
+func (s *Service) injectCredentials(ctx context.Context, spec *compiler.PipelineSpec, g *dsl.Graph, pipelineProjectID uint, cluster, ns string) ([]string, error) {
 	// 泛化：扫描节点 schema 中所有 credential 类型参数（如 credential / token），
 	// 而不写死某个参数名。
 	credByNode := map[string]string{}
@@ -106,7 +110,7 @@ func (s *Service) injectCredentials(ctx context.Context, spec *compiler.Pipeline
 		}
 	}
 	if len(credByNode) == 0 || s.creds == nil {
-		return nil
+		return nil, nil
 	}
 	var pullSecrets []string
 	for i := range spec.Spec.Tasks {
@@ -115,21 +119,25 @@ func (s *Service) injectCredentials(ctx context.Context, spec *compiler.Pipeline
 		if !ok || task.TaskSpec == nil {
 			continue
 		}
-		cred, err := s.creds.GetRef(ctx, credName)
+		cred, err := s.creds.GetRef(ctx, cluster, credName)
 		if err != nil {
 			// 兼容数字 id 形式的引用（前端早期版本提交凭证 id）
 			if id, perr := strconv.ParseUint(credName, 10, 64); perr == nil {
-				cred, err = s.creds.GetRefByID(ctx, uint(id))
+				cred, err = s.creds.GetRefByID(ctx, cluster, uint(id))
 			}
 		}
 		if err != nil {
-			log.Printf("runtime: 凭证 %s 解析失败，任务 %s 将无法使用凭证", credName, task.Name)
-			continue
+			return nil, errcode.Newf(errcode.NotFound,
+				"任务 %s 引用的凭证「%s」不存在（可能已删除），请到 CI 凭证管理创建或修改流水线的凭证引用", task.Name, credName)
 		}
 		// 归属校验：项目级凭证不允许跨项目引用（平台级 nil 凭证全局可用）
 		if cred.ProjectID != nil && *cred.ProjectID != pipelineProjectID {
-			log.Printf("runtime: 凭证 %s 属于其它项目，任务 %s 拒绝注入", credName, task.Name)
-			continue
+			return nil, errcode.Newf(errcode.Forbidden,
+				"任务 %s 引用的凭证「%s」属于其它项目，拒绝注入", task.Name, credName)
+		}
+		// Secret 按需拉齐到 run ns（凭据创建/更新时只扇出到当时的 ns，新建项目 ns 会漏）
+		if err := s.creds.EnsureInNamespace(ctx, cluster, ns, cred); err != nil {
+			return nil, err
 		}
 		switch cred.Form {
 		case model.CIFormDockerconfig:
@@ -170,7 +178,7 @@ func (s *Service) injectCredentials(ctx context.Context, spec *compiler.Pipeline
 			}
 		}
 	}
-	return pullSecrets
+	return pullSecrets, nil
 }
 
 // mountCredentialFile 给 Task 的所有 step 挂载凭证 Secret 的指定 key 为文件，

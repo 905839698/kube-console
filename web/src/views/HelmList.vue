@@ -157,6 +157,7 @@ import { helmApi, nsParam, type HelmReleaseItem, type HelmRepoItem, type RepoCha
 import { useNamespaceStore } from '../store/namespace'
 import { parseDuration } from '../utils/sort'
 import YamlEditor from '../components/YamlEditor.vue'
+import { confirmDelete } from '../utils/confirm'
 
 const router = useRouter()
 const nsStore = useNamespaceStore()
@@ -459,7 +460,7 @@ async function rollback(row: { version: number }) {
 
 async function uninstall(row: HelmReleaseItem) {
   try {
-    await ElMessageBox.confirm(`确定卸载应用 ${row.name}？该操作不可恢复`, '卸载', { type: 'warning' })
+    await confirmDelete(row.name, { title: '卸载应用', warning: '卸载不可恢复。' })
   } catch {
     return
   }

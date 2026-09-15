@@ -168,6 +168,7 @@ import type { ChartSeries } from '../components/MetricChart.vue'
 import RangeSwitch from '../components/RangeSwitch.vue'
 import { Box, Grid } from '@element-plus/icons-vue'
 import { useClusterStore } from '../store/cluster'
+import { confirmDelete } from '../utils/confirm'
 
 const route = useRoute()
 const router = useRouter()
@@ -321,7 +322,7 @@ async function loadMonitor() {
 
 async function doDelete() {
   try {
-    await ElMessageBox.confirm(`确定删除 Pod ${name.value}？`, '删除 Pod', { type: 'warning' })
+    await confirmDelete(name.value, { title: '删除 Pod' })
   } catch {
     return
   }

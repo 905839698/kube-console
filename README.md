@@ -71,7 +71,7 @@ CI / CD       CI 流水线 / ArgoCD 应用 / Helm Releases / Chart 仓库
 
 | 模块 | 功能 |
 | --- | --- |
-| CI 流水线（内置 Tekton） | 由 [ci-platform](http://gitlab.cqyxpt.site/cec/ci-platform) 融合而来的原生模块，**集群隔离**（全部接口经 X-Cluster 选择集群，Tekton 客户端按集群缓存）+ **命名空间隔离**（项目 = 一个 K8s 命名空间，Pipeline/Run/工作区 PVC/凭证 Secret 全部落在项目 ns）：**执行中心**（统计卡片 + WS 状态推送 + 5s 轮询兜底 + SSE 实时日志 + DAG 视图 + 人工审批 + 重跑 / 停止）、**流水线**（CRUD / 复制到项目 / 运行——分支或 Tag 下拉 / **vue-flow 可视化设计器**：19 类节点插件（go:embed 随二进制分发）、属性面板 schema 驱动 + Git 分支/Tag/K8s 目标/凭据动态下拉、Dagre 自动布局、JSON 导入导出、未保存离开拦截）、**项目**（CRUD，命名空间必填）、**制品**（build-image / upload-artifact 任务成功自动登记，血缘详情 + MinIO/Nexus 流式下载代理）、**发布记录**（k8s-deploy / helm-deploy 镜像快照 + 一键回滚）、**定时任务**（cron 调度 + 瞬时失败快速重试）、**Webhook**（GitLab push/tag/MR，token 走 URL，事件去重）、**全局变量**（`\${global.KEY}` 编译期注入）、**凭据**（basic / token / dockerconfig / kubeconfig / aksk / raw 六类，Secret 扇出到平台 ns + 各项目 ns，轮换语义：留空保持不变）；执行事件（成功/失败/待审批）推送通知渠道；未安装 Tekton 的集群优雅降级提示；写操作限管理员，SSE/WS 用 60s 短期流 token 查询鉴权 |
+| CI 流水线（内置 Tekton） | 由 [ci-platform](http://gitlab.cqyxpt.site/cec/ci-platform) 融合而来的原生模块，**集群隔离**（全部接口经 X-Cluster 选择集群，Tekton 客户端按集群缓存）+ **命名空间隔离**（项目 = 一个 K8s 命名空间，Pipeline/Run/工作区 PVC/凭证 Secret 全部落在项目 ns）：**执行中心**（统计卡片 + WS 状态推送 + 5s 轮询兜底 + SSE 实时日志 + DAG 视图 + 人工审批 + 重跑 / 停止）、**流水线**（CRUD / 复制到项目 / 运行——分支或 Tag 下拉 / **vue-flow 可视化设计器**：19 类节点插件（go:embed 随二进制分发）、属性面板 schema 驱动 + Git 分支/Tag/K8s 目标/凭据动态下拉、Dagre 自动布局、JSON 导入导出、未保存离开拦截）、**项目**（CRUD，命名空间必填）、**制品**（build-image / upload-artifact 任务成功自动登记，血缘详情 + MinIO/Nexus 流式下载代理）、**发布记录**（k8s-deploy / helm-deploy 镜像快照 + 一键回滚）、**定时任务**（cron 调度 + 瞬时失败快速重试）、**Webhook**（GitLab push/tag/MR，token 走 URL，事件去重）、**全局变量**（`\${global.KEY}` 编译期注入）、**凭据**（basic / token / dockerconfig / kubeconfig / aksk / raw 六类，Secret 扇出到平台 ns + 各项目 ns，运行流水线时按需拉齐到 run 所在 ns，轮换语义：留空保持不变）；执行事件（成功/失败/待审批）推送通知渠道；未安装 Tekton 的集群优雅降级提示；写操作限管理员，SSE/WS 用 60s 短期流 token 查询鉴权 |
 | ArgoCD 应用 | 通过 dynamic client 读取集群 `applications.argoproj.io` CRD：同步 / 健康状态列表、autoSync 标识、**手动触发刷新**（`refresh=normal` annotation）；未安装 ArgoCD 时优雅降级提示 |
 | Helm 应用 | **Releases**：跨命名空间列表、详情（manifest / values / notes 三 tab）、版本历史、**安装**（仓库 → chart → 版本 → values + wait / timeout / atomic）、**升级 / 回滚 / 卸载**；**Chart 仓库**：源管理（增删改 / 私有认证）、index 刷新（内存缓存 TTL）、chart 浏览多版本 |
 
@@ -99,7 +99,7 @@ OpenAPI 客户端**自动探测版本风格**：Nacos 1.x/2.x 走 v1 API，3.x �
 
 | 对象 | 功能 |
 | --- | --- |
-| K8s 资源 YAML | 通用资源列表页：**导出**（跟随当前命名空间筛选与搜索，多文档 `---` 分隔；深度清洗 uid/resourceVersion/managedFields/status/last-applied 注解，可直接再导入或入 Git）；**导入**（上传 .yaml/.yml → 多文档预览（Kind/名称/命名空间）→ create-or-update 逐个应用，逐条成败反馈，失败不中断整批） |
+| K8s 资源 YAML | 通用资源列表页：**导出**（Kuboard 式逐层选择：命名空间 → 控制器 / 服务与路由 / 配置 / 其他资源四类勾选，类与类型级全选；多文档 `---` 分隔；深度清洗 uid/resourceVersion/managedFields/status/last-applied 注解，可直接再导入或入 Git；单项失败跳过并提示）；**导入**（上传 .yaml/.yml → 多文档预览（Kind/名称/命名空间）→ create-or-update 逐个应用，逐条成败反馈，失败不中断整批） |
 | Nacos 配置 | 微服务 → 配置管理页：**导出**（所选命名空间全部配置含完整内容，JSON 文件，记录来源集群与时间）；**导入**（上传 JSON → 预览 → 按原命名空间或统一导入到指定命名空间 → 逐条发布，适合跨环境/集群迁移） |
 
 ### 镜像仓库（Harbor）
