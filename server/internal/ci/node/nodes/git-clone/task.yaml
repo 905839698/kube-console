@@ -29,6 +29,8 @@ results:
     description: 分支 / revision
   - name: git_url
     description: 仓库地址
+  - name: build_tag
+    description: "镜像 tag 推荐值：<分支或tag名>-<北京时间YYYYMMDDHHMMSS>-<CommitSHA>（非法字符归一化，长度≤128）"
 steps:
   - name: clone
     image: {{imageRegistry}}/git:2.43.4
@@ -78,6 +80,19 @@ steps:
         fi
       fi
       # result 必须无尾换行（echo 会带 \n，下游任务引用该 result 做镜像 tag 等会被污染）
-      printf '%s' "$(git rev-parse HEAD)" > $(results.git_commit.path)
+      SHA=$(git rev-parse HEAD)
+      printf '%s' "$SHA" > $(results.git_commit.path)
       printf '%s' "$REVISION" > $(results.git_branch.path)
       printf '%s' "$(params.url)" > $(results.git_url.path)
+      # build_tag = <分支/tag名>-<构建时刻>-<CommitSHA>，供 build-image 默认 tag 引用：
+      # Docker tag 合法字符集 [a-zA-Z0-9._-]，把分支/中的 / 与 + 等归一化为 -，空 ref 记 HEAD；
+      # 时间戳按北京时间（容器默认 UTC，显式 TZ 保证跨节点一致）
+      REF="$REVISION"
+      [ -z "$REF" ] && REF="HEAD"
+      REF=$(printf '%s' "$REF" | tr '/+ ' '---')
+      TS=$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)
+      BUILD_TAG="${REF}-${TS}-${SHA}"
+      # Docker tag 长度上限 128：超长时先缩短 SHA 到 7 位，仍超长则硬截断（字符集已合法）
+      [ "${#BUILD_TAG}" -gt 128 ] && BUILD_TAG="${REF}-${TS}-${SHA:0:7}"
+      [ "${#BUILD_TAG}" -gt 128 ] && BUILD_TAG="${BUILD_TAG:0:128}"
+      printf '%s' "$BUILD_TAG" > $(results.build_tag.path)

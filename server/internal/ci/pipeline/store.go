@@ -47,6 +47,15 @@ type GraphBody struct {
 // ============ 流水线 CRUD ============
 
 func (s *Store) Create(ctx context.Context, uid uint, req CreateReq) (*model.CIPipeline, error) {
+	// 项目内名称唯一是设计约束，但索引非唯一，需显式查（复制同名/撞名时给出可读错误）
+	var cnt int64
+	if err := s.db.WithContext(ctx).Model(&model.CIPipeline{}).
+		Where("project_id = ? AND name = ?", req.ProjectID, req.Name).Count(&cnt).Error; err != nil {
+		return nil, err
+	}
+	if cnt > 0 {
+		return nil, errcode.Newf(errcode.Conflict, "流水线名已存在: %s", req.Name)
+	}
 	p := &model.CIPipeline{
 		ClusterName: req.ClusterName,
 		ProjectID:   req.ProjectID,

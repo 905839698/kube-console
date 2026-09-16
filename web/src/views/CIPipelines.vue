@@ -94,7 +94,7 @@
               <el-button size="small" type="primary" plain @click="openDesigner(row)">设计器</el-button>
               <el-button v-if="row.latestVersion" size="small" text @click="openRun(row)">运行</el-button>
               <el-button size="small" text @click="openPipeDlg(row)">编辑</el-button>
-              <el-button size="small" text type="warning" :disabled="!canWrite" @click="dupPipe(row)">复制</el-button>
+              <el-button size="small" text type="warning" :disabled="!canWrite" @click="openDup(row)">复制</el-button>
               <el-button size="small" text type="danger" :disabled="!canWrite" @click="delPipe(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -408,6 +408,27 @@
       <template #footer>
         <el-button @click="pipeDlg = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="savePipe">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 流水线复制（同项目 / 跨项目，限当前集群） -->
+    <el-dialog v-model="dupDlg" title="复制流水线" width="440px">
+      <el-form label-width="90px" size="small">
+        <el-form-item label="源流水线">
+          <el-input :model-value="dupForm.src ? `${dupForm.src.name}（${projectName(dupForm.src.projectId)}）` : ''" disabled />
+        </el-form-item>
+        <el-form-item label="目标项目" required>
+          <el-select v-model="dupForm.targetProjectId" style="width: 100%">
+            <el-option v-for="p in projects" :key="p.id" :label="p.displayName || p.name" :value="p.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="新名称" required><el-input v-model="dupForm.name" placeholder="小写字母/数字/中划线" /></el-form-item>
+        <el-form-item label="描述"><el-input v-model="dupForm.description" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <div class="cfg-tip">复制最新已保存版本的 DSL；运行历史 / 定时 / Webhook 不随复制迁移。跨项目复制后，目标项目内缺少源流水线引用的项目级凭据时，需先在目标项目补齐。</div>
+      <template #footer>
+        <el-button @click="dupDlg = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="saveDup">复制</el-button>
       </template>
     </el-dialog>
 
@@ -847,18 +868,25 @@ async function savePipe() {
     await loadPipelines()
   } finally { saving.value = false }
 }
-async function dupPipe(p: CIPipeline) {
-  if (!projects.value.length) { ElMessage.warning('当前集群还没有项目'); return }
-  const options = projects.value.filter((x) => x.id !== p.projectId)
-  if (!options.length) { ElMessage.warning('没有其他可复制到的项目'); return }
-  const { value } = await ElMessageBox.prompt('选择复制到的项目（填项目 ID）', '复制流水线', {
-    inputValue: String(options[0].id),
-  })
-  const target = Number(value)
-  if (!target || !projects.value.some((x) => x.id === target)) { ElMessage.error('目标项目不存在'); return }
-  await ciApi.duplicatePipeline(p.id, { targetProjectId: target })
-  ElMessage.success('已复制')
-  await loadPipelines()
+// ---- 复制（同项目 / 跨项目） ----
+const dupDlg = ref(false)
+const dupForm = reactive<{ src?: CIPipeline; targetProjectId?: number; name: string; description: string }>({ name: '', description: '' })
+function openDup(p: CIPipeline) {
+  Object.assign(dupForm, { src: p, targetProjectId: p.projectId, name: p.name + '-copy', description: p.description || '' })
+  dupDlg.value = true
+}
+async function saveDup() {
+  const f = dupForm
+  if (!f.src) return
+  if (!f.targetProjectId) { ElMessage.warning('请选择目标项目'); return }
+  if (!f.name.trim()) { ElMessage.warning('新名称必填'); return }
+  saving.value = true
+  try {
+    await ciApi.duplicatePipeline(f.src.id, { targetProjectId: f.targetProjectId, name: f.name.trim(), description: f.description })
+    ElMessage.success(`已复制到 ${projectName(f.targetProjectId)}`)
+    dupDlg.value = false
+    await loadPipelines()
+  } finally { saving.value = false }
 }
 async function delPipe(p: CIPipeline) {
   await confirmDelete(p.name, { title: '删除流水线', warning: '执行历史保留，进行中的执行会拒绝删除。' })

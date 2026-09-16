@@ -315,6 +315,29 @@ func TestCompileRewriteGitCommitRefsRenamedNode(t *testing.T) {
 	}
 }
 
+// build-image 默认 tag 引用 build_tag 结果，git-clone 节点改名后前缀改写同样覆盖
+func TestCompileRewriteBuildTagRefRenamedNode(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit", "build_tag"}})
+	reg.Register(specNode{t: "build-image", script: "IMG=repo:$(tasks.git-clone.results.build_tag)"})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "src", Type: "git-clone"},
+		{ID: "build", Type: "build-image"},
+	}
+	g.Edges = []model.Edge{{Source: "src", Target: "build"}}
+
+	spec, err := c.Compile(g, "ns")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if script := taskScriptOf(spec, "build"); !strings.Contains(script, "$(tasks.src.results.build_tag)") {
+		t.Errorf("应改写为 $(tasks.src.results.build_tag): %s", script)
+	}
+}
+
 // 流水线没有 git-clone 节点时，遗留引用无法解析，编译期给出可读错误
 // （而不是等 Tekton webhook 报 non-existent variable）。
 func TestCompileGitCommitRefWithoutGitClone(t *testing.T) {

@@ -121,12 +121,13 @@ function taskResultOptions(): Opt[] {
 
 function optionsOf(p: CIPropSchema): Opt[] {
   switch (p.optionsSource) {
+    case 'k8s-ns':
+      ensureNamespaces()
+      return namespaces.value.map((ns) => ({ value: ns.name, label: ns.name }))
     case 'git-branch':
     case 'git-tag':
-    case 'k8s-ns':
     case 'k8s-deployments':
     case 'k8s-container':
-      if (p.optionsSource === 'k8s-ns') ensureNamespaces()
       return fetchedOf(p).options
     case 'upstream-task':
       return upstreamOptions()

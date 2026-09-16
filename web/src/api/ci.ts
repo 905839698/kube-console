@@ -175,7 +175,7 @@ export const ciApi = {
   updatePipeline: (id: number, body: { name?: string; description?: string }) =>
     request<CIPipeline>({ url: `/ci/pipelines/${id}`, method: 'put', data: body }),
   deletePipeline: (id: number) => request<void>({ url: `/ci/pipelines/${id}`, method: 'delete' }),
-  duplicatePipeline: (id: number, body: { targetProjectId: number; name?: string }) =>
+  duplicatePipeline: (id: number, body: { targetProjectId: number; name?: string; description?: string }) =>
     request<CIPipeline>({ url: `/ci/pipelines/${id}/duplicate`, method: 'post', data: body }),
   pipelineVersions: (id: number) => request<CIPipelineVersion[]>({ url: `/ci/pipelines/${id}/versions` }),
   saveVersion: (id: number, graph: CIGraph) =>

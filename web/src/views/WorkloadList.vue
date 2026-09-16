@@ -68,6 +68,7 @@
                 <el-dropdown-item command="yaml" divided>编辑 YAML</el-dropdown-item>
                 <el-dropdown-item command="scale" :disabled="kind === 'daemonsets' || kind === 'cronjobs'">缩放</el-dropdown-item>
                 <el-dropdown-item command="restart" :disabled="kind === 'cronjobs' || kind === 'jobs'">重启</el-dropdown-item>
+                <el-dropdown-item command="rollouts" v-if="kind === 'deployments'">历史版本/回滚</el-dropdown-item>
                 <el-dropdown-item command="image">调整镜像</el-dropdown-item>
                 <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
               </el-dropdown-menu>
@@ -366,6 +367,10 @@ async function onCommand(cmd: string, row: WorkloadItem) {
         await k8sApi.restartWorkload(kind.value, row.namespace || namespace.value[0] || 'default', row.name)
         ElMessage.success('已触发重启')
       })
+      break
+    case 'rollouts':
+      // 回滚交互（版本列表 + 确认）在详情页，跳过去并自动打开历史版本对话框
+      router.push({ path: `/workloads/${kind.value}/${row.name}`, query: { namespace: ns, rollouts: '1' } })
       break
     case 'image':
       imageTarget.value = row

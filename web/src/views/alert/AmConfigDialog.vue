@@ -4,7 +4,7 @@
       <!-- 连接配置 -->
       <el-tab-pane label="连接配置" name="conn">
         <el-alert type="info" :closable="false" style="margin-bottom: 12px"
-          title="按集群接入 Alertmanager。默认经 kube-apiserver service proxy 访问（无需对外暴露 AM）；代理不可达时可改填直连地址。" />
+          title="按集群接入 Alertmanager。控制台与 AM 同集群时默认走集群内 Service 直连（http://{服务名}.{命名空间}.svc:{端口}，免 apiserver 转发）；直连不可达自动回退 apiserver 代理；跨集群接入请填直连地址。" />
         <el-form label-width="130px">
           <el-form-item label="集群">
             <el-input :model-value="clusterStore.current || '（未选择集群）'" disabled style="width: 320px" />
@@ -19,7 +19,7 @@
             <el-input-number v-model="form.port" :min="1" :max="65535" style="width: 160px" />
           </el-form-item>
           <el-form-item label="直连地址">
-            <el-input v-model="form.directURL" placeholder="http://节点IP:NodePort（可选，优先于代理）" style="width: 420px" />
+            <el-input v-model="form.directURL" placeholder="跨集群接入时填写，如 http://节点IP:NodePort（优先于 svc 直连）" style="width: 420px" />
           </el-form-item>
           <el-form-item label="跳过 TLS 校验">
             <el-switch v-model="form.insecure" />

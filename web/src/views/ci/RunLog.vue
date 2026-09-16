@@ -38,8 +38,31 @@ let es: EventSource | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let runningFlag = props.running
 
+// 批量刷新：SSE 每行到达即入缓冲，100ms 合并一次再落到 lines。
+// 逐行直接赋值 = 每行一次 O(n) 拷贝 + join + 整个 <pre> 重渲染，
+// 日志密集型任务（npm/build/trivy 可达数百行/秒）会打满主线程导致页面卡死。
+const FLUSH_MS = 100
+let pending: string[] = []
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+function pushLine(text: string) {
+  pending.push(text)
+  if (pending.length > MAX_LINES) pending = pending.slice(pending.length - MAX_LINES)
+  if (!flushTimer) flushTimer = setTimeout(flush, FLUSH_MS)
+}
+function flush() {
+  flushTimer = null
+  if (!pending.length) return
+  const next = lines.value.length ? [...lines.value, ...pending] : [...pending]
+  lines.value = next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next
+  truncated.value = lines.value.length >= MAX_LINES
+  pending = []
+}
+
 function cleanup() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+  pending = []
   es?.close()
   es = null
 }
@@ -54,14 +77,11 @@ function connect() {
         loading.value = false
         error.value = ''
         const text = e.data
-        if (text === '[end]') { es?.close(); es = null; return }
-        lines.value = lines.value.length >= MAX_LINES
-          ? [...lines.value.slice(lines.value.length - MAX_LINES + 1), text]
-          : [...lines.value, text]
-        if (lines.value.length >= MAX_LINES) truncated.value = true
+        if (text === '[end]') { flush(); es?.close(); es = null; return }
+        pushLine(text)
       }
       es.addEventListener('start', () => { loading.value = false; error.value = '' })
-      es.addEventListener('end', () => { loading.value = false; es?.close(); es = null })
+      es.addEventListener('end', () => { loading.value = false; flush(); es?.close(); es = null })
       es.onerror = () => {
         es?.close()
         es = null

@@ -272,7 +272,7 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 			return nil, fmt.Errorf("渲染节点 %s: %w", id, err)
 		}
 		injectPreShell(&taskSpec, n.Params)
-		rewriteGitCommitRefs(&taskSpec, id, gitCloneID)
+		rewriteGitCloneRefs(&taskSpec, id, gitCloneID)
 
 		pt := TektonPTask{Name: id, TaskSpec: &taskSpec}
 		for _, ws := range taskSpec.Workspaces {
@@ -319,10 +319,12 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 	return spec, nil
 }
 
-// rewriteGitCommitRefs 把任务 spec 内对 git-clone commit 结果的历史坏引用改写为
-// 实际 git-clone 节点的 $(tasks.<id>.results.git_commit)（无 git-clone 节点时不改写，
-// 交给 validateTaskRefs 报错）。经 JSON 序列化做全文替换，覆盖 script/env/args 等任意字段。
-func rewriteGitCommitRefs(spec *nodetype.TaskSpec, taskID, gitCloneID string) {
+// rewriteGitCloneRefs 把任务 spec 内对 git-clone 结果的历史坏引用改写为实际
+// git-clone 节点的 $(tasks.<id>.results.<结果名>)（无 git-clone 节点时不改写，
+// 交给 validateTaskRefs 报错）。按 $(tasks.git-clone.results. 前缀统一改写，
+// 覆盖 git_commit / build_tag / git_branch 等全部结果；经 JSON 序列化做全文替换，
+// 覆盖 script/env/args 等任意字段。
+func rewriteGitCloneRefs(spec *nodetype.TaskSpec, taskID, gitCloneID string) {
 	if gitCloneID == "" || taskID == gitCloneID {
 		return
 	}
@@ -332,13 +334,12 @@ func rewriteGitCommitRefs(spec *nodetype.TaskSpec, taskID, gitCloneID string) {
 	}
 	s := string(raw)
 	const legacy = "$(params.git_commit)"
-	const fixed = "$(tasks.git-clone.results.git_commit)"
-	if !strings.Contains(s, legacy) && !strings.Contains(s, fixed) {
+	const fixedPrefix = "$(tasks.git-clone.results."
+	if !strings.Contains(s, legacy) && !strings.Contains(s, fixedPrefix) {
 		return
 	}
-	target := "$(tasks." + gitCloneID + ".results.git_commit)"
-	s = strings.ReplaceAll(s, legacy, target)
-	s = strings.ReplaceAll(s, fixed, target)
+	s = strings.ReplaceAll(s, legacy, "$(tasks."+gitCloneID+".results.git_commit)")
+	s = strings.ReplaceAll(s, fixedPrefix, "$(tasks."+gitCloneID+".results.")
 	var out nodetype.TaskSpec
 	if err := json.Unmarshal([]byte(s), &out); err != nil {
 		return // 改写失败保持原样，由 validateTaskRefs 给出明确错误

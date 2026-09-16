@@ -19,31 +19,37 @@ steps:
       set -e
       cd $(workspaces.source.path)
       NS="--namespace {{namespace}}"
-      # 多清单逐个 apply
-      if [ "{{kubectlArgs}}" = "apply -f" ]; then
-        IFS=',' read -r -a FILES <<< "{{manifests}}"
+      MANIFESTS="{{manifests}}"
+      TARGET="{{deployTarget}}"
+      KIND="{{deployTargetKind}}"
+      CONTAINER="{{container}}"
+      IMAGE="{{image}}"
+      ARGS="{{kubectlArgs}}"
+      if [ -n "$MANIFESTS" ] && [ "$ARGS" = "apply -f" ]; then
+        # 多清单逐个 apply（manifests 为空时不进本分支，否则 for 空转会静默"成功"）
+        IFS=',' read -r -a FILES <<< "$MANIFESTS"
         for f in "${FILES[@]}"; do
           kubectl apply -f "$f" $NS
         done
-      elif [ -n "{{deployTarget}}" ] && [ -n "{{container}}" ]; then
+      elif [ -n "$TARGET" ] && [ -n "$CONTAINER" ]; then
         # set image（属性面板下拉选择 deployment/container，推荐方式）
-        IMAGE="{{image}}"
-        kubectl set image {{deployTargetKind}}/{{deployTarget}} {{container}}=$IMAGE $NS
-      else
+        kubectl set image "${KIND}/${TARGET}" "${CONTAINER}=${IMAGE}" $NS
+      elif [ -n "$ARGS" ]; then
         # 通用：kubectl <args>（如 set image deploy/app 容器名）
-        if [ -n "{{image}}" ]; then
+        if [ -n "$IMAGE" ]; then
           # set image：镜像必须与容器名拼成 container=image 单参数（kubectl 要求）。
           # 相邻未加引号的变量展开先拼接再分词，故 $ARGS$IMAGE / $ARGS=$IMAGE
           # 都能产生单个 argv；kubectlArgs 写 "容器名" 或 "容器名=" 均兼容
-          IMAGE="{{image}}"
-          ARGS="{{kubectlArgs}}"
           case "$ARGS" in
             *"=") kubectl $ARGS$IMAGE $NS ;;
             *)    kubectl $ARGS=$IMAGE $NS ;;
           esac
         else
-          kubectl {{kubectlArgs}} $NS
+          kubectl $ARGS $NS
         fi
+      else
+        echo "k8s-deploy 缺少可执行的部署配置：请设置 deployTarget+container（set image 模式）、manifests（apply 模式）或 kubectlArgs" >&2
+        exit 1
       fi
       # 等待就绪：未显式填 waitFor 时，按选中的 workload 自动等待
       WAIT_FOR="{{waitFor}}"

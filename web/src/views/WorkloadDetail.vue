@@ -11,6 +11,7 @@
             <el-button size="small" type="primary" @click="openFormEdit">可视化编辑</el-button>
             <el-button size="small" plain @click="openYaml">编辑 YAML</el-button>
             <el-button size="small" @click="openScale" v-if="kind !== 'cronjobs' && kind !== 'jobs'">缩放</el-button>
+            <el-button size="small" type="warning" plain @click="openRollouts" v-if="kind === 'deployments'">历史版本/回滚</el-button>
             <el-button size="small" plain @click="imageVisible = true" v-if="kind !== 'pods'">调整镜像</el-button>
             <el-button size="small" type="warning" plain @click="doRestart" v-if="kind !== 'cronjobs' && kind !== 'jobs'">重启</el-button>
             <el-button size="small" type="danger" plain @click="doDelete">删除</el-button>
@@ -433,6 +434,8 @@ async function loadPodDetail(pod: PodItem) {
 onMounted(() => {
   load()
   loadMonitor() // 预加载监控数据
+  // 列表页「历史版本/回滚」行操作跳转过来时自动打开回滚对话框
+  if (route.query.rollouts && kind.value === 'deployments') openRollouts()
 })
 
 watch(tab, (v) => {

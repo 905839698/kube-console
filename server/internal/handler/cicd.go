@@ -600,7 +600,7 @@ func (h *CICDHandler) PipelineRun(c *gin.Context) {
 	response.OK(c, run)
 }
 
-// PipelineDuplicate POST /ci/pipelines/:id/duplicate —— 复制到目标项目。
+// PipelineDuplicate POST /ci/pipelines/:id/duplicate —— 复制到目标项目（可同项目，也可跨项目，须同一集群）。
 func (h *CICDHandler) PipelineDuplicate(c *gin.Context) {
 	if !h.requireWrite(c) {
 		return
@@ -617,6 +617,7 @@ func (h *CICDHandler) PipelineDuplicate(c *gin.Context) {
 	var req struct {
 		TargetProjectID uint   `json:"targetProjectId" binding:"required"`
 		Name            string `json:"name"`
+		Description     string `json:"description"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, http.StatusBadRequest, 400, "参数错误: targetProjectId 必填")
@@ -631,6 +632,10 @@ func (h *CICDHandler) PipelineDuplicate(c *gin.Context) {
 	if name == "" {
 		name = src.Name + "-copy"
 	}
+	desc := req.Description
+	if desc == "" {
+		desc = src.Description
+	}
 	ctx := c.Request.Context()
 	// 复制最新版本 DSL
 	latest, err := h.deps.Store.GetLatest(ctx, src.ID)
@@ -644,7 +649,7 @@ func (h *CICDHandler) PipelineDuplicate(c *gin.Context) {
 		return
 	}
 	p, err := h.deps.Store.Create(ctx, middleware.CurrentUserID(c),
-		ciPipelineCreateReq(cl, req.TargetProjectID, name, src.Description))
+		ciPipelineCreateReq(cl, req.TargetProjectID, name, desc))
 	if err != nil {
 		h.errResp(c, err)
 		return

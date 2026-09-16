@@ -1,5 +1,6 @@
-// Alertmanager 访问客户端：经 kube-apiserver service proxy（或直连）调用 AM v2 API，
-// 支持实时告警 / 静默管理 / 主配置 YAML 读写（Secret 内 alertmanager.yaml[.gz]）
+// Alertmanager 访问客户端：默认经集群内 Service DNS 直连（控制台与 AM 同集群，省去
+// apiserver service proxy 转发这一跳），跨集群接入填 DirectURL；两跳都不可达时
+// 自动回退 apiserver 代理。支持实时告警 / 静默管理 / 主配置 YAML 读写（Secret 内 alertmanager.yaml[.gz]）
 package service
 
 import (
@@ -15,7 +16,6 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/rest"
 	"sigs.k8s.io/yaml"
 
 	"kube-console/server/internal/kube"
@@ -59,57 +59,77 @@ type AMMatcher struct {
 	IsEqual bool   `json:"isEqual"`
 }
 
-// amRequest 访问 Alertmanager（DirectURL 直连或 apiserver proxy），返回原始响应体
+// amRequest 访问 Alertmanager，按跳依次尝试，连接失败（无响应）自动换下一跳，
+// 拿到 HTTP 响应（含 5xx）即按结果返回不再重试：
+//  1. DirectURL（跨集群接入显式指定）或集群内 Service DNS 直连（默认，同集群免转发）；
+//  2. kube-apiserver service proxy（直连不可达时的兜底，透传 apiserver 凭证）。
 func amRequest(ctx context.Context, c *kube.Client, cfg *model.AlertmanagerConfig, method, path string, body []byte) ([]byte, error) {
 	path = strings.TrimLeft(path, "/")
-	var u string
-	var httpClient *http.Client
-	var err error
+	httpClient := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.Insecure}},
+	}
+	type hop struct {
+		base  string
+		proxy bool
+		label string
+	}
+	var hops []hop
 	if cfg.DirectURL != "" {
-		u = strings.TrimRight(cfg.DirectURL, "/") + "/" + path
-		httpClient = &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.Insecure}},
-		}
+		hops = append(hops, hop{strings.TrimRight(cfg.DirectURL, "/"), false, "直连地址"})
 	} else {
-		base := strings.TrimRight(c.Config.Host, "/")
-		u = fmt.Sprintf("%s/api/v1/namespaces/%s/services/%s:%d/proxy/%s",
-			base, cfg.Namespace, cfg.Service, cfg.Port, path)
-		httpClient, err = rest.HTTPClientFor(c.Config)
+		// 默认集群内 svc 直连：控制台与 AM 同集群（跨集群请填 DirectURL）
+		hops = append(hops, hop{
+			fmt.Sprintf("http://%s.%s.svc:%d", cfg.Service, cfg.Namespace, cfg.Port),
+			false, "集群内 svc 直连",
+		})
+	}
+	hops = append(hops, hop{
+		fmt.Sprintf("%s/api/v1/namespaces/%s/services/%s:%d/proxy",
+			strings.TrimRight(c.Config.Host, "/"), cfg.Namespace, cfg.Service, cfg.Port),
+		true, "apiserver 代理",
+	})
+	var lastErr error
+	for _, h := range hops {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		var rdr io.Reader
+		if body != nil {
+			rdr = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, h.base+"/"+path, rdr)
 		if err != nil {
 			return nil, err
 		}
-	}
-	var rdr io.Reader
-	if body != nil {
-		rdr = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u, rdr)
-	if err != nil {
-		return nil, err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	// 直连无认证头；代理模式下透传 apiserver 凭证
-	if cfg.DirectURL == "" {
-		if bearer := c.Config.BearerToken; bearer != "" {
-			req.Header.Set("Authorization", "Bearer "+bearer)
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
 		}
+		// svc/直连无认证头；代理模式透传 apiserver 凭证
+		if h.proxy {
+			if bearer := c.Config.BearerToken; bearer != "" {
+				req.Header.Set("Authorization", "Bearer "+bearer)
+			}
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			lastErr = fmt.Errorf("Alertmanager 不可达（%s）: %w", h.label, err)
+			continue
+		}
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("Alertmanager 返回 %d: %s", resp.StatusCode, truncateStr(string(raw), 300))
+		}
+		return raw, nil
 	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("Alertmanager 不可达（请检查集群的 Alertmanager 配置）: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Alertmanager 返回 %d: %s", resp.StatusCode, truncateStr(string(raw), 300))
-	}
-	return raw, nil
+	return nil, lastErr
 }
 
 // AMStatus 连通性测试（GET /api/v2/status）

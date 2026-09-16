@@ -4,7 +4,7 @@
 FROM harbor.cqyxpt.site:8443/library/golang:1.25 AS builder
 WORKDIR /src
 COPY server/go.mod server/go.sum ./
-RUN go mod download
+RUN go env -w GO111MODULE=on && go env -w GOPROXY='http://10.107.2.251:8081/repository/goproxy/' && go mod download
 COPY server/ ./
 RUN CGO_ENABLED=0 go build -o /kube-console-server ./cmd/server
 
