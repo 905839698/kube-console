@@ -317,6 +317,9 @@ func (h *CIHandler) DesignerToken(c *gin.Context) {
 
 var argocdGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 
+// appprojects 与 applications 同组同版本：应用 spec.project 必须指向其中存在的项目
+var argocdProjectGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "appprojects"}
+
 // ArgoApp ArgoCD Application 视图
 type ArgoApp struct {
 	Name      string `json:"name"`
@@ -327,8 +330,12 @@ type ArgoApp struct {
 	Path      string `json:"path"`
 	Target    string `json:"target"`
 	DestNS    string `json:"destNamespace"`
+	Project   string `json:"project"`
 	AutoSync  bool   `json:"autoSync"`
 	Age       string `json:"age"`
+	// SpecError 是 status.conditions 里的 InvalidSpecError（如引用了不存在的 project）：
+	// 此时 sync/health 都是 Unknown，只有这条 condition 说明了原因
+	SpecError string `json:"specError,omitempty"`
 }
 
 // ArgoApps GET /argocd/apps —— 列出当前集群全部 ArgoCD 应用
@@ -357,6 +364,7 @@ func (h *CIHandler) ArgoApps(c *gin.Context) {
 		path, _, _ := unstructuredString(u.Object, "spec", "source", "path")
 		target, _, _ := unstructuredString(u.Object, "spec", "source", "targetRevision")
 		destNS, _, _ := unstructuredString(u.Object, "spec", "destination", "namespace")
+		project, _, _ := unstructuredString(u.Object, "spec", "project")
 		auto := false
 		if p, ok, _ := unstructuredNested(u.Object, "spec", "syncPolicy", "automated"); ok && p != nil {
 			auto = true
@@ -365,11 +373,109 @@ func (h *CIHandler) ArgoApps(c *gin.Context) {
 		items = append(items, ArgoApp{
 			Name: u.GetName(), Namespace: u.GetNamespace(),
 			Sync: strOr(sync, "Unknown"), Health: strOr(health, "Unknown"),
-			RepoURL: repo, Path: path, Target: target, DestNS: destNS, AutoSync: auto,
-			Age: duration.HumanDuration(time.Since(created.Time)),
+			RepoURL: repo, Path: path, Target: target, DestNS: destNS, Project: project, AutoSync: auto,
+			Age:       duration.HumanDuration(time.Since(created.Time)),
+			SpecError: argoInvalidSpecError(u.Object),
 		})
 	}
 	response.OK(c, gin.H{"installed": true, "items": items})
+}
+
+// argoInvalidSpecError 取 status.conditions 里 type=InvalidSpecError 的 message
+// （应用 spec 非法时 ArgoCD 只在这里说明原因，sync/health 都留在 Unknown）
+func argoInvalidSpecError(obj map[string]any) string {
+	conds, ok, _ := unstructuredNested(obj, "status", "conditions")
+	if !ok {
+		return ""
+	}
+	list, ok := conds.([]any)
+	if !ok {
+		return ""
+	}
+	for _, c := range list {
+		m, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := m["type"].(string); t == "InvalidSpecError" {
+			msg, _ := m["message"].(string)
+			return msg
+		}
+	}
+	return ""
+}
+
+// ArgoProjectDestination AppProject 允许的部署目标（server 或 name 二选一，支持 * 通配）
+type ArgoProjectDestination struct {
+	Server    string `json:"server,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// ArgoProject AppProject 视图：应用表单据此选项目并校验仓库/目标是否被允许
+type ArgoProject struct {
+	Name         string                   `json:"name"`
+	Namespace    string                   `json:"namespace"`
+	Description  string                   `json:"description,omitempty"`
+	SourceRepos  []string                 `json:"sourceRepos"`
+	Destinations []ArgoProjectDestination `json:"destinations"`
+}
+
+// ArgoProjects GET /argocd/projects —— 列出当前集群全部 AppProject。
+// 应用的 spec.project 必须指向其中存在的项目，否则 ArgoCD 报
+// "app is not allowed in project X, or the project does not exist"（sync/health 恒为 Unknown）。
+func (h *CIHandler) ArgoProjects(c *gin.Context) {
+	client := h.kubeClient(c)
+	if client == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	list, err := client.Dynamic.Resource(argocdProjectGVR).Namespace("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			response.OK(c, gin.H{"installed": false, "items": []ArgoProject{}})
+			return
+		}
+		response.K8sError(c, err)
+		return
+	}
+	items := []ArgoProject{}
+	for i := range list.Items {
+		u := &list.Items[i]
+		items = append(items, argoProjectView(u.Object, u.GetName(), u.GetNamespace()))
+	}
+	response.OK(c, gin.H{"installed": true, "items": items})
+}
+
+// argoProjectView 从 AppProject 对象提取表单需要的字段（纯解析，便于单测）
+func argoProjectView(obj map[string]any, name, namespace string) ArgoProject {
+	p := ArgoProject{Name: name, Namespace: namespace, SourceRepos: []string{}, Destinations: []ArgoProjectDestination{}}
+	p.Description, _, _ = unstructuredString(obj, "spec", "description")
+	if repos, ok, _ := unstructuredNested(obj, "spec", "sourceRepos"); ok {
+		if arr, ok := repos.([]any); ok {
+			for _, r := range arr {
+				if s, ok := r.(string); ok {
+					p.SourceRepos = append(p.SourceRepos, s)
+				}
+			}
+		}
+	}
+	if dests, ok, _ := unstructuredNested(obj, "spec", "destinations"); ok {
+		if arr, ok := dests.([]any); ok {
+			for _, d := range arr {
+				m, ok := d.(map[string]any)
+				if !ok {
+					continue
+				}
+				server, _ := m["server"].(string)
+				cname, _ := m["name"].(string)
+				ns, _ := m["namespace"].(string)
+				p.Destinations = append(p.Destinations, ArgoProjectDestination{Server: server, Name: cname, Namespace: ns})
+			}
+		}
+	}
+	return p
 }
 
 // ArgoRefresh POST /argocd/apps/:namespace/:name/refresh —— 打 refresh 注解触发比对

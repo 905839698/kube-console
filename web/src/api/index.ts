@@ -1061,6 +1061,21 @@ export interface ArgoCDApp {
   destNamespace: string
   age: string
   autoSync: boolean
+  /** AppProject 名（spec.project）：指向不存在的项目时 ArgoCD 拒绝加载 */
+  project?: string
+  /** status.conditions 里的 InvalidSpecError 原文（spec 非法时唯一的原因说明） */
+  specError?: string
+}
+
+// ArgoCD AppProject：应用的 spec.project 必须指向其中之一，且仓库/目标需被该项目允许
+export interface ArgoCDProject {
+  namespace: string
+  name: string
+  description?: string
+  /** 允许的源仓库（支持 * 通配） */
+  sourceRepos: string[]
+  /** 允许的部署目标：server 或 name 二选一，均可为 * */
+  destinations: { server?: string; name?: string; namespace?: string }[]
 }
 
 // ArgoCD 仓库（v3：以 Secret 存储，标签 argocd.argoproj.io/secret-type=repository）。凭据只返回有无标志，不返回明文。
@@ -1085,6 +1100,8 @@ export const argocdApi = {
   // 完整 Application 对象 YAML（可视化编辑器加载）
   appDetail: (namespace: string, name: string) =>
     request<{ yaml: string }>({ url: `/argocd/apps/${namespace}/${name}` }),
+  // AppProject 列表（应用表单的项目下拉 + 仓库/目标是否被项目允许的校验）
+  projects: () => request<{ installed: boolean; items: ArgoCDProject[] }>({ url: '/argocd/projects' }),
   // 仓库管理（含账号密码；更新时密码留空 = 保留原凭据）
   repos: () => request<{ installed: boolean; namespace: string; items: ArgoCDRepo[] }>({ url: '/argocd/repos' }),
   repoCreate: (data: Partial<ArgoCDRepo> & { url: string; name: string }) =>

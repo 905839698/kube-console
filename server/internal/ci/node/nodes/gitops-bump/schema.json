@@ -4,7 +4,7 @@
     { "name": "repoUrl", "type": "string", "required": true, "description": "配置仓库地址（GitOps manifests 仓库，GitLab 可用 http://gitlab.cqyxpt.site/group/repo.git）" },
     { "name": "branch", "type": "string", "required": false, "default": "main", "description": "配置仓库分支" },
     { "name": "files", "type": "text", "required": true, "description": "要更新的清单文件（相对仓库根，逗号分隔，如 apps/demo/deployment.yaml,apps/demo/values.yaml）" },
-    { "name": "images", "type": "text", "required": true, "description": "镜像引用，多行/逗号分隔，每行一个完整 image（registry/project/app:tag，可引用上游 build-image 的 $(tasks.xxx.results.imageRef)）。按仓库路径前缀匹配文件中 image: 行并整行替换" },
+    { "name": "images", "type": "text", "required": true, "description": "镜像引用，多行/逗号分隔，每行一个完整 image（registry/project/app:tag，可引用上游 build-image 的 $(tasks.xxx.results.imageRef)）。两种清单形态均支持：整串 image: <完整地址>（按仓库路径前缀匹配整行替换）；拆分 image: {repository, tag}（repository: 行值精确匹配，可省略 registry 主机段，替换其后同缩进的 tag: 行，tag 须写在 repository 之后）" },
     { "name": "credential", "type": "credential", "required": true, "description": "Git 凭证（需有配置仓库 push 权限；token 或用户名密码）" },
     { "name": "commitMessage", "type": "string", "required": false, "default": "chore: bump image by ci-platform [skip ci]", "description": "提交信息（[skip ci] 防止配置仓库自身触发 CI）" }
   ]

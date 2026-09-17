@@ -8,13 +8,14 @@
           <MetaEditor v-if="showMeta" :object="objRef" :no-annotations="!!module.noAnnotations" />
           <!-- schema 表单：直接编辑对象 -->
           <SchemaForm v-if="module.fields" :fields="module.fields" :object="objRef" @change="syncFromForm" />
-          <!-- 专用表单组件 -->
+          <!-- 专用表单组件（creating：新建/编辑模式，表单据此决定名称等身份字段可否编辑） -->
           <component
             v-else-if="module.component"
             :is="module.component"
             v-model="formData"
             :kind="kind"
             :namespaced="namespaced"
+            :creating="creating"
             @change="syncFromForm"
           />
         </div>

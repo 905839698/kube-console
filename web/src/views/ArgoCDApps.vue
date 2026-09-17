@@ -13,40 +13,60 @@
     <el-alert v-if="!installed" type="info" :closable="false"
       title="当前集群未部署 ArgoCD（未发现 applications.argoproj.io CRD）。" />
 
-    <el-table border v-else :data="apps" v-loading="loading" size="small" stripe>
-      <el-table-column prop="name" label="应用" min-width="160">
-        <template #default="{ row }">
-          <span>{{ row.name }}</span>
-          <el-tag v-if="row.autoSync" size="small" type="success" style="margin-left: 6px">自动同步</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="同步状态" width="120" align="center">
-        <template #default="{ row }">
-          <el-tag size="small" :type="syncType(row.sync)">{{ row.sync }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="健康状态" width="120" align="center">
-        <template #default="{ row }">
-          <el-tag size="small" :type="healthType(row.health)">{{ row.health }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="repoURL" label="配置仓库" min-width="220" show-overflow-tooltip />
-      <el-table-column prop="path" label="路径" min-width="140" show-overflow-tooltip />
-      <el-table-column prop="target" label="Revision" width="110" />
-      <el-table-column prop="destNamespace" label="目标命名空间" width="130" />
-      <el-table-column prop="age" label="创建于" width="90" align="center" />
-      <el-table-column label="操作" width="170" fixed="right">
-        <template #default="{ row }">
-          <el-button size="small" text type="primary" :disabled="!userStore.isAdmin" @click="openEdit(row)">编辑</el-button>
-          <el-button size="small" text type="primary" :disabled="!userStore.isAdmin" @click="refresh(row)">刷新比对</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-    <el-alert v-if="installed" type="info" :closable="false" style="margin-top: 10px" title="">
-      「编辑」打开可视化表单 + YAML 双视图（保存前显示变更对比）；「刷新比对」打 refresh 注解触发立即比对 Git（自动同步策略下随即部署）。私有仓库需先在
-      <router-link to="/argocd/repos">ArgoCD 仓库</router-link>
-      页面注册（配置账号密码），repoURL 与仓库 URL 一致才会使用其凭据。
-    </el-alert>
+    <template v-else>
+      <!-- spec 非法（如 spec.project 指向不存在的 AppProject）时 sync/health 恒为 Unknown，
+           原因只在 status.conditions 里，这里直接摊开显示，省得去 ArgoCD UI 排查 -->
+      <el-alert v-if="specErrors.length" type="error" :closable="false" show-icon style="margin-bottom: 10px"
+        title="以下应用 spec 非法，ArgoCD 无法加载（同步/健康状态恒为 Unknown）：">
+        <div v-for="e in specErrors" :key="e.namespace + '/' + e.name">
+          • {{ e.namespace }}/{{ e.name }}：{{ e.specError }}
+          <span v-if="e.project" class="spec-hint">（spec.project = {{ e.project }}）</span>
+        </div>
+      </el-alert>
+
+      <el-table :data="apps" v-loading="loading" size="small" stripe border>
+        <el-table-column prop="name" label="应用" min-width="160">
+          <template #default="{ row }">
+            <span>{{ row.name }}</span>
+            <el-tag v-if="row.autoSync" size="small" type="success" style="margin-left: 6px">自动同步</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="同步状态" width="120" align="center">
+          <template #default="{ row }">
+            <el-tooltip v-if="row.specError" :content="row.specError" placement="top">
+              <el-tag size="small" type="danger">{{ row.sync }}</el-tag>
+            </el-tooltip>
+            <el-tag v-else size="small" :type="syncType(row.sync)">{{ row.sync }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="健康状态" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="healthType(row.health)">{{ row.health }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="project" label="Project" width="140" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span :class="{ 'spec-bad': !!row.specError }">{{ row.project || 'default' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="repoURL" label="配置仓库" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="path" label="路径" min-width="140" show-overflow-tooltip />
+        <el-table-column prop="target" label="Revision" width="110" />
+        <el-table-column prop="destNamespace" label="目标命名空间" width="130" />
+        <el-table-column prop="age" label="创建于" width="90" align="center" />
+        <el-table-column label="操作" width="170" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" text type="primary" :disabled="!userStore.isAdmin" @click="openEdit(row)">编辑</el-button>
+            <el-button size="small" text type="primary" :disabled="!userStore.isAdmin" @click="refresh(row)">刷新比对</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-alert type="info" :closable="false" style="margin-top: 10px" title="">
+        「编辑」打开可视化表单 + YAML 双视图（保存前显示变更对比）；「刷新比对」打 refresh 注解触发立即比对 Git（自动同步策略下随即部署）。私有仓库需先在
+        <router-link to="/argocd/repos">ArgoCD 仓库</router-link>
+        页面注册（配置账号密码），repoURL 与仓库 URL 一致才会使用其凭据。
+      </el-alert>
+    </template>
 
     <!-- 可视化编辑器（表单 + YAML 双视图，保存前变更对比；写走通用 applyYaml） -->
     <el-dialog v-model="editorVisible" :title="editorCreating ? '新建 ArgoCD 应用' : `编辑 ArgoCD 应用 - ${editorName}`" width="860px" top="4vh" destroy-on-close>
@@ -64,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { argocdApi, type ArgoCDApp } from '../api'
@@ -77,6 +97,9 @@ const clusterStore = useClusterStore()
 const installed = ref(true)
 const loading = ref(false)
 const apps = ref<ArgoCDApp[]>([])
+
+// spec 非法（InvalidSpecError）的应用：状态恒为 Unknown，原因只有 condition 里有
+const specErrors = computed(() => apps.value.filter((a) => !!a.specError))
 
 // 编辑器
 const editorVisible = ref(false)
@@ -148,4 +171,6 @@ onMounted(load)
 
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
+.spec-hint { color: #909399; }
+.spec-bad { color: #f56c6c; }
 </style>

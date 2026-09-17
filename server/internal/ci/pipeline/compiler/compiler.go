@@ -21,6 +21,7 @@ import (
 //	Graph → 拓扑排序（validator.Topological）
 //	      → 每个节点调用 Node.RenderTask 生成 Task 片段
 //	      → 按 edges 计算 runAfter
+//	      → 参数默认值里的上游结果引用提升为 PipelineTask params（结果替换范围）
 //	      → 组装 Tekton Pipeline YAML
 //	      → （运行时）生成 PipelineRun + Workspace/Secret/SA
 //
@@ -245,6 +246,27 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 		}
 	}
 
+	// 拓扑祖先集：只有存在「被引用任务 → 引用方」的依赖路径（边连接，可经
+	// condition 节点传递）时，Tekton 才保证引用执行前结果已产出。缺连线时两任务
+	// 并行运行，$(tasks...) 占位符运行期无法解析，会原样留在脚本里被 shell 当
+	// 命令执行（"tasks.xxx.results.yyy: not found"）——编译期拦下
+	ancestors := map[string]map[string]bool{}
+	for _, id := range order {
+		set := map[string]bool{}
+		// 必须拷贝：predEdges 的切片底层数组会被 append 复用，直接引用会污染原数据
+		stack := append([]model.Edge{}, predEdges[id]...)
+		for len(stack) > 0 {
+			e := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if set[e.Source] {
+				continue
+			}
+			set[e.Source] = true
+			stack = append(stack, predEdges[e.Source]...)
+		}
+		ancestors[id] = set
+	}
+
 	// git-clone 节点 ID（首个）：build-image 等节点的默认 tag 引用其 git_commit
 	// 结果。历史默认值有两种坏写法，统一改写为实际节点 ID 的引用：
 	//   $(params.git_commit)                       —— 误把任务结果当 Pipeline 参数
@@ -275,6 +297,9 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 		rewriteGitCloneRefs(&taskSpec, id, gitCloneID)
 
 		pt := TektonPTask{Name: id, TaskSpec: &taskSpec}
+		// 结果引用提升：内嵌 taskSpec 的 params[].default 不在 Tekton 的结果替换
+		// 范围内，留在默认值里会被下游 $(params.X) 原样注入脚本（详见函数注释）
+		pt.Params = liftResultRefParams(&taskSpec)
 		for _, ws := range taskSpec.Workspaces {
 			pt.Workspaces = append(pt.Workspaces, PWorkspace{Name: ws.Name, Workspace: workspaceBindName(ws.Name)})
 		}
@@ -312,7 +337,7 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 
 	// 编译期校验 Tekton 变量引用，把 webhook 的笼统 "non-existent variable"
 	// 拒绝提前为指明节点与写法的平台错误
-	if err := validateTaskRefs(spec); err != nil {
+	if err := validateTaskRefs(spec, ancestors); err != nil {
 		return nil, err
 	}
 
@@ -347,6 +372,35 @@ func rewriteGitCloneRefs(spec *nodetype.TaskSpec, taskID, gitCloneID string) {
 	*spec = out
 }
 
+// liftResultRefParams 把内嵌 taskSpec 参数默认值里的上游结果引用提升为
+// PipelineTask 级 params 赋值（值原样搬运，不改写文本）。
+//
+// 必要性：Tekton 对 $(tasks.T.results.R) 的替换只覆盖两处——
+//   - 内嵌 taskSpec 的 steps/sidecars 字段（name/command/args/env/script，
+//     由 pipelinerun 的 PropagateResults → ApplyReplacements 完成）；
+//   - PipelineTask 级字段（params / when / workspaces.subPath 等，
+//     由 ApplyTaskResults 完成）。
+//
+// 它不覆盖内嵌 taskSpec 的 params[].default。节点字段值经 loader 渲染后正是落在
+// 默认值里，若该参数在脚本中按 $(params.X) 读取，Tekton 只把默认值原样替换进
+// 脚本、不再二次扫描其中的引用，占位符就留给 shell 当命令执行
+// （"tasks.build-image-xxx.results.imageRef: not found"，报错行是 $(params.X) 那一行）。
+// 提升为 PipelineTask params 后由 Tekton 在流水线级解析出真实值再作为任务参数注入，
+// 与节点模板把值 {{x}} 内联进脚本（steps 路径）的写法等价。
+//
+// 只提升真正含 $(tasks. 的参数：其余参数继续用 taskSpec 默认值，编译产物最小改动。
+func liftResultRefParams(spec *nodetype.TaskSpec) []TektonParam {
+	var out []TektonParam
+	for _, p := range spec.Params {
+		s, ok := p.Default.(string)
+		if !ok || !strings.Contains(s, "$(tasks.") {
+			continue
+		}
+		out = append(out, TektonParam{Name: p.Name, Value: s})
+	}
+	return out
+}
+
 // tektonRefRe 匹配 taskSpec 内的 Tekton 变量引用：$(params.X) / $(tasks.T.results.R)。
 // $(workspaces.*), $(results.*), $(context.*) 等按 Tekton 语义固定可用，不在校验范围。
 var tektonRefRe = regexp.MustCompile(`\$\((params|tasks)\.([a-zA-Z0-9._-]+)\)`)
@@ -357,7 +411,9 @@ var tektonRefRe = regexp.MustCompile(`\$\((params|tasks)\.([a-zA-Z0-9._-]+)\)`)
 //     参数，不是 Pipeline 参数——历史默认值曾误用后者导致 apply 被 webhook 拒绝；
 //   - $(tasks.T.results.R)：T 必须是本 Pipeline 生成的任务且声明了结果 R，
 //     且不允许引用自身结果（结果只能被下游任务消费）。
-func validateTaskRefs(spec *PipelineSpec) error {
+//
+// 校验范围：每个任务的 taskSpec 全文 + PipelineTask 级 params 值（提升后的结果引用）。
+func validateTaskRefs(spec *PipelineSpec, ancestors map[string]map[string]bool) error {
 	taskParams := map[string]map[string]bool{}
 	taskResults := map[string]map[string]bool{}
 	for i := range spec.Spec.Tasks {
@@ -382,27 +438,42 @@ func validateTaskRefs(spec *PipelineSpec) error {
 		if err != nil {
 			continue
 		}
-		for _, m := range tektonRefRe.FindAllStringSubmatch(string(raw), -1) {
-			switch m[1] {
-			case "params":
-				if !taskParams[t.Name][m[2]] {
-					return fmt.Errorf("任务 %s 引用了未声明的参数 $(params.%s)：嵌入 taskSpec 内 $(params.X) 只能引用该任务自身的参数；引用上游任务结果请写 $(tasks.<任务名>.results.<结果名>)", t.Name, m[2])
-				}
-			case "tasks":
-				rest := m[2]
-				dot := strings.Index(rest, ".results.")
-				if dot < 0 {
-					return fmt.Errorf("任务 %s 的引用 $(tasks.%s) 格式非法（应为 $(tasks.<任务名>.results.<结果名>)）", t.Name, rest)
-				}
-				tname, rname := rest[:dot], rest[dot+len(".results."):]
-				if tname == t.Name {
-					return fmt.Errorf("任务 %s 引用了自身的结果 $(tasks.%s.results.%s)：结果只能被下游任务引用", t.Name, tname, rname)
-				}
-				if _, ok := taskResults[tname]; !ok {
-					return fmt.Errorf("任务 %s 引用了不存在的任务结果 $(tasks.%s.results.%s)：流水线中没有名为 %s 的任务节点（可能是节点被改名/删除，请重新在参数里选择上游结果）", t.Name, tname, rname, tname)
-				}
-				if !taskResults[tname][rname] {
-					return fmt.Errorf("任务 %s 引用的结果 $(tasks.%s.results.%s) 不存在：%s 未声明该结果", t.Name, tname, rname, tname)
+		// PipelineTask 级 params 值同样是引用的落脚点（参数默认值里的结果引用被
+		// liftResultRefParams 提升到这里），必须一并校验，否则提升会把引用搬出
+		// 校验范围、让缺连线/悬空引用漏到运行期
+		texts := []string{string(raw)}
+		for _, p := range t.Params {
+			texts = append(texts, p.Value)
+		}
+		for _, text := range texts {
+			for _, m := range tektonRefRe.FindAllStringSubmatch(text, -1) {
+				switch m[1] {
+				case "params":
+					if !taskParams[t.Name][m[2]] {
+						return fmt.Errorf("任务 %s 引用了未声明的参数 $(params.%s)：嵌入 taskSpec 内 $(params.X) 只能引用该任务自身的参数；引用上游任务结果请写 $(tasks.<任务名>.results.<结果名>)", t.Name, m[2])
+					}
+				case "tasks":
+					rest := m[2]
+					dot := strings.Index(rest, ".results.")
+					if dot < 0 {
+						return fmt.Errorf("任务 %s 的引用 $(tasks.%s) 格式非法（应为 $(tasks.<任务名>.results.<结果名>)）", t.Name, rest)
+					}
+					tname, rname := rest[:dot], rest[dot+len(".results."):]
+					if tname == t.Name {
+						return fmt.Errorf("任务 %s 引用了自身的结果 $(tasks.%s.results.%s)：结果只能被下游任务引用", t.Name, tname, rname)
+					}
+					if _, ok := taskResults[tname]; !ok {
+						return fmt.Errorf("任务 %s 引用了不存在的任务结果 $(tasks.%s.results.%s)：流水线中没有名为 %s 的任务节点（可能是节点被改名/删除，请重新在参数里选择上游结果）", t.Name, tname, rname, tname)
+					}
+					// 被引用任务必须是引用方的上游（存在依赖路径）：缺连线时 Tekton 并行
+					// 执行两任务，结果引用运行期解析不出，占位符原样留在脚本里被 shell
+					// 当命令执行（"tasks.xxx.results.yyy: not found"）
+					if !ancestors[t.Name][tname] {
+						return fmt.Errorf("任务 %s 引用了任务 %s 的结果，但画布上 %s 到 %s 没有依赖路径（缺少连线）：运行时两任务并行，%s 的结果尚不存在、引用无法解析。请在设计器中连接 %s → %s 后重新保存", t.Name, tname, tname, t.Name, tname, tname, t.Name)
+					}
+					if !taskResults[tname][rname] {
+						return fmt.Errorf("任务 %s 引用的结果 $(tasks.%s.results.%s) 不存在：%s 未声明该结果", t.Name, tname, rname, tname)
+					}
 				}
 			}
 		}
@@ -415,11 +486,11 @@ func validateTaskRefs(spec *PipelineSpec) error {
 // "result:<task>.<result>"；input/celRef 是同一变量在 Tekton 表达式与 CEL
 // 两种上下文里的写法。
 type condExpr struct {
-	varKey  string
-	input   string
-	celRef  string
-	op      string
-	value   string
+	varKey string
+	input  string
+	celRef string
+	op     string
+	value  string
 }
 
 // condVarExpr 由变量 key 反查条件表达式（一个变量至多一个条件，Compile 阶段 B12 保证）。

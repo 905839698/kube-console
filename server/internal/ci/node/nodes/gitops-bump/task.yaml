@@ -39,7 +39,10 @@ steps:
       BRANCH="$(params.branch)"
       BRANCH="${BRANCH:-main}"
       FILES="$(params.files)"
-      IMAGES="$(params.images)"
+      # 单引号读取（Tekton 变量替换是纯文本替换，引号不影响正常解析）：万一上游结果
+      # 引用没被解析成实际值，占位符会以数据形式留在变量里、由下面的 case 明确报错，
+      # 而不是在这一行被 shell 当命令执行（"tasks.xxx.results.yyy: not found"）
+      IMAGES='$(params.images)'
       MSG="$(params.commitMessage)"
       MSG="${MSG:-chore: bump image by ci-platform [skip ci]}"
       GITOPS_DIR=".gitops-config"
@@ -66,36 +69,124 @@ steps:
       git config user.name "ci-platform"
       git config user.email "ci@ci-platform.local"
 
-      BUMPED=""
-      IFS=','
-      # ---- 逐镜像替换：按「仓库路径前缀」匹配 image: 行并整行替换（保留缩进/注释）----
-      for REF in $IMAGES; do
-        # 兼容多行文本（换行分隔）
-        for r in $(echo "$REF" | tr '\n' ' '); do
-          case "$r" in
-            ''|'$(tasks.'*) continue ;;  # 空行 / 未渲染的上游占位
+      # 拆分形态单文件替换：repository: 行值精确等于 $2 时，把其后同缩进的 tag: 行
+      # 值替换为 $3（保留缩进/列表项，丢弃行尾注释）。命中并写入返回 0。
+      # 纯 POSIX shell 实现（git 镜像不保证有 awk）；限制：tag 必须写在 repository 之后。
+      bump_split_file() {
+        bf="$1"; bval="$2"; btag="$3"; bf_hit=0
+        BBTMP="$bf.bump-tmp"
+        : > "$BBTMP"
+        # 清单可能是 CRLF（Windows 上编辑/提交的仓库）：内部比较逻辑一律用去掉行尾 CR
+        # 的文本，否则 repository: 值带 \r 与候选值永不相等（拆分形态静默失效）；
+        # 写回时按该行原本有无 CR 还原，避免把整个文件的行尾风格改掉
+        CR=$(printf '\r')
+        inblk=0; reind=0
+        while IFS= read -r line || [ -n "$line" ]; do
+          lcr=""
+          case "$line" in
+            *"$CR") lcr="$CR"; line="${line%"$CR"}" ;;
           esac
-          # repo 前缀 = 去掉 :tag / @digest
-          REPO_PREFIX="${r%%:*}"
-          REPO_PREFIX="${REPO_PREFIX%%@*}"
-          # 正则转义（. 与 / 在 BRE/ERE 中 / 由分隔符规避，. 需转义）
-          REPO_ESC=$(printf '%s' "$REPO_PREFIX" | sed -e 's/[][\.*^$()+?{}|]/\\&/g')
-          HIT=0
-          for f in $FILES; do
-            [ -f "$f" ] || { echo "WARN: 文件不存在 $f" >&2; continue; }
-            CNT=$(grep -cE "^[[:space:]]*(-[[:space:]]*)?image[[:space:]]*:[[:space:]]*[\"']?${REPO_ESC}([:@][^\"'[:space:]]*)?[\"']?" "$f" || true)
-            if [ "$CNT" -gt 0 ]; then
-              HIT=1
-              sed -i -E "s#^([[:space:]]*(-[[:space:]]*)?image[[:space:]]*:[[:space:]]*)[\"']?${REPO_ESC}([:@][^\"'[:space:]]*)?[\"']?(#.*)?#\1${r}\4#" "$f"
-            fi
-          done
-          if [ "$HIT" != "1" ]; then
-            echo "ERROR: 未在任何清单文件中找到镜像仓库前缀「$REPO_PREFIX」的 image: 行" >&2
-            echo "       请检查 files 路径与镜像引用是否匹配（image: ${REPO_PREFIX}:<tag>）" >&2
-            exit 1
+          stripped="${line#"${line%%[! ]*}"}"
+          ind=$(( ${#line} - ${#stripped} ))
+          if [ "$inblk" = "1" ] && [ "$ind" -lt "$reind" ]; then inblk=0; fi
+          case "$stripped" in
+            repository:*|'- 'repository:*)
+              rest="${line#*repository:}"
+              rest="${rest#"${rest%%[! ]*}"}"
+              rest="${rest#\"}"; rest="${rest%\"}"
+              rest="${rest#\'}"; rest="${rest%\'}"
+              rest="${rest%"${rest##*[! ]}"}"
+              if [ "$rest" = "$bval" ]; then inblk=1; reind=$ind; fi
+              ;;
+          esac
+          if [ "$inblk" = "1" ] && [ "$ind" -eq "$reind" ]; then
+            case "$stripped" in
+              tag:*|'- 'tag:*)
+                btag="${btag%"${btag##*[! ]}"}"  # 防御：tag 尾随空白不入清单
+                line="${line%tag:*}tag: ${btag}"
+                inblk=0; bf_hit=1
+                ;;
+            esac
           fi
-          BUMPED="${BUMPED:+$BUMPED,}$r"
+          printf '%s%s\n' "$line" "$lcr" >> "$BBTMP"
+        done < "$bf"
+        if [ "$bf_hit" = "1" ]; then mv "$BBTMP" "$bf"; else rm -f "$BBTMP"; fi
+        [ "$bf_hit" = "1" ]
+      }
+
+      BUMPED=""
+      # 输入形态归一：多行 / 空格 / 逗号分隔统一折算为逗号。schema 允许「多行/逗号分隔」，
+      # 且参数默认值经 YAML 双引号标量后换行会被折叠成空格，两种写法都折算后
+      # 下面 IFS=',' 的遍历对三种输入形态一致
+      IMAGES=$(printf '%s' "$IMAGES" | tr -s '[:space:]' ',')
+      FILES=$(printf '%s' "$FILES" | tr -s '[:space:]' ',')
+      IFS=','
+      # ---- 逐镜像替换，两种形态依次尝试：
+      #      形态 1 整串：image: <完整地址>，按仓库路径前缀匹配整行替换（保留缩进/注释）
+      #      形态 2 拆分：image: {repository, tag}，repository: 行值精确匹配后替换同缩进 tag: 行
+      for r in $IMAGES; do
+        case "$r" in
+          '') continue ;;  # 空项（分隔符折算产生的空串）
+          '$(tasks.'*)
+            # 上游结果占位符没被解析成实际值：说明该引用的结果本次运行没有产出
+            # （上游任务被条件分支跳过 / 依赖路径缺失）。直接失败——静默跳过会让
+            # 什么都没 bump 的运行报「GitOps 更新完成」成功
+            echo "ERROR: 镜像引用里还有未解析的上游结果占位符：$r" >&2
+            echo "       请确认上游任务（如 build-image）与当前节点有连线依赖，且本次运行确实产出了该结果；" >&2
+            echo "       改动画布/参数后需重新保存流水线版本再重跑（编译产物随之重新生成）" >&2
+            exit 1
+            ;;
+        esac
+        # repo 前缀 = 去掉 :tag / @digest。tag 冒号取「最后一个 / 之后」的最后一个，
+        # 避免 registry 带端口（reg:8443/app:tag）时被端口冒号截断
+        _P="${r%%@*}"
+        _A="${_P##*/}"
+        case "$_A" in
+          *:*) REPO_PREFIX="${_P%:*}" ;;
+          *)   REPO_PREFIX="$_P" ;;
+        esac
+        # 正则转义（. 与 / 在 BRE/ERE 中 / 由分隔符规避，. 需转义）
+        REPO_ESC=$(printf '%s' "$REPO_PREFIX" | sed -e 's/[][\.*^$()+?{}|]/\\&/g')
+        HIT=0
+        # ---- 形态 1：整串（全部文件）----
+        for f in $FILES; do
+          [ -f "$f" ] || { echo "WARN: 文件不存在 $f" >&2; continue; }
+          CNT=$(grep -cE "^[[:space:]]*(-[[:space:]]*)?image[[:space:]]*:[[:space:]]*[\"']?${REPO_ESC}([:@][^\"'[:space:]]*)?[\"']?" "$f" || true)
+          if [ "$CNT" -gt 0 ]; then
+            HIT=1
+            # sed 分隔符用 |：替换模式含 #.*?（行尾注释组），用 # 会撞分隔符
+            sed -i -E "s|^([[:space:]]*(-[[:space:]]*)?image[[:space:]]*:[[:space:]]*)[\"']?${REPO_ESC}([:@][^\"'[:space:]]*)?[\"']?(#.*)?|\1${r}\4|" "$f"
+          fi
         done
+        # ---- 形态 2：拆分（整串一个都没命中才进入）----
+        if [ "$HIT" != "1" ]; then
+          # tag = 最后一个 / 之后的 : 段（拆分形态不支持 digest）
+          AFTER_SLASH="${r##*/}"
+          case "$AFTER_SLASH" in
+            *@*) echo "ERROR: 镜像引用 $r 为 digest 形态，拆分形态更新不支持" >&2; exit 1 ;;
+            *:*) NEWTAG="${AFTER_SLASH#*:}" ;;
+            *)   echo "ERROR: 镜像引用 $r 未带 tag，无法按拆分形态更新" >&2; exit 1 ;;
+          esac
+          # repository 候选值：完整前缀；首段像 registry 主机（含 . 或 :）时再去掉主机段试一次。
+          # 注意此处 IFS=','（外层 IMAGES 分隔用），候选值须逗号拼接才能被 for 正确拆分
+          CANDS="$REPO_PREFIX"
+          FIRST="${REPO_PREFIX%%/*}"
+          case "$FIRST" in
+            *.*|*:*|localhost) CANDS="$CANDS,${REPO_PREFIX#*/}" ;;
+          esac
+          for cand in $CANDS; do
+            for f in $FILES; do
+              [ -f "$f" ] || continue
+              bump_split_file "$f" "$cand" "$NEWTAG" && HIT=1
+            done
+          done
+        fi
+        if [ "$HIT" != "1" ]; then
+          echo "ERROR: 未在任何清单文件中找到镜像仓库「$REPO_PREFIX」的整串 image: 行或同值 repository: 行" >&2
+          echo "       整串: image: ${REPO_PREFIX}:<tag>；拆分: repository: ${REPO_PREFIX}（或其去掉 registry 主机段）且其后有同缩进 tag: 行" >&2
+          exit 1
+        fi
+        BUMPED="${BUMPED:+$BUMPED,}$r"
       done
       unset IFS
 

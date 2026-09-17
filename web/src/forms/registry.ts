@@ -16,6 +16,7 @@ import SecretForm from '../components/forms/SecretForm.vue'
 import ArgoAppForm from '../components/forms/ArgoAppForm.vue'
 import { serializeRules, deserializeRules } from './rbac'
 import { serializeRoute, deserializeRoute } from './routes'
+import { parseArgoApp } from './argoApp'
 
 // schema 类资源：SchemaForm 直接编辑对象
 const schemaModule = (title: string, kind: string): FormModule => ({
@@ -32,17 +33,8 @@ const workloadModule = (title: string): FormModule => ({
   template: (kind, ns) => workloadTemplate(kind, ns),
 })
 
-// ArgoCD Application：保证 spec.source/destination/syncPolicy 结构存在（表单直接绑定）
-function parseArgoApp(obj: any): any {
-  const o = obj || {}
-  o.spec = o.spec || {}
-  o.spec.source = o.spec.source || { repoURL: '', path: '', targetRevision: 'main' }
-  o.spec.destination = o.spec.destination || { server: 'https://kubernetes.default.svc', namespace: '' }
-  o.spec.syncPolicy = o.spec.syncPolicy || { automated: {}, selfHeal: true, prune: true }
-  if (!o.spec.project) o.spec.project = 'default'
-  return o
-}
-
+// ArgoCD Application：parse 保证 metadata/spec.source/destination/syncPolicy 结构存在
+// （表单直接绑定）；来源类型判定/切换逻辑见 forms/argoApp.ts
 function kindOf(obj: any): string {
   const kind = obj?.kind || ''
   const map: Record<string, string> = {

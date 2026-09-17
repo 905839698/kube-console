@@ -229,14 +229,16 @@ func TestCompileCacheWorkspaceOptional(t *testing.T) {
 }
 
 // specNode 带固定 script 与声明参数/结果的测试节点（引用改写/校验场景用）。
+// paramDefaults 给参数配默认值（模拟 loader 把节点字段渲染进 params[].default）。
 type specNode struct {
-	t       string
-	params  []string
-	results []string
-	script  string
+	t             string
+	params        []string
+	paramDefaults map[string]string
+	results       []string
+	script        string
 }
 
-func (s specNode) Meta() nodetype.Meta               { return nodetype.Meta{Type: s.t} }
+func (s specNode) Meta() nodetype.Meta                      { return nodetype.Meta{Type: s.t} }
 func (s specNode) Validate(map[string]interface{}) []string { return nil }
 func (s specNode) RenderTask(map[string]interface{}) (nodetype.TaskSpec, error) {
 	ts := nodetype.TaskSpec{
@@ -244,7 +246,11 @@ func (s specNode) RenderTask(map[string]interface{}) (nodetype.TaskSpec, error) 
 		Steps: []nodetype.TektonStep{{Name: "main", Image: "alpine", Script: s.script}},
 	}
 	for _, p := range s.params {
-		ts.Params = append(ts.Params, nodetype.TektonParam{Name: p, Type: "string"})
+		param := nodetype.TektonParam{Name: p, Type: "string"}
+		if v, ok := s.paramDefaults[p]; ok {
+			param.Default = v
+		}
+		ts.Params = append(ts.Params, param)
 	}
 	for _, r := range s.results {
 		ts.Results = append(ts.Results, nodetype.TektonResult{Name: r})
@@ -254,12 +260,29 @@ func (s specNode) RenderTask(map[string]interface{}) (nodetype.TaskSpec, error) 
 func (s specNode) ResultMapping() nodetype.ResultMap { return nodetype.ResultMap{} }
 
 func taskScriptOf(spec *PipelineSpec, name string) string {
+	t := taskOf(spec, name)
+	if t == nil {
+		return ""
+	}
+	return t.TaskSpec.Steps[0].Script
+}
+
+func taskOf(spec *PipelineSpec, name string) *TektonPTask {
 	for i := range spec.Spec.Tasks {
 		if spec.Spec.Tasks[i].Name == name {
-			return spec.Spec.Tasks[i].TaskSpec.Steps[0].Script
+			return &spec.Spec.Tasks[i]
 		}
 	}
-	return ""
+	return nil
+}
+
+func paramValueOf(t *TektonPTask, name string) (string, bool) {
+	for _, p := range t.Params {
+		if p.Name == name {
+			return p.Value, true
+		}
+	}
+	return "", false
 }
 
 // 回归：build-image 等节点的默认 tag 曾误写 $(params.git_commit)——嵌入 taskSpec
@@ -338,6 +361,55 @@ func TestCompileRewriteBuildTagRefRenamedNode(t *testing.T) {
 	}
 }
 
+// 引用了非上游任务的结果（画布缺连线）→ 编译期报错。运行期两任务并行，
+// $(tasks...) 占位符解析不出会原样留在脚本里被 shell 当命令执行
+// （"tasks.xxx.results.yyy: not found"）
+func TestCompileResultRefWithoutDependency(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{t: "build-image", script: "IMG=repo:$(tasks.gc.results.git_commit)"})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "gc", Type: "git-clone"},
+		{ID: "build", Type: "build-image"},
+	}
+	// 无连线：build 引用 gc 的结果但两者无依赖路径
+
+	_, err := c.Compile(g, "ns")
+	if err == nil {
+		t.Fatal("引用非上游任务结果（缺连线）应编译失败")
+	}
+	if !strings.Contains(err.Error(), "没有依赖路径") {
+		t.Errorf("错误应提示缺少连线: %v", err)
+	}
+}
+
+// 经 condition 节点传递的依赖也算上游（gc → cond → build 引用 gc 结果合法）
+func TestCompileResultRefThroughCondition(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{t: model.NodeTypeCondition})
+	reg.Register(specNode{t: "build-image", script: "IMG=repo:$(tasks.gc.results.git_commit)"})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "gc", Type: "git-clone"},
+		{ID: "c1", Type: model.NodeTypeCondition, Params: map[string]interface{}{"param": "x", "op": "==", "value": "1"}},
+		{ID: "build", Type: "build-image"},
+	}
+	g.Edges = []model.Edge{
+		{Source: "gc", Target: "c1"},
+		{Source: "c1", Target: "build", Branch: model.BranchYes},
+	}
+
+	if _, err := c.Compile(g, "ns"); err != nil {
+		t.Fatalf("经 condition 传递的依赖应合法: %v", err)
+	}
+}
+
 // 流水线没有 git-clone 节点时，遗留引用无法解析，编译期给出可读错误
 // （而不是等 Tekton webhook 报 non-existent variable）。
 func TestCompileGitCommitRefWithoutGitClone(t *testing.T) {
@@ -402,5 +474,114 @@ func TestCompileValidateTaskRefs(t *testing.T) {
 		if !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: 错误应含 %q，实际 %v", tc.name, tc.want, err)
 		}
+	}
+}
+
+// 参数默认值里的上游结果引用必须提升为 PipelineTask 级 params 赋值：
+// Tekton 的结果替换不覆盖内嵌 taskSpec 的 params[].default，留在默认值里会被
+// 下游 $(params.X) 原样注入脚本、被 shell 当命令执行
+// （"tasks.build-image-xxx.results.imageRef: not found"，报错行正是 $(params.X) 那行）。
+func TestCompileLiftResultRefParamDefault(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{
+		t:             "gitops-bump",
+		params:        []string{"images", "files"},
+		paramDefaults: map[string]string{"images": "$(tasks.gc.results.git_commit)", "files": "apps/demo/deployment.yaml"},
+		script:        `IMAGES="$(params.images)"`,
+	})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "gc", Type: "git-clone"},
+		{ID: "bump", Type: "gitops-bump"},
+	}
+	g.Edges = []model.Edge{{Source: "gc", Target: "bump"}}
+
+	spec, err := c.Compile(g, "ns")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	bump := taskOf(spec, "bump")
+	if bump == nil {
+		t.Fatal("缺少 bump 任务")
+	}
+	v, ok := paramValueOf(bump, "images")
+	if !ok {
+		t.Fatal("含上游结果引用的参数 images 应提升为 PipelineTask params（值原样）")
+	}
+	if v != "$(tasks.gc.results.git_commit)" {
+		t.Errorf("提升的值应为原引用文本，实际 %q", v)
+	}
+	if _, ok := paramValueOf(bump, "files"); ok {
+		t.Error("不含结果引用的参数不应提升（继续用 taskSpec 默认值）")
+	}
+	// 默认值保留：编译产物自解释，人工排查时能看到原始引用
+	for _, p := range bump.TaskSpec.Params {
+		if p.Name == "images" && p.Default != "$(tasks.gc.results.git_commit)" {
+			t.Errorf("taskSpec 默认值应保持原样，实际 %v", p.Default)
+		}
+	}
+}
+
+// 提升不能把引用搬出编译期校验范围：缺连线时仍须报「没有依赖路径」。
+func TestCompileLiftResultRefParamDefaultWithoutDependency(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{
+		t:             "gitops-bump",
+		params:        []string{"images"},
+		paramDefaults: map[string]string{"images": "$(tasks.gc.results.git_commit)"},
+		script:        `IMAGES="$(params.images)"`,
+	})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "gc", Type: "git-clone"},
+		{ID: "bump", Type: "gitops-bump"},
+	}
+	// 无连线
+
+	_, err := c.Compile(g, "ns")
+	if err == nil {
+		t.Fatal("参数默认值引用非上游任务结果（缺连线）应编译失败")
+	}
+	if !strings.Contains(err.Error(), "没有依赖路径") {
+		t.Errorf("错误应提示缺少连线: %v", err)
+	}
+}
+
+// 提升发生在 git-clone 引用改写之后：形如 $(params.git_commit) 的历史默认值
+// 先改写成实际节点 ID 的结果引用，再被提升。
+func TestCompileLiftResultRefParamAfterGitCloneRewrite(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{
+		t:             "build-image",
+		params:        []string{"tag"},
+		paramDefaults: map[string]string{"tag": "$(params.git_commit)"},
+		script:        "IMG=repo:$(params.tag)",
+	})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "src", Type: "git-clone"},
+		{ID: "build", Type: "build-image"},
+	}
+	g.Edges = []model.Edge{{Source: "src", Target: "build"}}
+
+	spec, err := c.Compile(g, "ns")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	v, ok := paramValueOf(taskOf(spec, "build"), "tag")
+	if !ok {
+		t.Fatal("改写后的结果引用应提升为 PipelineTask params")
+	}
+	if v != "$(tasks.src.results.git_commit)" {
+		t.Errorf("提升的值应为改写后的引用，实际 %q", v)
 	}
 }

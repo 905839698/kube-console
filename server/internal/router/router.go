@@ -159,64 +159,66 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		// CD：ArgoCD 应用视图
 		authed.GET("/argocd/apps", ciHandler.ArgoApps)
 		authed.GET("/argocd/apps/:namespace/:name", ciHandler.ArgoAppGet)
+		// AppProject 列表（应用 spec.project 必须指向其中之一，表单据此选项目并校验仓库/目标）
+		authed.GET("/argocd/projects", ciHandler.ArgoProjects)
 		authed.GET("/argocd/repos", ciHandler.ArgoRepos)
 		// 镜像 Tag 下拉与 Pod 维度 CVE（只读，登录即可用）
 		authed.GET("/registry/image-tags", platformHandler.ImageTags)
 		authed.GET("/registry/image-vulns", platformHandler.ImageVulns)
 
-			// Nacos 微服务：服务发现 / 配置管理（登录即可用，跟随全局命名空间选择；
-			// 连接配置 / 同步 / 密码轮换 / Nacos 侧命名空间与用户管理仍走 admin 组）
-			authed.GET("/nacos/ready", nacosHandler.NacosReady)
-			authed.GET("/nacos/services", nacosHandler.NacosServices)
-			authed.GET("/nacos/instances", nacosHandler.NacosInstances)
-			authed.DELETE("/nacos/service", nacosHandler.NacosServiceDelete)
-			authed.GET("/nacos/configs", nacosHandler.NacosConfigList)
-			authed.GET("/nacos/config-export", nacosHandler.NacosConfigExport)
-			authed.GET("/nacos/config-content", nacosHandler.NacosConfigContent)
-			authed.POST("/nacos/config-publish", nacosHandler.NacosConfigPublish)
-			authed.DELETE("/nacos/config-content", nacosHandler.NacosConfigDelete)
+		// Nacos 微服务：服务发现 / 配置管理（登录即可用，跟随全局命名空间选择；
+		// 连接配置 / 同步 / 密码轮换 / Nacos 侧命名空间与用户管理仍走 admin 组）
+		authed.GET("/nacos/ready", nacosHandler.NacosReady)
+		authed.GET("/nacos/services", nacosHandler.NacosServices)
+		authed.GET("/nacos/instances", nacosHandler.NacosInstances)
+		authed.DELETE("/nacos/service", nacosHandler.NacosServiceDelete)
+		authed.GET("/nacos/configs", nacosHandler.NacosConfigList)
+		authed.GET("/nacos/config-export", nacosHandler.NacosConfigExport)
+		authed.GET("/nacos/config-content", nacosHandler.NacosConfigContent)
+		authed.POST("/nacos/config-publish", nacosHandler.NacosConfigPublish)
+		authed.DELETE("/nacos/config-content", nacosHandler.NacosConfigDelete)
 
-			// 平台管理（仅管理员）
-			admin := authed.Group("")
-			admin.Use(middleware.AdminRequired(db, cfg.Admin.Username))
-			{
-				admin.GET("/users", userHandler.List)
-				admin.POST("/users", userHandler.Create)
-				admin.PUT("/users/:id/password", userHandler.ResetPassword)
-				admin.PUT("/users/:id/role", userHandler.UpdateRole)
-				admin.DELETE("/users/:id", userHandler.Delete)
-				admin.GET("/audit", userHandler.AuditList)
+		// 平台管理（仅管理员）
+		admin := authed.Group("")
+		admin.Use(middleware.AdminRequired(db, cfg.Admin.Username))
+		{
+			admin.GET("/users", userHandler.List)
+			admin.POST("/users", userHandler.Create)
+			admin.PUT("/users/:id/password", userHandler.ResetPassword)
+			admin.PUT("/users/:id/role", userHandler.UpdateRole)
+			admin.DELETE("/users/:id", userHandler.Delete)
+			admin.GET("/audit", userHandler.AuditList)
 
-				// 用户组管理
-				admin.POST("/groups", platformHandler.SaveGroup)
-				admin.DELETE("/groups/:id", platformHandler.DeleteGroup)
-				admin.PUT("/users/:id/group", platformHandler.SetUserGroup)
+			// 用户组管理
+			admin.POST("/groups", platformHandler.SaveGroup)
+			admin.DELETE("/groups/:id", platformHandler.DeleteGroup)
+			admin.PUT("/users/:id/group", platformHandler.SetUserGroup)
 
-				// 通知渠道与记录
-				admin.GET("/notify/channels", platformHandler.ListChannels)
-				admin.POST("/notify/channels", platformHandler.SaveChannel)
-				admin.DELETE("/notify/channels/:id", platformHandler.DeleteChannel)
-				admin.POST("/notify/channels/:id/test", platformHandler.TestChannel)
-				admin.GET("/notify/logs", platformHandler.NotifyLogs)
+			// 通知渠道与记录
+			admin.GET("/notify/channels", platformHandler.ListChannels)
+			admin.POST("/notify/channels", platformHandler.SaveChannel)
+			admin.DELETE("/notify/channels/:id", platformHandler.DeleteChannel)
+			admin.POST("/notify/channels/:id/test", platformHandler.TestChannel)
+			admin.GET("/notify/logs", platformHandler.NotifyLogs)
 
-				// Alertmanager 连接配置与主配置 YAML（读写 Secret，含 SMTP 密码，仅管理员）
-				admin.GET("/alertmanager", obsHandler.ListAMConfigs)
-				admin.POST("/alertmanager", obsHandler.SaveAMConfig)
-				admin.DELETE("/alertmanager/:cluster", obsHandler.DeleteAMConfig)
-				admin.POST("/alertmanager/test", obsHandler.TestAMConfig)
-				admin.GET("/monitor/am/config-yaml", obsHandler.AMConfigYAMLGet)
-				admin.PUT("/monitor/am/config-yaml", obsHandler.AMConfigYAMLSave)
+			// Alertmanager 连接配置与主配置 YAML（读写 Secret，含 SMTP 密码，仅管理员）
+			admin.GET("/alertmanager", obsHandler.ListAMConfigs)
+			admin.POST("/alertmanager", obsHandler.SaveAMConfig)
+			admin.DELETE("/alertmanager/:cluster", obsHandler.DeleteAMConfig)
+			admin.POST("/alertmanager/test", obsHandler.TestAMConfig)
+			admin.GET("/monitor/am/config-yaml", obsHandler.AMConfigYAMLGet)
+			admin.PUT("/monitor/am/config-yaml", obsHandler.AMConfigYAMLSave)
 
-				// Nacos 集成管理：连接配置 / 同步 / 密码轮换 / Nacos 侧命名空间与用户
-				admin.GET("/nacos/config", nacosHandler.ListNacosConfigs)
-				admin.POST("/nacos/config", nacosHandler.SaveNacosConfig)
-				admin.DELETE("/nacos/config/:cluster", nacosHandler.DeleteNacosConfig)
-				admin.POST("/nacos/config/test", nacosHandler.TestNacosConfig)
-				admin.GET("/nacos/status", nacosHandler.NacosStatus)
-				admin.POST("/nacos/sync/:cluster", nacosHandler.NacosSyncNow)
-				admin.POST("/nacos/reset-password", nacosHandler.NacosResetPassword)
-				admin.GET("/nacos/namespaces", nacosHandler.NacosNamespaces)
-				admin.GET("/nacos/users", nacosHandler.NacosUsers)
+			// Nacos 集成管理：连接配置 / 同步 / 密码轮换 / Nacos 侧命名空间与用户
+			admin.GET("/nacos/config", nacosHandler.ListNacosConfigs)
+			admin.POST("/nacos/config", nacosHandler.SaveNacosConfig)
+			admin.DELETE("/nacos/config/:cluster", nacosHandler.DeleteNacosConfig)
+			admin.POST("/nacos/config/test", nacosHandler.TestNacosConfig)
+			admin.GET("/nacos/status", nacosHandler.NacosStatus)
+			admin.POST("/nacos/sync/:cluster", nacosHandler.NacosSyncNow)
+			admin.POST("/nacos/reset-password", nacosHandler.NacosResetPassword)
+			admin.GET("/nacos/namespaces", nacosHandler.NacosNamespaces)
+			admin.GET("/nacos/users", nacosHandler.NacosUsers)
 
 			// 镜像仓库
 			admin.GET("/registry/config", platformHandler.GetRegistryConfig)
@@ -312,10 +314,10 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		authed.GET("/generic/:group/:version/:resource/:name/yaml", k8sHandler.GetGenericGVRYAML)
 		authed.DELETE("/generic/:group/:version/:resource/:name", k8sHandler.DeleteGenericGVR)
 
-			// YAML 应用与读取（export：按勾选的资源导出多文档 YAML，Kuboard 式逐层选择）
-			authed.POST("/yaml/apply", k8sHandler.ApplyYAML)
-			authed.GET("/yaml", k8sHandler.GetYAML)
-			authed.POST("/yaml/export", k8sHandler.ExportYAML)
+		// YAML 应用与读取（export：按勾选的资源导出多文档 YAML，Kuboard 式逐层选择）
+		authed.POST("/yaml/apply", k8sHandler.ApplyYAML)
+		authed.GET("/yaml", k8sHandler.GetYAML)
+		authed.POST("/yaml/export", k8sHandler.ExportYAML)
 
 		// Helm 应用管理（release 操作通过 X-Cluster 选择集群）
 		authed.GET("/helm/releases", helmHandler.ListReleases)

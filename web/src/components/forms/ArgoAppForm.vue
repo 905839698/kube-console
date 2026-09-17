@@ -4,22 +4,33 @@
   <el-form label-width="120px" size="small">
     <el-divider content-position="left">基础</el-divider>
     <el-form-item label="名称">
-      <el-input :model-value="o.metadata?.name" disabled />
-      <span class="hint">名称创建后不可改</span>
+      <!-- 创建时可填：名称就是 Application 对象名；编辑时锁定（改名等于新建另一个对象） -->
+      <el-input v-model="o.metadata.name" :disabled="!creating" placeholder="如 my-app" />
+      <span class="hint">{{ creating ? 'Application 对象名（小写字母/数字/-/.）' : '名称创建后不可改' }}</span>
     </el-form-item>
     <el-form-item label="命名空间">
-      <el-input :model-value="o.metadata?.namespace" disabled placeholder="应用对象所在 ns（通常是 argocd）" />
+      <el-input v-model="o.metadata.namespace" :disabled="!creating" placeholder="应用对象所在 ns（通常是 argocd）" />
+      <span v-if="!creating" class="hint">对象所在 ns 不可改（迁移 ns 等于新建对象）</span>
     </el-form-item>
     <el-form-item label="Project">
-      <el-input v-model="o.spec.project" placeholder="default" style="width: 260px" />
+      <!-- 必须选已存在的 AppProject：填了不存在的项目名，ArgoCD 会拒绝加载整个应用，
+           状态恒为 Unknown 并报 app is not allowed in project X, or the project does not exist -->
+      <el-select v-if="projects" v-model="projectName" filterable placeholder="default" style="width: 300px">
+        <el-option v-for="p in projectOptions" :key="p.value" :value="p.value" :label="p.label" />
+      </el-select>
+      <!-- 项目列表拉取失败时退回手填，不阻塞编辑 -->
+      <el-input v-else v-model="o.spec.project" placeholder="default" style="width: 260px" />
+      <span class="hint">AppProject（必须是集群中已创建的项目）</span>
     </el-form-item>
+    <el-alert v-for="(w, i) in projectWarnings" :key="i" type="warning" :closable="false" show-icon class="warn" :title="w" />
 
     <el-divider content-position="left">Source（Git 仓库 / Helm Chart）</el-divider>
     <el-form-item label="来源类型">
-      <el-radio-group v-model="sourceType" @change="onSourceTypeChange">
+      <el-radio-group v-model="sourceType">
         <el-radio-button value="git">Git 目录</el-radio-button>
         <el-radio-button value="helm">Helm Chart</el-radio-button>
       </el-radio-group>
+      <span class="hint">Helm 走 chart（相对仓库根目录），Git 走 path</span>
     </el-form-item>
     <el-form-item label="仓库地址" required>
       <el-input v-model="o.spec.source.repoURL" placeholder="https://github.com/org/repo.git 或 http://helm-repo/" style="width: 460px" />
@@ -73,28 +84,29 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import KvEditor from './KvEditor.vue'
+import { argocdApi, type ArgoCDProject } from '../../api'
+import { argoSourceType, projectIssues, setArgoSourceType } from '../../forms/argoApp'
 
-const props = defineProps<{ modelValue: any }>()
+const props = defineProps<{ modelValue: any; creating?: boolean }>()
 const emit = defineEmits(['update:modelValue', 'change'])
 const o = computed({
   get: () => props.modelValue,
   set: (v) => emit('update:modelValue', v),
 })
+// 是否新建：名称/命名空间仅在新建时可编辑（创建模式由 ObjectEditor 传入）
+const creating = computed(() => !!props.creating)
 
-// parse 保证 spec.source/destination/syncPolicy 结构存在，这里直接绑定
-const sourceType = computed(() => (o.value?.spec?.source?.chart ? 'helm' : 'git'))
-function onSourceTypeChange(v: string) {
-  const src = o.value.spec.source
-  if (v === 'helm' && !src.chart) {
-    src.chart = ''
-  } else if (v === 'git') {
-    delete src.chart
-    if (!src.path) src.path = ''
-  }
-  emit('change')
-}
+// 来源类型：可写 computed，点击即落到对象上（spec.source.chart 的存在与否决定形态）。
+// 用 computed 而非本地 ref，YAML tab 改动也能立刻反映到单选框上。
+const sourceType = computed({
+  get: () => argoSourceType(o.value?.spec?.source),
+  set: (v: 'git' | 'helm') => {
+    setArgoSourceType(o.value, v)
+    emit('change')
+  },
+})
 
 const automated = computed({
   get: () => !!o.value?.spec?.syncPolicy?.automated,
@@ -108,6 +120,52 @@ const automated = computed({
   },
 })
 
+// ---- AppProject：只允许选已存在的项目；项目不匹配（仓库/目标未被允许）时保存前提示 ----
+// null = 未加载或拉取失败（退回手填输入框，不阻塞编辑）
+const projects = ref<ArgoCDProject[] | null>(null)
+
+onMounted(async () => {
+  try {
+    const r = await argocdApi.projects()
+    projects.value = r.installed ? r.items || [] : null
+  } catch {
+    projects.value = null
+  }
+})
+
+const projectName = computed({
+  get: () => o.value?.spec?.project || 'default',
+  set: (v: string) => {
+    o.value.spec.project = v || 'default'
+    emit('change')
+  },
+})
+
+// 选项：集群现有项目 + 当前值（当前值不存在时也列出来，否则下拉会显示成空、看不出问题）
+const projectOptions = computed(() => {
+  const list = projects.value || []
+  const opts = list.map((p) => ({ value: p.name, label: p.description ? `${p.name}（${p.description}）` : p.name }))
+  const cur = projectName.value
+  if (cur && !list.some((p) => p.name === cur)) opts.unshift({ value: cur, label: `${cur}（不存在）` })
+  return opts
+})
+
+const projectWarnings = computed(() => {
+  const list = projects.value
+  if (!list) return []
+  const name = projectName.value
+  const known = list.find((p) => p.name === name)
+  if (!known) {
+    const existing = list.map((p) => p.name).join('、') || '（无）'
+    return [`AppProject「${name}」不存在（集群现有：${existing}）。ArgoCD 会拒绝加载该应用并报 “app is not allowed in project ${name}, or the project does not exist”，状态恒为 Unknown——请改选已存在的项目，或先在 ArgoCD 中创建该项目。`]
+  }
+  return projectIssues(known, {
+    repoURL: o.value?.spec?.source?.repoURL,
+    server: o.value?.spec?.destination?.server,
+    namespace: o.value?.spec?.destination?.namespace,
+  })
+})
+
 // 数组 ↔ 逗号文本
 function arrToText(a: unknown[]): string {
   return (a || []).join(', ')
@@ -119,8 +177,14 @@ const valueFilesText = computed({
   get: () => arrToText(o.value?.spec?.source?.helm?.valueFiles || []),
   set: (v: string) => {
     const arr = textToArr(v)
-    if (arr.length) o.value.spec.source.helm.valueFiles = arr
-    else delete o.value.spec.source.helm?.valueFiles
+    const src = o.value.spec.source
+    // helm 块可能还不存在（刚从 Git 切过来），按需创建/回收，避免写 undefined 报错
+    if (arr.length) {
+      src.helm = src.helm || {}
+      src.helm.valueFiles = arr
+    } else if (src.helm) {
+      delete src.helm.valueFiles
+    }
     emit('change')
   },
 })
@@ -137,4 +201,5 @@ const syncOptionsText = computed({
 
 <style scoped>
 .hint { color: #909399; font-size: 12px; margin-left: 10px; }
+.warn { margin: 0 0 12px 0; }
 </style>
