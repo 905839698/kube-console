@@ -23,7 +23,7 @@
 | go-build | `golang:{{goVersion}}` | goVersion=1.22 | Go 编译 |
 | gradle-build | `gradle:8-jdk{{jdk}}` | jdk=17 | Gradle 构建 |
 | maven-build | `maven:{{mavenVersion}}-eclipse-temurin-{{jdk}}` | mavenVersion=3.9, jdk=17 | Maven 构建 |
-| npm-build | `node:{{nodeVersion}}` | nodeVersion=20 | npm 构建 |
+| npm-build | `node:{{nodeVersion}}` | nodeVersion=20 | 自定义 Node 构建脚本（registry/代理、依赖安装、构建命令都写在 script 参数里） |
 | python-build | `python:{{pythonVersion}}` | pythonVersion=3.11 | Python 构建 |
 | build-image | `buildkit:stable` | — | 容器镜像构建（BuildKit） |
 | build-image | `syft:1.0.0-sh2` | — | 构建产物 SBOM/漏洞扫描 |

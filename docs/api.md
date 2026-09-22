@@ -83,6 +83,9 @@ kind: `deployments | statefulsets | daemonsets | cronjobs | jobs | pods | replic
 | POST | `/workloads/:kind/:name/rollback?namespace=&revision=` | 回滚 |
 | PUT | `/workloads/:kind/:name/scale` | 缩放 `{namespace,replicas}` |
 | PUT | `/workloads/:kind/:name/restart` | 滚动重启（触发滚动更新） |
+| GET | `/workloads/:kind/:name/logcollection?namespace=` | 容器内日志采集状态 `{enabled,config}`（仅 `deployments\|statefulsets\|daemonsets`） |
+| PUT | `/workloads/:kind/:name/logcollection?namespace=` | 开启/更新采集 `{container,logPath,format,image}`：注入 fluent-bit Sidecar + 共享 emptyDir，改 Pod 模板触发滚动更新；`format=text` 写行日志索引、`json` 写 JSON 索引（见「日志源配置」） |
+| DELETE | `/workloads/:kind/:name/logcollection?namespace=` | 关闭采集（摘除 Sidecar、共享卷与 ConfigMap/Secret） |
 | DELETE | `/workloads/:kind/:name?namespace=` | 删除（含 PodMonitor 清理） |
 
 ## 通用资源（kind 模式）
@@ -207,7 +210,12 @@ CI 接口全部经 **X-Cluster** 选择集群（集群隔离）；项目级资�
 | POST | `/ci/deployments/:id/rollback` **admin** | 一键回滚（按快照恢复容器镜像） |
 | GET | `/ci/repo/refs?url=&credential=` | Git 分支/Tag（`git ls-remote`，凭据名解析 K8s Secret，5min 缓存） |
 | GET | `/ci/k8s/targets?namespace=` | k8s-deploy 节点下拉数据（workload + 容器） |
-| GET | `/argocd/apps?namespace=` | ArgoCD 应用列表（读 `applications.argoproj.io` CRD；未安装返回 `installed:false`） |
+| GET | `/argocd/apps` | ArgoCD 应用列表（跨全部命名空间读 `applications.argoproj.io` CRD；未安装返回 `installed:false`）。条目含 `project`（spec.project）与 `specError`（`status.conditions` 的 InvalidSpecError 原文——spec 非法如指向不存在的 AppProject 时 sync/health 恒为 Unknown，原因只在这条 condition） |
+| GET | `/argocd/apps/:namespace/:name` | 完整 Application 对象 YAML（可视化编辑器加载） |
+| GET | `/argocd/projects` | AppProject 列表（`appprojects.argoproj.io` CRD，含 `sourceRepos`/`destinations`）。应用 `spec.project` 必须指向其中之一，否则 ArgoCD 拒绝加载（只报 "app is not allowed in project X, or the project does not exist"）；前端表单据此选项目并校验仓库/目标是否被允许 |
+| GET | `/argocd/repos` | 仓库列表（**ArgoCD v3**：Repository CRD 已移除，以带标签 `argocd.argoproj.io/secret-type=repository` 的 Secret 存储；凭据只返回有无标志，不返回明文） |
+| POST | `/argocd/repos` **admin** | 新建/更新（upsert）。主机级 URL（如 `http://gitlab.xxx.com`）= 凭据模板，该域下仓库自动继承账号密码 |
+| PUT/DELETE | `/argocd/repos/:name` **admin** | 更新（密码留空 = 保留原凭据）/ 删除 |
 | POST | `/argocd/apps/:namespace/:name/refresh` **admin** | 触发 ArgoCD 刷新（`refresh=normal` annotation） |
 
 ## 镜像仓库（Harbor）
@@ -259,10 +267,10 @@ CI 接口全部经 **X-Cluster** 选择集群（集群隔离）；项目级资�
 | DELETE | `/notify/channels/:id` | 删除渠道 |
 | POST | `/notify/channels/:id/test` | 测试渠道连通 |
 | GET | `/notify/logs?page=&size=` | 推送历史 |
-| GET/POST | `/logsources` | ES 日志源（按集群）列表 / 保存（含事件归档开关与索引前缀） |
+| GET/POST | `/logsources` | ES 日志源（按集群）列表 / 保存：连接信息 + `indexPrefix`（行日志：标准输出与单行文本采集）+ `jsonIndexPrefix`（JSON 采集，空=`logstash-`）+ 事件归档开关与 `eventIndexPrefix` |
 | DELETE | `/logsources/:cluster` | 删除日志源 |
 | POST | `/logsources/test` | 日志源连通性测试 |
-| POST | `/logs/search` | 日志检索（全文 + 字段 + 时间范围 + Pod 分布） |
+| POST | `/logs/search` | 日志检索 `{namespace,pod,container,source,keyword,level,minutes\|from/to,page,size}`；`source`=空(全部)/`stdout`(标准输出)/`file`(文本文件)/`json`(JSON 采集)，按来源只查对应索引模式 |
 | POST | `/events/archive/search` | 事件归档检索（ES，namespace/type/reason/keyword/object + 时间范围 + 分页） |
 | PUT | `/clusters/:name/grafana` | 保存集群 Grafana 地址（iframe 内嵌） |
 | GET | `/monitor/grafana-check?url=` | Grafana 可达性测试（服务端尽力而为） |
