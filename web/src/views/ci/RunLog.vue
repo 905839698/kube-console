@@ -59,7 +59,12 @@ function flush() {
   pending = []
 }
 
+// 连接代际：taskLogsUrl 是异步的，切换任务时上一代的 Promise 可能晚到，
+// 直接建连会出现两条 EventSource 同时往同一缓冲写（两个任务的日志互相混入）
+let gen = 0
+
 function cleanup() {
+  gen++
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
   pending = []
@@ -69,10 +74,13 @@ function cleanup() {
 
 function connect() {
   cleanup()
+  const g = gen
   void taskLogsUrl(props.runId, props.taskId)
     .then((url) => {
+      if (g !== gen) return // 已被更新的任务/卸载取代
       es = new EventSource(url)
       es.onmessage = (e) => {
+        if (g !== gen) return
         tries = 0
         loading.value = false
         error.value = ''
@@ -80,11 +88,12 @@ function connect() {
         if (text === '[end]') { flush(); es?.close(); es = null; return }
         pushLine(text)
       }
-      es.addEventListener('start', () => { loading.value = false; error.value = '' })
-      es.addEventListener('end', () => { loading.value = false; flush(); es?.close(); es = null })
+      es.addEventListener('start', () => { if (g !== gen) return; loading.value = false; error.value = '' })
+      es.addEventListener('end', () => { if (g !== gen) return; loading.value = false; flush(); es?.close(); es = null })
       es.onerror = () => {
         es?.close()
         es = null
+        if (g !== gen) return
         if (!runningFlag) return // 任务已结束，流自然断开
         tries += 1
         if (tries > RECONNECT_MAX_TRIES) { error.value = '日志连接多次重连失败，请关闭后重新打开'; return }
@@ -94,6 +103,7 @@ function connect() {
       }
     })
     .catch((e: any) => {
+      if (g !== gen) return
       tries += 1
       if (tries > RECONNECT_MAX_TRIES) { error.value = `日志连接失败: ${e?.message ?? e}`; return }
       const delay = Math.min(RECONNECT_BASE_MS * 2 ** (tries - 1), RECONNECT_MAX_MS)

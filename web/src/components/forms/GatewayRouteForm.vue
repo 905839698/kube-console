@@ -63,10 +63,10 @@
           <!-- width:100% 必须显式：本行直接位于 el-form-item__content（flex 容器）内，
                不定宽时按内容收缩，内部百分比宽度的 select 会被挤成几像素 -->
           <div class="kv-row" style="width: 100%">
-            <el-select v-model="o.spec.parentRefs[0].namespace" style="width: 40%" @change="onParentNsChange">
+            <el-select v-if="o.spec.parentRefs?.[0]" v-model="o.spec.parentRefs[0].namespace" style="width: 40%" @change="onParentNsChange">
               <el-option v-for="n in namespaces" :key="n" :label="n" :value="n" />
             </el-select>
-            <el-select v-model="o.spec.parentRefs[0].name" style="width: 55%" placeholder="选择 Gateway" filterable>
+            <el-select v-if="o.spec.parentRefs?.[0]" v-model="o.spec.parentRefs[0].name" style="width: 55%" placeholder="选择 Gateway" filterable>
               <el-option v-for="g in gateways" :key="g" :label="g" :value="g" />
             </el-select>
           </div>
@@ -161,7 +161,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
 import { load as yamlLoad } from 'js-yaml'
 import { k8sApi } from '../../api'
@@ -290,23 +290,31 @@ function setAllowedRoutes(l: any, from: string) {
   l.allowedRoutes.namespaces = { from }
 }
 
+// 非 Gateway 表单（路由类型）：确保 parentRefs 完整。
+// 模板直接绑定 o.spec.parentRefs[0].namespace，必须在首帧渲染前（setup）就存在，
+// 只放在 onMounted 里会在首次渲染时访问 undefined[0] 白屏
+function ensureParentRef() {
+  if (props.kind === 'gateways') return
+  o.value.spec = o.value.spec || {}
+  o.value.spec.parentRefs = o.value.spec.parentRefs || []
+  if (o.value.spec.parentRefs.length === 0) {
+    o.value.spec.parentRefs.push({ name: '', namespace: o.value.metadata?.namespace || 'default' })
+  }
+  const pr = o.value.spec.parentRefs[0]
+  if (!pr.namespace) pr.namespace = o.value.metadata?.namespace || 'default'
+}
+ensureParentRef()
+watch(() => props.modelValue, (nv) => { if (nv) ensureParentRef() })
+
 onMounted(async () => {
   try {
     namespaces.value = (await k8sApi.namespaces()).map((n) => n.name)
   } catch {
     namespaces.value = ['default']
   }
-  // 非 Gateway 表单（路由类型）：确保 parentRefs 完整并加载 Gateway 列表
+  // 非 Gateway 表单（路由类型）：加载 Gateway 列表
   if (props.kind !== 'gateways') {
-    o.value.spec = o.value.spec || {}
-    o.value.spec.parentRefs = o.value.spec.parentRefs || []
-    if (o.value.spec.parentRefs.length === 0) {
-      o.value.spec.parentRefs.push({ name: '', namespace: o.value.metadata?.namespace || 'default' })
-    }
     const pr = o.value.spec.parentRefs[0]
-    if (!pr.namespace) {
-      pr.namespace = o.value.metadata?.namespace || 'default'
-    }
     loadGateways(pr.namespace)
     // 后端引用：补全命名空间（空 = 同命名空间，与 parentRefs 同策略显式化）并预载服务列表与端口，
     // 编辑既有路由时三个下拉直接显示可选值

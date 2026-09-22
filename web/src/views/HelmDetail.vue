@@ -15,7 +15,7 @@
           </div>
           <div class="actions">
             <el-button size="small" @click="load">刷新</el-button>
-            <el-button size="small" type="danger" plain @click="doUninstall">卸载</el-button>
+            <el-button size="small" type="danger" plain :disabled="!perm.canWriteNS(ns)" @click="doUninstall">卸载</el-button>
           </div>
         </div>
       </template>
@@ -53,8 +53,9 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { usePerm } from '../store/perm'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { helmApi, type HelmReleaseInfo, type HelmReleaseHistory } from '../api'
 import YamlEditor from '../components/YamlEditor.vue'
@@ -63,8 +64,15 @@ import { confirmDelete } from '../utils/confirm'
 const route = useRoute()
 const router = useRouter()
 
-const name = ref(String(route.params.name || ''))
-const ns = ref(String(route.query.namespace || 'default'))
+// 路由参数驱动（同名换 ns / 换 release 走同一路由组件实例时自动重拉，
+// 旧实现只 onMounted 取一次 → 前进后退或侧栏换 release 后标题与数据错位）
+const name = computed(() => String(route.params.name || ''))
+const ns = computed(() => String(route.query.namespace || 'default'))
+
+// 写权限：Helm release 是命名空间级资源（后端按该 ns 判定）
+const perm = usePerm()
+
+watch([name, ns], load)
 
 const loading = ref(false)
 const info = ref<HelmReleaseInfo>()
@@ -111,11 +119,11 @@ function goBack() {
 
 async function doUninstall() {
   try {
-    await confirmDelete(name.value, { title: '卸载应用', warning: '卸载不可恢复。' })
+    await confirmDelete(name.value, { title: '卸载应用', warning: '卸载后删除 release 及其全部记录，不可恢复。' })
   } catch {
     return
   }
-  await helmApi.uninstall(ns.value, name.value, true)
+  await helmApi.uninstall(ns.value, name.value, false)
   ElMessage.success('已卸载')
   goBack()
 }

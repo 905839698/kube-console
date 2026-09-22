@@ -21,7 +21,8 @@ steps:
         export PIP_CACHE_DIR="$CACHE/pip"
         mkdir -p "$PIP_CACHE_DIR"
       fi
-      [ -f requirements.txt ] && {{installCommand}} || true
+      # A && B || C 会把「requirements.txt 存在但安装失败」也吞掉，改显式 if
+      if [ -f requirements.txt ]; then {{installCommand}}; fi
       if [ -n "{{testCommand}}" ]; then {{testCommand}}; fi
       if [ -n "{{buildCommand}}" ]; then {{buildCommand}}; fi
       ls -lh dist/ 2>/dev/null || true

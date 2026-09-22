@@ -6,14 +6,14 @@
           <span>集群管理</span>
           <div class="header-right">
             <el-button :icon="Refresh" circle @click="load" />
-            <el-button type="primary" size="small" @click="openAdd">
+            <el-button v-if="userStore.isAdmin" type="primary" size="small" @click="openAdd">
               <el-icon><Plus /></el-icon>&nbsp;添加集群
             </el-button>
           </div>
         </div>
       </template>
 
-      <el-table border :data="clusterStore.clusters" v-loading="loading" stripe>
+      <el-table border :data="full" v-loading="loading" stripe>
         <el-table-column prop="name" label="名称" min-width="160" />
         <el-table-column label="状态" width="110">
           <template #default="{ row }">
@@ -35,8 +35,10 @@
           <template #default="{ row }">
             <el-button size="small" @click="testConn(row)">测试连接</el-button>
             <el-button size="small" @click="testPrometheus(row)">测试监控</el-button>
-            <el-button size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="removeCluster(row)">删除</el-button>
+            <template v-if="userStore.isAdmin">
+              <el-button size="small" @click="openEdit(row)">编辑</el-button>
+              <el-button size="small" type="danger" @click="removeCluster(row)">删除</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>
@@ -85,10 +87,15 @@ import type { UploadFile } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { clusterApi, grafanaApi, k8sApi, type Cluster } from '../api'
 import { useClusterStore } from '../store/cluster'
+import { useUserStore } from '../store/user'
 import StatusTag from '../components/StatusTag.vue'
 import { confirmDelete } from '../utils/confirm'
 
 const clusterStore = useClusterStore()
+const userStore = useUserStore()
+// 完整集群信息（server/context/prometheus 等）走平台角色接口 /clusters；
+// 顶栏切换器用的最小字段在 cluster store（/my-clusters）
+const full = ref<Cluster[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
 const editing = ref(false)
@@ -101,6 +108,7 @@ async function load() {
   loading.value = true
   try {
     await clusterStore.load()
+    full.value = await clusterApi.list()
   } finally {
     loading.value = false
   }
@@ -149,7 +157,12 @@ async function save() {
   saving.value = true
   try {
     if (editing.value) {
-      await clusterApi.update(form.name, form.kubeconfig)
+      // 编辑时后端从不回传 kubeconfig 明文：留空 = 不改 kubeconfig。
+      // 旧实现无条件带空串调 update，后端校验「kubeconfig 不能为空」直接 400，
+      // 编辑功能 100% 保存失败（后续 Prometheus/Grafana 保存全部不执行）
+      if (form.kubeconfig.trim()) {
+        await clusterApi.update(form.name, form.kubeconfig)
+      }
       // 保存 Prometheus 配置
       await clusterApi.updatePrometheus(form.name, {
         prometheusNamespace: form.prometheusNamespace,
@@ -160,7 +173,8 @@ async function save() {
       ElMessage.success('集群已更新')
     } else {
       await clusterApi.create(form.name.trim(), form.kubeconfig)
-      if (form.prometheusNamespace || form.prometheusService) {
+      // 端口也参与判断：只改端口（ns/service 留空走默认）时同样要保存
+      if (form.prometheusNamespace || form.prometheusService || form.prometheusPort !== 9090) {
         await clusterApi.updatePrometheus(form.name.trim(), {
           prometheusNamespace: form.prometheusNamespace,
           prometheusService: form.prometheusService,
@@ -180,8 +194,9 @@ async function save() {
 }
 
 async function testPrometheus(row: Cluster) {
-  await k8sApi.monitorCheck()
-  ElMessage.success('Prometheus 连接正常')
+  // 旧实现测的是「当前选中集群」（http 层默认 X-Cluster），对 row 无效
+  await k8sApi.monitorCheck(row.name)
+  ElMessage.success(`Prometheus 连接正常（${row.name}）`)
 }
 
 // Grafana 地址变化时才调用保存接口

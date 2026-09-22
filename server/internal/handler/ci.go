@@ -1,16 +1,10 @@
-// ci-platform 集成：/ci/api/*path 通用透传代理（自动登录、token 缓存、SSE/下载流式转发）
-// 与 ArgoCD 应用视图（dynamic client 读 Application CRD）
+// ArgoCD 应用视图（dynamic client 读 Application/AppProject CRD）。
+// 注：ci-platform 透传代理（/ci/api/*path）已随内置 CI 上线废弃并从路由移除，
+// 相关 handler 一并删除（其 http.Client{Timeout:30s} 会掐断 SSE 流，属带缺陷死代码）。
 package handler
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,298 +13,25 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/duration"
 
 	"kube-console/server/internal/kube"
 	"sigs.k8s.io/yaml"
 
 	"kube-console/server/internal/middleware"
-	"kube-console/server/internal/model"
 	"kube-console/server/internal/service"
 	"kube-console/server/pkg/response"
 )
 
-// CIHandler ci-platform 集成
+// CIHandler ArgoCD 应用视图
 type CIHandler struct {
-	db       *gorm.DB
 	clusters *service.ClusterManager
-	httpc    *http.Client
-
-	mu      sync.Mutex
-	token   string
-	tokenAt time.Time
+	perm     *service.PermissionService // GitOps 动作按目标命名空间写权限判定
 }
 
-// NewCIHandler 创建
-func NewCIHandler(db *gorm.DB, clusters *service.ClusterManager) *CIHandler {
-	return &CIHandler{db: db, clusters: clusters, httpc: &http.Client{Timeout: 30 * time.Second}}
-}
-
-func (h *CIHandler) config() (*model.CIIntegration, error) {
-	var cfg model.CIIntegration
-	if err := h.db.First(&cfg).Error; err != nil {
-		return nil, fmt.Errorf("未配置 ci-platform 集成（CI 页面右上角「集成设置」）")
-	}
-	if !cfg.Enabled || cfg.BaseURL == "" {
-		return nil, fmt.Errorf("ci-platform 集成已停用")
-	}
-	return &cfg, nil
-}
-
-// tokenOf 自动登录并缓存 token（50 分钟）
-func (h *CIHandler) tokenOf(cfg *model.CIIntegration) (string, error) {
-	h.mu.Lock()
-	if h.token != "" && time.Since(h.tokenAt) < 50*time.Minute {
-		t := h.token
-		h.mu.Unlock()
-		return t, nil
-	}
-	h.mu.Unlock()
-	return h.loginForTest(cfg)
-}
-
-// loginForTest 直接登录（绕过缓存；配置保存验证与 token 刷新共用）
-func (h *CIHandler) loginForTest(cfg *model.CIIntegration) (string, error) {
-	body, _ := json.Marshal(map[string]string{"username": cfg.Username, "password": cfg.Password})
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(cfg.BaseURL, "/")+"/api/v1/auth/login", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := h.httpc.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("ci-platform 不可达: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	var lr struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    struct {
-			Token string `json:"token"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &lr); err != nil || lr.Code != 0 || lr.Data.Token == "" {
-		return "", fmt.Errorf("登录失败（HTTP %d）: %s", resp.StatusCode, truncateCI(string(raw), 200))
-	}
-	h.mu.Lock()
-	h.token = lr.Data.Token
-	h.tokenAt = time.Now()
-	h.mu.Unlock()
-	return lr.Data.Token, nil
-}
-
-// Status GET /ci/status
-func (h *CIHandler) Status(c *gin.Context) {
-	var cfg model.CIIntegration
-	err := h.db.First(&cfg).Error
-	if err != nil {
-		response.OK(c, gin.H{"configured": false})
-		return
-	}
-	response.OK(c, gin.H{"configured": cfg.BaseURL != "", "enabled": cfg.Enabled, "baseURL": cfg.BaseURL, "webURL": cfg.WebURL, "username": cfg.Username})
-}
-
-// SaveConfig POST /ci/config （admin）
-func (h *CIHandler) SaveConfig(c *gin.Context) {
-	var in struct {
-		BaseURL  string `json:"baseURL"`
-		WebURL   string `json:"webURL"`
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Enabled  *bool  `json:"enabled"`
-	}
-	if err := c.ShouldBindJSON(&in); err != nil || in.BaseURL == "" {
-		response.Fail(c, 400, 400, "参数错误：baseURL 必填")
-		return
-	}
-	var cfg model.CIIntegration
-	err := h.db.First(&cfg).Error
-	isNew := err != nil
-	if isNew {
-		cfg = model.CIIntegration{BaseURL: in.BaseURL, WebURL: in.WebURL, Username: in.Username, Enabled: true}
-	} else {
-		cfg.BaseURL = in.BaseURL
-		cfg.WebURL = in.WebURL
-		cfg.Username = in.Username
-		if in.Enabled != nil {
-			cfg.Enabled = *in.Enabled
-		}
-	}
-	if isNew || in.Password != "" {
-		cfg.Password = in.Password
-	}
-	// 保存前验证登录（新配置或改了密码时）
-	if isNew || in.Password != "" {
-		if _, err := h.loginForTest(&cfg); err != nil {
-			response.Fail(c, 400, 400, "登录验证失败: "+err.Error())
-			return
-		}
-	}
-	if isNew {
-		h.db.Create(&cfg)
-	} else {
-		h.db.Save(&cfg)
-	}
-	h.mu.Lock()
-	h.token = ""
-	h.mu.Unlock()
-	response.OK(c, gin.H{"ok": true})
-}
-
-// CIProxy ANY /ci/api/*path —— 通用透传：
-//   - GET/HEAD：所有登录用户（只读：项目/流水线/运行/日志/制品/凭证/Globals/管理端查看）
-//   - 其它方法（POST/PUT/DELETE）：仅平台管理员（创建/编辑/删除/触发/重跑/停止）
-//   - SSE 日志与制品下载按流式转发，不缓冲
-func (h *CIHandler) CIProxy(c *gin.Context) {
-	if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
-		uid := middleware.CurrentUserID(c)
-		if !middleware.IsAdmin(h.db, "admin", uid, middleware.CurrentUser(c)) {
-			response.Fail(c, 403, 403, "CI 写操作需要平台管理员权限")
-			return
-		}
-	}
-	cfg, err := h.config()
-	if err != nil {
-		response.Fail(c, 400, 400, err.Error())
-		return
-	}
-	path := c.Param("path")
-	if path == "" || path == "/" {
-		response.Fail(c, 400, 400, "缺少代理路径")
-		return
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	token, err := h.tokenOf(cfg)
-	if err != nil {
-		response.Fail(c, 502, 502, err.Error())
-		return
-	}
-
-	body, _ := c.GetRawData()
-	ctx := c.Request.Context()
-
-	doOnce := func(t string) (*http.Response, error) {
-		// ci-platform API 统一前缀 /api/v1（path 参数不含）
-		u := strings.TrimRight(cfg.BaseURL, "/") + "/api/v1" + path
-		if q := c.Request.URL.RawQuery; q != "" {
-			u += "?" + q
-		}
-		var rdr io.Reader
-		if body != nil {
-			rdr = bytes.NewReader(body)
-		}
-		req, err := http.NewRequestWithContext(ctx, c.Request.Method, u, rdr)
-		if err != nil {
-			return nil, err
-		}
-		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		req.Header.Set("Authorization", "Bearer "+t)
-		if c.Request.Header.Get("Accept") != "" {
-			req.Header.Set("Accept", c.Request.Header.Get("Accept"))
-		}
-		return h.httpc.Do(req)
-	}
-
-	resp, err := doOnce(token)
-	if err != nil {
-		response.Fail(c, 502, 502, err.Error())
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// 401 → 强制重登一次再试
-	if resp.StatusCode == http.StatusUnauthorized {
-		resp.Body.Close()
-		if t2, err := h.loginForTest(cfg); err == nil {
-			if resp2, err2 := doOnce(t2); err2 == nil {
-				resp = resp2
-				defer func() { _ = resp.Body.Close() }()
-			}
-		}
-	}
-
-	// ---- 流式转发：SSE 日志 / 文件下载 ----
-	ct := resp.Header.Get("Content-Type")
-	isSSE := strings.HasPrefix(ct, "text/event-stream")
-	isDownload := strings.Contains(path, "/download") || strings.HasPrefix(ct, "application/octet-stream")
-	if isSSE || isDownload {
-		for k, vs := range resp.Header {
-			if strings.HasPrefix(k, "Content-") || k == "Transfer-Encoding" {
-				for _, v := range vs {
-					c.Writer.Header().Add(k, v)
-				}
-			}
-		}
-		c.Writer.WriteHeader(resp.StatusCode)
-		flusher, _ := c.Writer.(http.Flusher)
-		buf := make([]byte, 32*1024)
-		for {
-			n, rerr := resp.Body.Read(buf)
-			if n > 0 {
-				if _, werr := c.Writer.Write(buf[:n]); werr != nil {
-					return
-				}
-				if flusher != nil {
-					flusher.Flush()
-				}
-			}
-			if rerr != nil {
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-		}
-	}
-
-	// ---- 普通 JSON：响应原样透传（保留 ci-platform 的 code/message/data 包） ----
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		c.Data(mapUpstreamStatus(resp.StatusCode), "application/json", raw)
-		return
-	}
-	c.Data(http.StatusOK, "application/json", raw)
-}
-
-func mapUpstreamStatus(code int) int {
-	if code >= 500 {
-		return 502
-	}
-	if code < 200 {
-		return 400
-	}
-	return code
-}
-
-func truncateCI(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
-	}
-	return s
-}
-
-// DesignerToken GET /ci/designer-token —— 签发 ci-platform 会话 token（供 iframe 设计器自动登录）。
-// 权限与只读透传一致（所有登录用户）；token 能力镜像所配置的服务账号。
-func (h *CIHandler) DesignerToken(c *gin.Context) {
-	cfg, err := h.config()
-	if err != nil {
-		response.Fail(c, 400, 400, err.Error())
-		return
-	}
-	token, err := h.tokenOf(cfg)
-	if err != nil {
-		response.Fail(c, 502, 502, err.Error())
-		return
-	}
-	response.OK(c, gin.H{"token": token, "webURL": cfg.WebURL})
+// NewCIHandler 创建 CI/CD 视图 handler（ArgoCD 视图只读集群对象 + 动作鉴权需要 perm）
+func NewCIHandler(_ *gorm.DB, clusters *service.ClusterManager, perm *service.PermissionService) *CIHandler {
+	return &CIHandler{clusters: clusters, perm: perm}
 }
 
 // ------------------- ArgoCD 应用视图 -------------------
@@ -332,6 +53,7 @@ type ArgoApp struct {
 	DestNS    string `json:"destNamespace"`
 	Project   string `json:"project"`
 	AutoSync  bool   `json:"autoSync"`
+	Paused    bool   `json:"paused,omitempty"` // automated.suspend=true（原生 PAUSED 标记）
 	Age       string `json:"age"`
 	// SpecError 是 status.conditions 里的 InvalidSpecError（如引用了不存在的 project）：
 	// 此时 sync/health 都是 Unknown，只有这条 condition 说明了原因
@@ -358,25 +80,9 @@ func (h *CIHandler) ArgoApps(c *gin.Context) {
 	items := []ArgoApp{}
 	for i := range list.Items {
 		u := &list.Items[i]
-		sync, _, _ := unstructuredString(u.Object, "status", "sync", "status")
-		health, _, _ := unstructuredString(u.Object, "status", "health", "status")
-		repo, _, _ := unstructuredString(u.Object, "spec", "source", "repoURL")
-		path, _, _ := unstructuredString(u.Object, "spec", "source", "path")
-		target, _, _ := unstructuredString(u.Object, "spec", "source", "targetRevision")
-		destNS, _, _ := unstructuredString(u.Object, "spec", "destination", "namespace")
-		project, _, _ := unstructuredString(u.Object, "spec", "project")
-		auto := false
-		if p, ok, _ := unstructuredNested(u.Object, "spec", "syncPolicy", "automated"); ok && p != nil {
-			auto = true
-		}
-		created := u.GetCreationTimestamp()
-		items = append(items, ArgoApp{
-			Name: u.GetName(), Namespace: u.GetNamespace(),
-			Sync: strOr(sync, "Unknown"), Health: strOr(health, "Unknown"),
-			RepoURL: repo, Path: path, Target: target, DestNS: destNS, Project: project, AutoSync: auto,
-			Age:       duration.HumanDuration(time.Since(created.Time)),
-			SpecError: argoInvalidSpecError(u.Object),
-		})
+		app := argoAppBase(u.Object, u.GetName(), u.GetNamespace())
+		app.Age = duration.HumanDuration(time.Since(u.GetCreationTimestamp().Time))
+		items = append(items, app)
 	}
 	response.OK(c, gin.H{"installed": true, "items": items})
 }
@@ -476,23 +182,6 @@ func argoProjectView(obj map[string]any, name, namespace string) ArgoProject {
 		}
 	}
 	return p
-}
-
-// ArgoRefresh POST /argocd/apps/:namespace/:name/refresh —— 打 refresh 注解触发比对
-func (h *CIHandler) ArgoRefresh(c *gin.Context) {
-	client := h.kubeClient(c)
-	if client == nil {
-		return
-	}
-	patch := []byte(`{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"normal"}}}`)
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
-	defer cancel()
-	if _, err := client.Dynamic.Resource(argocdGVR).Namespace(c.Param("namespace")).
-		Patch(ctx, c.Param("name"), types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		response.K8sError(c, err)
-		return
-	}
-	response.OK(c, gin.H{"ok": true})
 }
 
 // ArgoAppGet GET /argocd/apps/:namespace/:name —— 完整 Application 对象 YAML（可视化编辑器加载用）

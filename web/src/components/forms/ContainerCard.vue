@@ -34,8 +34,12 @@
         </el-form-item></el-col>
       </el-row>
       <el-row :gutter="8">
-        <el-col :span="12"><el-form-item label="启动命令"><el-input v-model="c.command" placeholder="空格分隔，如 /bin/sh -c" /></el-form-item></el-col>
-        <el-col :span="12"><el-form-item label="参数"><el-input v-model="c.args" placeholder="空格分隔" /></el-form-item></el-col>
+        <el-col :span="12"><el-form-item label="启动命令">
+          <el-input v-model="c.command" type="textarea" :rows="2" placeholder="每行一个参数，如&#10;/bin/sh&#10;-c&#10;echo hello" />
+        </el-form-item></el-col>
+        <el-col :span="12"><el-form-item label="参数">
+          <el-input v-model="c.args" type="textarea" :rows="2" placeholder="每行一个参数" />
+        </el-form-item></el-col>
       </el-row>
       <el-form-item label="工作目录"><el-input v-model="c.workingDir" placeholder="可选，如 /app" style="width: 300px" /></el-form-item>
 
@@ -150,7 +154,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import ProbeEditor from './ProbeEditor.vue'
 import { registryApi } from '../../api'
 import { quantityError } from '../../utils/kube-validators'
@@ -208,9 +212,14 @@ async function fetchTags() {
     tagLoading.value = false
   }
 }
+onBeforeUnmount(() => {
+  if (tagTimer) clearTimeout(tagTimer)
+})
+
 function pickTag(tag: string) {
-  if (!tag || !imageBase.value) return
-  props.c.image = `${imageBase.value}:${tag}`
+  if (!imageBase.value) return
+  // 清空 tag（下拉 clearable）时把镜像上的旧 tag 一并去掉，而不是留着一个看似选了又没生效的值
+  props.c.image = tag ? `${imageBase.value}:${tag}` : imageBase.value
 }
 
 function addEnv() {

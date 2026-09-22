@@ -401,10 +401,11 @@
             <el-option v-for="p in projects" :key="p.id" :label="p.displayName || p.name" :value="p.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="名称" required><el-input v-model="pipeForm.name" placeholder="小写字母/数字/中划线" :disabled="!!pipeForm.id" /></el-form-item>
+        <el-form-item label="名称" required><el-input v-model="pipeForm.name" placeholder="小写字母/数字/中划线" /></el-form-item>
         <el-form-item label="描述"><el-input v-model="pipeForm.description" /></el-form-item>
       </el-form>
       <div v-if="!pipeForm.id" class="cfg-tip">创建后点「设计器」编排节点。</div>
+      <div v-else class="cfg-tip">改名不影响已有执行记录、定时任务与 Webhook（都按流水线 ID 关联）。</div>
       <template #footer>
         <el-button @click="pipeDlg = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="savePipe">保存</el-button>
@@ -685,9 +686,18 @@ function syncDetailLive() {
     detailTimer = setInterval(() => { void loadDetail(detail.value!.run.id) }, 5000)
   }
 }
+// 连接代际：取 token 的异步窗口内若 run 切换/抽屉关闭，迟到的 .then 不能
+// 再建连接（旧实现会覆盖 ws 引用产生孤儿 socket，或在已关闭的抽屉里复活）
+let wsGen = 0
+// 只在 run 变化时重连：loadDetail 每次替换 detail 对象都会触发 watch，
+// 旧实现每条 WS 推送都断开重连（实时通道退化为 5s 轮询级）
+let wsRunId = 0
 function connectWs(runId: number) {
+  wsRunId = runId
+  const gen = ++wsGen
   ws?.close(); ws = null; wsAlive = false
   void runWsUrl(runId).then((url) => {
+    if (gen !== wsGen) return
     try {
       ws = new WebSocket(url)
       ws.onopen = () => { wsAlive = true; syncDetailLive() }
@@ -710,10 +720,12 @@ function connectWs(runId: number) {
   }).catch(() => { /* 轮询兜底 */ })
 }
 watch(detail, (d) => {
-  if (d) connectWs(d.run.id)
+  if (d && d.run.id !== wsRunId) connectWs(d.run.id)
 })
 function onDetailClosed() {
   detail.value = null
+  wsGen++ // 作废在途的 token 请求
+  wsRunId = 0
   ws?.close(); ws = null; wsAlive = false
   if (detailTimer) { clearInterval(detailTimer); detailTimer = null }
 }
@@ -1103,6 +1115,7 @@ const RunStatusTag = {
     const map: Record<string, [string, string]> = {
       pending: ['info', '等待中'], running: ['primary', '运行中'],
       success: ['success', '成功'], failed: ['danger', '失败'], cancelled: ['warning', '已取消'],
+      skipped: ['info', '已跳过'],
     }
     const [type, label] = map[p.status] ?? ['info', p.status || '未知']
     return () => h('el-tag', { size: 'small', type }, () => label)

@@ -17,7 +17,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { k8sApi, type NamespaceMonitor } from '../api'
 import { Refresh } from '@element-plus/icons-vue'
@@ -66,6 +66,10 @@ const charts = computed<MetricChartDef[]>(() => [
     yAxisName: 'MB/s',
   },
 ])
+
+// 同路由换参（前进/后退、深链 /monitor/namespace/a → /b）不重挂组件，
+// 旧实现只 onMounted 拉一次 → 标题是 b、数据还是 a
+watch(name, () => load())
 
 onMounted(load)
 

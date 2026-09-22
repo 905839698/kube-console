@@ -105,17 +105,20 @@ func fileArtifacts(params map[string]interface{}, results map[string]string, ctx
 
 func splitImageRef(ref string) (name, version string) {
 	// ref 形如 harbor.example.com/project/app:tag 或 .../app@sha256:xxx
-	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
-		version = ref[i+1:]
+	rest := ref
+	if at := strings.LastIndex(rest, "@"); at > 0 {
+		// digest 形态：version 取整个 @sha256:xxx，name 从 @ 之前截取
+		version = rest[at+1:]
+		rest = rest[:at]
+	} else if i := strings.LastIndex(rest, ":"); i > strings.LastIndex(rest, "/") {
+		// tag 形态：先剥掉 :tag 再取末段，否则 name 会带上 tag（与 digest 形态不一致）
+		version = rest[i+1:]
+		rest = rest[:i]
 	}
-	slash := ref
-	if at := strings.LastIndex(slash, "@"); at > 0 {
-		slash = slash[:at]
-	}
-	if i := strings.LastIndex(slash, "/"); i >= 0 {
-		name = slash[i+1:]
+	if i := strings.LastIndex(rest, "/"); i >= 0 {
+		name = rest[i+1:]
 	} else {
-		name = slash
+		name = rest
 	}
 	return name, version
 }

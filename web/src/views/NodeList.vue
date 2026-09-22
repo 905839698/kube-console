@@ -25,10 +25,10 @@
       <el-table-column label="操作" width="290" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="goDetail(row)">详情</el-button>
-          <el-button size="small" type="success" plain @click="openTerminal(row)">终端</el-button>
-          <el-button v-if="row.schedulable" size="small" type="warning" plain @click="cordon(row)">封锁</el-button>
-          <el-button v-else size="small" type="success" plain @click="uncordon(row)">解封</el-button>
-          <el-button size="small" type="danger" plain @click="openDrain(row)">排空</el-button>
+          <el-button size="small" type="success" plain :disabled="!perm.canWriteCluster()" @click="openTerminal(row)">终端</el-button>
+          <el-button v-if="row.schedulable" size="small" type="warning" plain :disabled="!perm.canWriteCluster()" @click="cordon(row)">封锁</el-button>
+          <el-button v-else size="small" type="success" plain :disabled="!perm.canWriteCluster()" @click="uncordon(row)">解封</el-button>
+          <el-button size="small" type="danger" plain :disabled="!perm.canWriteCluster()" @click="openDrain(row)">排空</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -79,10 +79,12 @@ import { k8sApi, nodeApi, type NodeDetail } from '../api'
 import StatusTag from '../components/StatusTag.vue'
 import WebTerminal from '../components/WebTerminal.vue'
 import { useClusterStore } from '../store/cluster'
+import { usePerm } from '../store/perm'
 import { parseDuration } from '../utils/sort'
 
 const router = useRouter()
 const clusterStore = useClusterStore()
+const perm = usePerm()
 const items = ref<NodeDetail[]>([])
 const loading = ref(false)
 

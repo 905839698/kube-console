@@ -389,8 +389,8 @@ watch([monitorEnabled, monitorPort, monitorInterval, monitorPath], () => {
   }
 })
 
-const hasReplicas = computed(() => ['deployments', 'statefulsets', 'replicasets', 'replicationcontrollers', 'jobs'].includes(props.kind))
-const hasSelector = computed(() => ['deployments', 'statefulsets', 'daemonsets', 'jobs', 'replicasets', 'replicationcontrollers'].includes(props.kind))
+const hasReplicas = computed(() => ['deployments', 'statefulsets', 'replicasets', 'replicationcontrollers'].includes(props.kind))
+const hasSelector = computed(() => ['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'replicationcontrollers'].includes(props.kind))
 const hasStrategy = computed(() => ['deployments', 'statefulsets'].includes(props.kind))
 const strategyOptions = computed(() => (props.kind === 'statefulsets' ? ['RollingUpdate', 'OnDelete'] : ['RollingUpdate', 'Recreate']))
 

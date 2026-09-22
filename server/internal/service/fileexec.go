@@ -106,7 +106,7 @@ func parseLsLine(line string) (FileEntry, bool) {
 		return nil, false
 	}
 	var timeIdx int
-	if len(dateFields[0]) == 4 && isAllDigits(dateFields[0]) { // ISO: YYYY-MM-DD HH:MM name...
+	if isISODate(dateFields[0]) { // ISO: YYYY-MM-DD HH:MM name...
 		timeIdx = 2
 	} else { // "Mar 10 10:22 name..."
 		timeIdx = 3
@@ -151,6 +151,16 @@ func trimFieldsPrefix(line string, n int) string {
 		}
 	}
 	return strings.TrimLeft(line[i:], " ")
+}
+
+// isISODate 判断 "YYYY-MM-DD" 形态（BusyBox ls 可输出 ISO 日期；
+// 旧实现 len==4 判断对 "2024-03-10"（长度 10）永不命中，走 3 段分支后
+// 单 token 文件名整行被丢弃、多 token 名字字段错乱）
+func isISODate(s string) bool {
+	if len(s) != 10 || s[4] != '-' || s[7] != '-' {
+		return false
+	}
+	return isAllDigits(s[:4]) && isAllDigits(s[5:7]) && isAllDigits(s[8:10])
 }
 
 func isAllDigits(s string) bool {

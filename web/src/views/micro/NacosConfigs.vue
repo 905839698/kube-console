@@ -174,9 +174,21 @@ function openEditor(row?: NacosConfigEntry) {
   editorForm.content = ''
   editorDlg.value = true
   if (row) {
+    // 慢响应守卫：内容拉取期间用户又点开了另一行/新建，回来时表单已属于别的配置，不能覆盖
+    const ns = row.namespace || ''
     nacosApi
-      .configContent(cluster.value, row.namespace || '', row.dataId, row.group)
-      .then((r) => (editorForm.content = r.content))
+      .configContent(cluster.value, ns, row.dataId, row.group)
+      .then((r) => {
+        if (
+          editorDlg.value &&
+          editorForm.existing &&
+          editorForm.namespace === ns &&
+          editorForm.dataId === row.dataId &&
+          editorForm.group === row.group
+        ) {
+          editorForm.content = r.content
+        }
+      })
       .catch(() => {})
   }
 }

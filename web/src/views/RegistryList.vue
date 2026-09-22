@@ -155,7 +155,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { registryApi, type RegProject, type RegRepository, type RegArtifact } from '../api'
@@ -173,7 +173,8 @@ const fullRepo = ref('')
 const cfgVisible = ref(false)
 // ---- 漏洞扫描 ----
 const scanMap = reactive<Record<string, { scanStatus: string; severity: string; counts: Record<string, number> }>>({})
-let scanTimer: ReturnType<typeof setInterval> | undefined
+// 按 digest 独立轮询：对制品 B 发起扫描不应掐断制品 A 的轮询
+let scanTimers: Record<string, ReturnType<typeof setInterval>> = {}
 const vulnDlg = ref(false)
 const vulnLoading = ref(false)
 const vulnReport = ref<{ scanner?: string; generatedAt?: string; items: any[] } | null>(null)
@@ -217,24 +218,37 @@ async function triggerScan(row: any) {
   } catch {
     return
   }
+  // 捕获触发时的 project/repo：轮询期间切到别的项目/仓库后
+  // 不能再用 curProject/repoPart() 查错目标、把结果写回旧 digest
+  const project = curProject.value
+  const repo = repoPart()
   scanMap[row.digest] = { scanStatus: 'Running', severity: '', counts: {} }
-  if (scanTimer) clearInterval(scanTimer)
-  scanTimer = setInterval(async () => {
+  if (scanTimers[row.digest]) clearInterval(scanTimers[row.digest])
+  scanTimers[row.digest] = setInterval(async () => {
     try {
-      const ov = await registryApi.scan('get', curProject.value, repoPart(), ref0)
+      const ov = await registryApi.scan('get', project, repo, ref0)
       scanMap[row.digest] = ov
       if (ov.scanStatus === 'Success' || ov.scanStatus === 'Error') {
-        clearInterval(scanTimer!)
-        scanTimer = undefined
+        clearInterval(scanTimers[row.digest])
+        delete scanTimers[row.digest]
         if (ov.scanStatus === 'Success') ElMessage.success('扫描完成，可查看漏洞报告')
         else ElMessage.error('扫描失败，请到 Harbor UI 查看扫描器日志')
       }
     } catch {
-      clearInterval(scanTimer!)
-      scanTimer = undefined
+      clearInterval(scanTimers[row.digest])
+      delete scanTimers[row.digest]
+      scanMap[row.digest] = undefined
     }
   }, 8000)
 }
+
+// 离开页面清掉全部轮询（旧实现 interval 永不清理，切走菜单后仍每 8s 发请求）
+onBeforeUnmount(() => {
+  for (const k of Object.keys(scanTimers)) {
+    clearInterval(scanTimers[k])
+    delete scanTimers[k]
+  }
+})
 
 async function openVulns(row: any) {
   vulnTarget.project = curProject.value

@@ -110,10 +110,18 @@ func TestCompileParallelRunAfter(t *testing.T) {
 }
 
 // wsStubNode 与 stubNode 相同，但 taskSpec 带 workspace（验证 pre-shell 的 cd 行）。
-type wsStubNode struct{ t string }
+// hasPreShell 决定 schema 是否声明 preShell 属性：注入只对该属性存在的节点类型生效。
+type wsStubNode struct {
+	t           string
+	hasPreShell bool
+}
 
 func (s wsStubNode) Meta() nodetype.Meta {
-	return nodetype.Meta{Type: s.t, Properties: nil}
+	m := nodetype.Meta{Type: s.t}
+	if s.hasPreShell {
+		m.Properties = []nodetype.PropSchema{{Name: "preShell", Type: "text"}}
+	}
+	return m
 }
 func (s wsStubNode) Validate(map[string]interface{}) []string { return nil }
 func (s wsStubNode) RenderTask(map[string]interface{}) (nodetype.TaskSpec, error) {
@@ -127,7 +135,7 @@ func (s wsStubNode) ResultMapping() nodetype.ResultMap { return nodetype.ResultM
 
 func TestCompilePreShell(t *testing.T) {
 	reg := newStubRegistry("build")
-	reg.Register(wsStubNode{"build"})
+	reg.Register(wsStubNode{t: "build", hasPreShell: true})
 	c := New(reg)
 
 	g := &model.Graph{Name: "p", Version: 1}
@@ -170,6 +178,23 @@ func TestCompilePreShell(t *testing.T) {
 	}
 	if n := len(spec2.Spec.Tasks[0].TaskSpec.Steps); n != 1 {
 		t.Errorf("空白 preShell 不应注入，got %d 个 step", n)
+	}
+
+	// 节点类型未在 schema 声明 preShell（如改用单一 script 入口的 npm-build）：
+	// 历史图里残留的 preShell 值不再注入多余容器
+	reg2 := newStubRegistry("build")
+	reg2.Register(wsStubNode{t: "build"})
+	c2 := New(reg2)
+	g3 := &model.Graph{Name: "p3", Version: 1}
+	g3.Nodes = []model.Node{{ID: "build", Type: "build", Params: map[string]interface{}{
+		"preShell": "npm config set registry http://nexus/repository/npm-group/",
+	}}}
+	spec3, err := c2.Compile(g3, "ns")
+	if err != nil {
+		t.Fatalf("compile3: %v", err)
+	}
+	if n := len(spec3.Spec.Tasks[0].TaskSpec.Steps); n != 1 {
+		t.Errorf("schema 未声明 preShell 时不应注入，got %d 个 step", n)
 	}
 }
 
@@ -397,7 +422,7 @@ func TestCompileResultRefThroughCondition(t *testing.T) {
 	g := &model.Graph{Name: "p", Version: 1}
 	g.Nodes = []model.Node{
 		{ID: "gc", Type: "git-clone"},
-		{ID: "c1", Type: model.NodeTypeCondition, Params: map[string]interface{}{"param": "x", "op": "==", "value": "1"}},
+		{ID: "c1", Type: model.NodeTypeCondition, Params: map[string]interface{}{"param": "GIT_BRANCH", "op": "==", "value": "1"}},
 		{ID: "build", Type: "build-image"},
 	}
 	g.Edges = []model.Edge{
@@ -583,5 +608,93 @@ func TestCompileLiftResultRefParamAfterGitCloneRewrite(t *testing.T) {
 	}
 	if v != "$(tasks.src.results.git_commit)" {
 		t.Errorf("提升的值应为改写后的引用，实际 %q", v)
+	}
+}
+
+// 条件分支汇合：被引用任务只在 yes 分支上（gc→c1(yes)→mid→upload、gc→c1(no)→upload），
+// upload 引用 mid 的结果编译期必须拒绝——运行期走 no 分支时 mid 被跳过，
+// 结果不存在，引用无法解析（旧实现只校验「存在一条路径」，此场景漏到运行期才失败）。
+func TestCompileResultRefBranchBypass(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{t: model.NodeTypeCondition})
+	reg.Register(specNode{t: "build-image", results: []string{"imageRef"}})
+	reg.Register(specNode{t: "deploy", script: "IMG=$(tasks.mid.results.imageRef)"})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "gc", Type: "git-clone"},
+		{ID: "c1", Type: model.NodeTypeCondition, Params: map[string]interface{}{"param": "GIT_BRANCH", "op": "==", "value": "1"}},
+		{ID: "mid", Type: "build-image"},
+		{ID: "upload", Type: "deploy"},
+	}
+	g.Edges = []model.Edge{
+		{Source: "gc", Target: "c1"},
+		{Source: "c1", Target: "mid", Branch: model.BranchYes},
+		{Source: "c1", Target: "upload", Branch: model.BranchNo},
+		{Source: "mid", Target: "upload"},
+	}
+
+	_, err := c.Compile(g, "ns")
+	if err == nil {
+		t.Fatal("引用仅存在于单分支的上游结果应编译失败（旁路分支上该任务被跳过）")
+	}
+	if !strings.Contains(err.Error(), "并非所有到达") {
+		t.Errorf("错误应说明旁路分支: %v", err)
+	}
+}
+
+// 同一拓扑下引用「所有分支都经过」的祖先（gc）应合法。
+func TestCompileResultRefCommonAncestor(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{t: model.NodeTypeCondition})
+	reg.Register(specNode{t: "build-image"})
+	reg.Register(specNode{t: "deploy", script: "SHA=$(tasks.gc.results.git_commit)"})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "gc", Type: "git-clone"},
+		{ID: "c1", Type: model.NodeTypeCondition, Params: map[string]interface{}{"param": "GIT_BRANCH", "op": "==", "value": "1"}},
+		{ID: "mid", Type: "build-image"},
+		{ID: "upload", Type: "deploy"},
+	}
+	g.Edges = []model.Edge{
+		{Source: "gc", Target: "c1"},
+		{Source: "c1", Target: "mid", Branch: model.BranchYes},
+		{Source: "c1", Target: "upload", Branch: model.BranchNo},
+		{Source: "mid", Target: "upload"},
+	}
+
+	if _, err := c.Compile(g, "ns"); err != nil {
+		t.Fatalf("引用全分支共同祖先的结果应合法: %v", err)
+	}
+}
+
+// 提升后的 PipelineTask 参数值里 $(params.X) 按 Pipeline 参数解析：
+// 混用任务自身参数名应编译期报错（旧实现按任务参数校验，放行使 apply 被拒）。
+func TestCompileLiftedParamMixedTaskParamRejected(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{t: "deploy",
+		params:        []string{"img", "name"},
+		paramDefaults: map[string]string{"img": "$(tasks.gc.results.git_commit)-$(params.name)"}})
+	c := New(reg)
+
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "gc", Type: "git-clone"},
+		{ID: "deploy", Type: "deploy"},
+	}
+	g.Edges = []model.Edge{{Source: "gc", Target: "deploy"}}
+
+	_, err := c.Compile(g, "ns")
+	if err == nil {
+		t.Fatal("提升后值里引用任务自身参数 $(params.name) 应编译失败")
+	}
+	if !strings.Contains(err.Error(), "流水线级参数") {
+		t.Errorf("错误应说明 Pipeline 参数上下文: %v", err)
 	}
 }

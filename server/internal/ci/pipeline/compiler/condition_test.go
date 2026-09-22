@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"kube-console/server/internal/ci/nodetype"
@@ -154,6 +155,57 @@ func TestBypass(t *testing.T) {
 	}
 }
 
+// TestBypassMixedWithBranch 分支 + 旁路混合：同一任务既有条件分支入边又有无条件旁路入边时，
+// 该任务存在无条件到达路径，不能加 when（否则非 main 分支上该任务被错误跳过）。
+// 回归：旧实现只在「取值冲突」时清约束，旁路入边不产生冲突 → 误保留 when。
+func TestBypassMixedWithBranch(t *testing.T) {
+	c := New(condReg2())
+	g := &model.Graph{Name: "bypass-mixed", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "git", Type: "git"},
+		{ID: "cond", Type: model.NodeTypeCondition, Params: map[string]interface{}{"param": "GIT_BRANCH", "op": "==", "value": "main"}},
+		{ID: "deploy", Type: "build"},
+	}
+	g.Edges = []model.Edge{
+		{Source: "git", Target: "cond"},
+		{Source: "cond", Target: "deploy", Branch: model.BranchYes},
+		{Source: "git", Target: "deploy"}, // 旁路：画布上是无条件依赖
+	}
+	spec, err := c.Compile(g, "ns")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if d := taskByName(spec, "deploy"); len(d.When) != 0 {
+		t.Errorf("deploy when = %+v, want 无约束（存在旁路 = 无条件路径）", d.When)
+	}
+}
+
+// TestBypassThroughChainedTask 旁路经由中间任务传递：git → a → deploy 旁路 +
+// cond → deploy 分支，a 本身无约束 → deploy 同样不得加 when。
+func TestBypassThroughChainedTask(t *testing.T) {
+	c := New(condReg2())
+	g := &model.Graph{Name: "bypass-chain", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "git", Type: "git"},
+		{ID: "cond", Type: model.NodeTypeCondition, Params: map[string]interface{}{"param": "GIT_BRANCH", "op": "==", "value": "main"}},
+		{ID: "a", Type: "build"},
+		{ID: "deploy", Type: "upload"},
+	}
+	g.Edges = []model.Edge{
+		{Source: "git", Target: "cond"},
+		{Source: "cond", Target: "deploy", Branch: model.BranchYes},
+		{Source: "git", Target: "a"},
+		{Source: "a", Target: "deploy"},
+	}
+	spec, err := c.Compile(g, "ns")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if d := taskByName(spec, "deploy"); len(d.When) != 0 {
+		t.Errorf("deploy when = %+v, want 无约束（经 a 的旁路是无条件路径）", d.When)
+	}
+}
+
 // TestNestedBranch yes 分支内再分支。
 func TestNestedBranch(t *testing.T) {
 	c := New(condReg2())
@@ -224,7 +276,8 @@ func TestTaskResultCondition(t *testing.T) {
 	}
 }
 
-// TestTaskResultConditionContains contains 走 CEL，引用 tasks[T].results[R]。
+// TestTaskResultConditionContains contains 走 CEL 方法形式（a.contains(b)；
+// 「a contains b」不是合法 CEL），引用 tasks[T].results[R]。
 func TestTaskResultConditionContains(t *testing.T) {
 	c := New(condReg2())
 	g := &model.Graph{Name: "trc", Version: 1}
@@ -243,7 +296,7 @@ func TestTaskResultConditionContains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	want := WhenExpr{CEL: `tasks["git"].results["r1"] contains "rele"`}
+	want := WhenExpr{CEL: `tasks["git"].results["r1"].contains("rele")`}
 	if b := taskByName(spec, "build"); len(b.When) != 1 || !reflect.DeepEqual(b.When[0], want) {
 		t.Errorf("build when = %+v, want [%+v]", b.When, want)
 	}
@@ -283,6 +336,42 @@ func TestMixedParamAndResultConditions(t *testing.T) {
 	}
 }
 
+// TestConditionParamWhitelist 条件引用的 param 只能是运行时注入的 GIT_BRANCH/GIT_COMMIT/GIT_REPO：
+// 其它名字会声明为 Pipeline 必填参数却永远收不到值，Tekton webhook 拒绝整个 PipelineRun。
+func TestConditionParamWhitelist(t *testing.T) {
+	c := New(condReg2())
+	g := &model.Graph{Name: "param-wl", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "git", Type: "git"},
+		{ID: "c1", Type: model.NodeTypeCondition, Params: map[string]interface{}{"param": "ENV", "op": "==", "value": "prod"}},
+		{ID: "a", Type: "build"},
+	}
+	g.Edges = []model.Edge{
+		{Source: "git", Target: "c1"},
+		{Source: "c1", Target: "a", Branch: model.BranchYes},
+	}
+	if _, err := c.Compile(g, "ns"); err == nil {
+		t.Error("引用未注入的参数 ENV 应编译失败")
+	} else if !strings.Contains(err.Error(), "GIT_BRANCH/GIT_COMMIT/GIT_REPO") {
+		t.Errorf("错误应指明可用参数，实际: %v", err)
+	}
+
+	// 白名单内的参数正常通过
+	g2 := &model.Graph{Name: "param-wl-ok", Version: 1}
+	g2.Nodes = []model.Node{
+		{ID: "git", Type: "git"},
+		{ID: "c1", Type: model.NodeTypeCondition, Params: map[string]interface{}{"param": "GIT_COMMIT", "op": "==", "value": "abc"}},
+		{ID: "a", Type: "build"},
+	}
+	g2.Edges = []model.Edge{
+		{Source: "git", Target: "c1"},
+		{Source: "c1", Target: "a", Branch: model.BranchYes},
+	}
+	if _, err := c.Compile(g2, "ns"); err != nil {
+		t.Errorf("GIT_COMMIT 在白名单内，应编译通过: %v", err)
+	}
+}
+
 // TestConditionDuplicateVar 同一变量被多个 condition 引用 → 编译报错（B12）。
 func TestConditionDuplicateVar(t *testing.T) {
 	c := New(condReg2())
@@ -302,5 +391,33 @@ func TestConditionDuplicateVar(t *testing.T) {
 	}
 	if _, err := c.Compile(g, "ns"); err == nil {
 		t.Error("同一变量被两个 condition 引用应报错")
+	}
+}
+
+// TestTaskResultConditionNotContains notcontains 的否定形式（!a.contains(b)）。
+func TestTaskResultConditionNotContains(t *testing.T) {
+	c := New(condReg2())
+	g := &model.Graph{Name: "trnc", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "git", Type: "git"},
+		{ID: "cond", Type: model.NodeTypeCondition, Params: map[string]interface{}{
+			"source": "taskResult", "task": "git", "result": "r1", "op": "notcontains", "value": "rele",
+		}},
+		{ID: "build", Type: "build"},
+		{ID: "upload", Type: "upload"},
+	}
+	g.Edges = []model.Edge{
+		{Source: "git", Target: "cond"},
+		{Source: "cond", Target: "build", Branch: model.BranchYes},
+		{Source: "cond", Target: "upload", Branch: model.BranchNo},
+	}
+	spec, err := c.Compile(g, "ns")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	b := taskByName(spec, "build")
+	want := WhenExpr{CEL: `!tasks["git"].results["r1"].contains("rele")`}
+	if len(b.When) != 1 || !reflect.DeepEqual(b.When[0], want) {
+		t.Errorf("build when = %+v, want [%+v]", b.When, want)
 	}
 }

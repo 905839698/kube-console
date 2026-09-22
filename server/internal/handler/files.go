@@ -9,14 +9,31 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"kube-console/server/internal/middleware"
 	"kube-console/server/internal/service"
 	"kube-console/server/pkg/response"
 )
 
 // ------------------- 容器文件浏览器 -------------------
 
+// allowPodExec 文件浏览基于 pods/exec 通道实现，与 Pod 终端同口径：
+// 需要该 Pod 所在命名空间的写权限（edit/admin 或平台管理员）。
+func (h *K8sHandler) allowPodExec(c *gin.Context, ns string) bool {
+	if h.perm == nil {
+		return true
+	}
+	if h.perm.Access(c.Request.Context(), middleware.ClusterName(c), middleware.CurrentUser(c)).CanWriteNS(ns) {
+		return true
+	}
+	response.Fail(c, http.StatusForbidden, 403, "容器文件浏览基于 exec 通道，需要该命名空间的写权限（edit/admin 或平台管理员）")
+	return false
+}
+
 // ListFiles GET /pods/:name/files?namespace=&container=&path=
 func (h *K8sHandler) ListFiles(c *gin.Context) {
+	if !h.allowPodExec(c, c.Query("namespace")) {
+		return
+	}
 	client := h.client(c)
 	if client == nil {
 		return
@@ -31,6 +48,9 @@ func (h *K8sHandler) ListFiles(c *gin.Context) {
 
 // DownloadFile GET /pods/:name/files/download?namespace=&container=&path=
 func (h *K8sHandler) DownloadFile(c *gin.Context) {
+	if !h.allowPodExec(c, c.Query("namespace")) {
+		return
+	}
 	client := h.client(c)
 	if client == nil {
 		return
@@ -77,8 +97,10 @@ func (h *K8sHandler) UploadFile(c *gin.Context) {
 	}
 	defer file.Close()
 	var stderr strings.Builder
+	// 直接 argv 执行 tee，不走 shell：Go %q 不转义 $ 和反引号，
+	// /data/x$(curl ...) 这类路径在 sh -c 双引号内仍会执行（容器内命令注入）
 	if err := h.k8s.ExecOnce(c.Request.Context(), client, c.Query("namespace"), c.Param("name"), c.Query("container"),
-		file, io.Discard, &stderr, "sh", "-c", fmt.Sprintf("cat > %q", path)); err != nil {
+		file, io.Discard, &stderr, "tee", "--", path); err != nil {
 		response.Fail(c, 400, 400, "上传失败: "+err.Error())
 		return
 	}
@@ -142,7 +164,18 @@ func baseName(path string) string {
 }
 
 func urlEscape(s string) string {
-	// 仅文件名，做最小转义即可
-	r := strings.NewReplacer(" ", "%20", "\"", "%22", "#", "%23", "?", "%3F", "\\", "%5C")
-	return r.Replace(s)
+	// RFC 5987（filename*=UTF-8''）：attr-char 之外的字节一律百分号编码。
+	// 旧实现只替换少量字符，文件名含裸 %（如 100%.log）会产出非法的 filename* 值
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+			strings.IndexByte("!#$&+-.^_`|~", ch) >= 0 {
+			b.WriteByte(ch)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", ch)
+		}
+	}
+	return b.String()
 }

@@ -20,10 +20,19 @@
         </div><div class="stat-label">Top 告警</div></el-card></el-col>
     </el-row>
 
-    <el-card shadow="never" style="margin-top: 16px">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left"><span>告警历史（Alertmanager 轮询归档）</span></div>
+    <el-alert v-if="syncErrs.length" type="warning" :closable="false" style="margin-top: 16px">
+        <div v-for="e in syncErrs" :key="e.cluster" class="sync-err-row">
+          归档同步异常（{{ e.cluster }}）：{{ e.err }} —— 该集群「当前触发中」可能不是最新
+        </div>
+      </el-alert>
+
+      <el-card shadow="never" style="margin-top: 16px">
+        <template #header>
+          <div class="card-header">
+            <div class="header-left">
+              <span>告警历史（Alertmanager 轮询归档）</span>
+              <span class="muted sub-note">恢复判定有 10 分钟宽限：告警刚恢复时仍会短暂显示为触发中</span>
+            </div>
           <div class="header-right">
             <el-select v-model="days" style="width: 110px" @change="load">
               <el-option label="近 1 天" :value="1" />
@@ -80,7 +89,8 @@
 
       <div class="pager">
         <el-pagination v-model:current-page="page" :page-size="size" :total="total"
-          layout="total, prev, pager, next, sizes" :page-sizes="[20, 50, 100]" background small @current-change="load" />
+          layout="total, prev, pager, next, sizes" :page-sizes="[20, 50, 100]" background small
+          @current-change="load" @update:page-size="onSizeChange" />
       </div>
     </el-card>
   </div>
@@ -95,6 +105,8 @@ import { useClusterStore } from '../../store/cluster'
 const clusterStore = useClusterStore()
 const items = ref<AlertEventItem[]>([])
 const stats = ref<AlertEventStatsItem>({ days: 7, fired: 0, resolved: 0, active: 0, avgDurationHours: 0, top: [] })
+// 归档轮询异常（cluster -> 最近错误）：有错误时「当前触发中」会静默过期，必须显式提示
+const syncErrs = ref<{ cluster: string; err: string }[]>([])
 const loading = ref(false)
 const days = ref(7)
 const stateFilter = ref('')
@@ -104,10 +116,17 @@ const page = ref(1)
 const size = ref(20)
 const total = ref(0)
 
+// 每页条数变化：EP 2.14 无 size 监听时下拉选择直接失效（弹回原值）
+function onSizeChange(sz: number) {
+  size.value = sz
+  page.value = 1
+  load()
+}
+
 async function load() {
   loading.value = true
   try {
-    const [list, stat] = await Promise.all([
+    const [list, stat, sync] = await Promise.all([
       alertEventApi.list({
         state: stateFilter.value || undefined,
         cluster: clusterFilter.value || undefined,
@@ -117,10 +136,14 @@ async function load() {
         size: size.value,
       }),
       alertEventApi.stats(days.value),
+      alertEventApi.syncStatus().catch(() => null),
     ])
     items.value = list.items || []
     total.value = list.total
     stats.value = stat
+    syncErrs.value = sync
+      ? Object.entries(sync.status || {}).filter(([, e]) => e).map(([cluster, err]) => ({ cluster, err }))
+      : []
   } catch {
     /* 拦截器已提示 */
   } finally {
@@ -162,6 +185,8 @@ onMounted(load)
 .top-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; }
 .top-count { color: #909399; }
 .muted { color: #c0c4cc; font-size: 12px; }
+.sub-note { margin-left: 8px; }
+.sync-err-row { font-size: 12px; line-height: 1.8; }
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .header-left { display: flex; align-items: center; gap: 12px; }
 .header-right { display: flex; align-items: center; flex-wrap: wrap; }

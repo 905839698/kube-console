@@ -9,6 +9,7 @@ import (
 	"context"
 	"io/fs"
 	"log"
+	"sync"
 
 	"gorm.io/gorm"
 
@@ -43,7 +44,10 @@ type Deps struct {
 
 	clusters *service.ClusterManager
 
-	// k8sClients 按集群缓存的 Tekton 客户端（集群变更时 Invalidate 清理）
+	// k8sClients 按集群缓存的 Tekton 客户端（集群变更时 Invalidate 清理）。
+	// syncer/reconciler/scheduler/webhook/handler 多 goroutine 并发访问，必须加锁
+	// （裸 map 并发读写会触发 runtime fatal 直接崩进程）。
+	k8sMu    sync.RWMutex
 	k8sCache map[string]*tekton.Client
 }
 
@@ -92,15 +96,26 @@ func NewDeps(db *gorm.DB, cfg *config.CIConfig, clusters *service.ClusterManager
 
 // K8sFor 按集群名取 Tekton 客户端（惰性构建 + 缓存；集群配置变更时由 main 调 Invalidate 清理）。
 func (d *Deps) K8sFor(clusterName string) (*tekton.Client, error) {
+	d.k8sMu.RLock()
 	if c, ok := d.k8sCache[clusterName]; ok {
+		d.k8sMu.RUnlock()
 		return c, nil
 	}
+	d.k8sMu.RUnlock()
+
 	kc, err := d.clusters.ClientChecked(clusterName)
 	if err != nil {
 		return nil, err
 	}
 	c := tekton.NewClient(clusterName, kc, d.Cfg)
+	d.k8sMu.Lock()
+	// 双重检查：并发首建时只保留一份
+	if existing, ok := d.k8sCache[clusterName]; ok {
+		d.k8sMu.Unlock()
+		return existing, nil
+	}
 	d.k8sCache[clusterName] = c
+	d.k8sMu.Unlock()
 	return c, nil
 }
 
@@ -125,7 +140,9 @@ func (d *Deps) TektonInstalled(clusterName string) (bool, error) {
 
 // Invalidate 集群 kubeconfig 变更后清理该集群的 Tekton 客户端缓存。
 func (d *Deps) Invalidate(clusterName string) {
+	d.k8sMu.Lock()
 	delete(d.k8sCache, clusterName)
+	d.k8sMu.Unlock()
 }
 
 // Start 启动后台循环（syncer + reconciler），ctx 取消时退出。

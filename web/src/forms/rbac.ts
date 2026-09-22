@@ -5,10 +5,13 @@ const text = (arr: string[] | undefined) => (arr || []).join(', ')
 export function serializeRules(obj: any): any {
   for (const r of obj.rules || []) {
     if (r.apiGroupsText !== undefined) {
-      r.apiGroups = r.apiGroupsText ? r.apiGroupsText.split(',').map((s: string) => s.trim()) : ['*']
-      r.resources = r.resourcesText ? r.resourcesText.split(',').map((s: string) => s.trim()) : []
-      r.verbs = r.verbsText ? r.verbsText.split(',').map((s: string) => s.trim()) : []
-      if (r.resourceNamesText) r.resourceNames = r.resourceNamesText.split(',').map((s: string) => s.trim())
+      const list = (t: string) => t.split(',').map((x: string) => x.trim()).filter(Boolean)
+      r.apiGroups = r.apiGroupsText ? list(r.apiGroupsText) : ['*']
+      r.resources = r.resourcesText ? list(r.resourcesText) : []
+      r.verbs = r.verbsText ? list(r.verbsText) : []
+      // 显式清空：留空 = 不限制资源名，必须移除原对象里残留的 resourceNames（不能静默保留）
+      if (r.resourceNamesText) r.resourceNames = list(r.resourceNamesText)
+      else delete r.resourceNames
       delete r.apiGroupsText
       delete r.resourcesText
       delete r.verbsText

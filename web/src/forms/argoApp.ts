@@ -85,13 +85,15 @@ export function projectIssues(project: ArgoProjectLike | undefined, target: Argo
   const ns = (target.namespace || '').trim()
   const server = (target.server || '').trim()
   const allowed = dests.some((d) => {
-    // 目标是集群 name 标识时无法拿 server 比较，按允许处理（宁可不提示也不误报）
-    const serverOK = !d.server || globMatch(d.server, server)
+    // 目标是集群 name 标识（server 为空）时拿不到实际 server，无法与项目的 server
+    // 白名单比较——按允许处理（宁可不提示也不误报；项目侧 name 型目标同理）
+    const serverOK = !d.server || !server || globMatch(d.server, server)
     // 项目未写 namespace（ArgoCD 语义 = 任意 ns）时同样按允许处理
     const nsOK = !d.namespace || globMatch(d.namespace, ns)
     return serverOK && nsOK
   })
-  if (dests.length > 0 && !allowed) {
+  // 应用侧 server 为空（用集群 name 指定目标）时同样无法判定，不提示
+  if (dests.length > 0 && server && !allowed) {
     issues.push(`AppProject「${project.name}」的 destinations 未允许该目标（集群 ${server || '当前集群'} / ns ${ns || '-'}）`)
   }
   return issues

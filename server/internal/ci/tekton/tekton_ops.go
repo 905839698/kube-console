@@ -586,6 +586,12 @@ func parseStatusFromUnstructured(obj *unstructured.Unstructured) RunStatus {
 }
 
 func mapCondition(status, reason string) string {
+	// when 表达式未命中：TaskRun 被 Tekton 立即终结（Succeeded/True，
+	// reason=WhenExpressionsEvaluatedFalse，即 kubectl 显示的 SKIPPED）。
+	// 不识别该 reason 会映射成 success/running，节点在前端永远不收敛。
+	if reason == "WhenExpressionsEvaluatedFalse" {
+		return "skipped"
+	}
 	switch status {
 	case "True":
 		return "success"

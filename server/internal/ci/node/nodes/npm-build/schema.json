@@ -2,26 +2,6 @@
   "type": "npm-build",
   "properties": [
     {
-      "name": "packageManager",
-      "type": "select",
-      "required": false,
-      "default": "npm",
-      "options": [
-        {
-          "value": "npm",
-          "label": "npm"
-        },
-        {
-          "value": "pnpm",
-          "label": "pnpm"
-        },
-        {
-          "value": "yarn",
-          "label": "yarn"
-        }
-      ]
-    },
-    {
       "name": "nodeVersion",
       "type": "select",
       "required": false,
@@ -42,38 +22,17 @@
       ]
     },
     {
-      "name": "installCommand",
-      "type": "string",
-      "required": false,
-      "default": "install",
-      "description": "安装命令（如 ci）"
-    },
-    {
-      "name": "buildCommand",
-      "type": "text",
-      "required": false,
-      "default": "build",
-      "description": "构建命令"
-    },
-    {
       "name": "outputDir",
       "type": "string",
       "required": false,
       "default": "dist",
-      "description": "输出目录"
+      "description": "产物目录（相对仓库根），平台按它登记 build_output 传递给下游（build-image 的 configFiles 与 Dockerfile COPY 用）；目录不存在则本步骤失败。脚本里 export OUTPUT_DIR=<路径> 可覆盖本项。"
     },
     {
-      "name": "preShell",
+      "name": "script",
       "type": "text",
-      "required": false,
-      "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行"
-    },
-    {
-      "name": "cache",
-      "type": "boolean",
-      "required": false,
-      "default": false,
-      "description": "启用项目级依赖缓存（挂载缓存 PVC，依赖包不再每次重新下载；同项目并发运行时可能因 RWO 卷排队，建议错峰或使用 RWX 存储）"
+      "required": true,
+      "description": "仓库根目录下的完整 shell（node 镜像内执行）：registry/代理、依赖安装、构建命令都写这里。与主步骤同容器，故 npm config set / export 对后续命令生效（preShell 是独立容器，写那里不生效）。注意 bash 的 set -e 不会中断 \"A && B && C\" 链中靠前命令的失败，脚本里每条命令请自行确认真的成功（例如 registry 是否先配好）。"
     }
   ]
 }

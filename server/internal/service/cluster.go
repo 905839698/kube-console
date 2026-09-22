@@ -86,8 +86,11 @@ func (m *ClusterManager) probeLoop() {
 }
 
 func truncMsg(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	// 按 rune 截断：按字节切会把中文错误信息切在汉字中间，
+	// 产出非法 UTF-8 写入 DB 列（可能被驱动拒绝或乱码）
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n])
 	}
 	return s
 }

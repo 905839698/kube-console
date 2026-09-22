@@ -22,10 +22,16 @@ type NexusClient struct {
 
 func NewNexusClient(cfg *config.CIConfig) *NexusClient {
 	return &NexusClient{
-		base:  strings.TrimRight(cfg.NexusURL, "/"),
-		user:  cfg.NexusUsername,
-		pass:  cfg.NexusPassword,
-		httpc: &http.Client{Timeout: 120 * time.Second},
+		base: strings.TrimRight(cfg.NexusURL, "/"),
+		user: cfg.NexusUsername,
+		pass: cfg.NexusPassword,
+		// 不能用整请求 Timeout（覆盖响应体读取）：大制品在慢链路上传满 120s
+		// 会被 io.Copy 中途截断，客户端拿到 HTTP 200 + 损坏文件。
+		// ResponseHeaderTimeout 只卡「建连+响应头」，body 流式传输不受限。
+		httpc: &http.Client{Transport: &http.Transport{
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:     90 * time.Second,
+		}},
 	}
 }
 

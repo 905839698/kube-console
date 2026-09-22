@@ -43,12 +43,39 @@ func (s *Service) reconcileOrphans(ctx context.Context) {
 		return
 	}
 	dbRuns := map[string]model.CIRun{}
+	// PVC 保护集只收录非终态 run：finishRun/Cancel 删 PVC 失败（瞬时 API 错误）时，
+	// 终态 run 的残留 PVC 必须能被本对账重试删除；全量收录会让 reconcile 永远跳过它
 	dbPVCs := map[string]bool{}
-	byClusterNS := map[string]map[string]bool{} // "cluster/ns" -> 该 ns 有运行的标记
 	for i := range runs {
 		dbRuns[runs[i].TektonRunName] = runs[i]
-		if runs[i].PVCName != "" {
+		if runs[i].PVCName != "" &&
+			(runs[i].Status == model.CIRunStatusPending || runs[i].Status == model.CIRunStatusRunning) {
 			dbPVCs[runs[i].PVCName] = true
+		}
+	}
+
+	// Pipeline CR 保护集：活跃 run 的 CR 名（新版按 run 唯一）+ 旧版共享名
+	// pl-<id>-v<version>（升级窗口期：存量在途 run 的 CR 还是旧命名、新列为空）
+	validCRs := map[string]bool{}
+	var vers []model.CIPipelineVersion
+	if err := s.db.WithContext(ctx).
+		Select("id", "pipeline_id", "version").Find(&vers).Error; err == nil {
+		for i := range vers {
+			for j := range runs {
+				if runs[j].VersionID == vers[i].ID &&
+					(runs[j].Status == model.CIRunStatusPending || runs[j].Status == model.CIRunStatusRunning) {
+					validCRs[fmt.Sprintf("pl-%d-v%d", vers[i].PipelineID, vers[i].Version)] = true
+					break
+				}
+			}
+		}
+	}
+	for i := range runs {
+		if runs[i].Status != model.CIRunStatusPending && runs[i].Status != model.CIRunStatusRunning {
+			continue
+		}
+		if runs[i].TektonPipelineCR != "" {
+			validCRs[runs[i].TektonPipelineCR] = true
 		}
 	}
 
@@ -77,10 +104,9 @@ func (s *Service) reconcileOrphans(ctx context.Context) {
 			continue
 		}
 		for ns := range nsSet {
-			s.reconcileNS(ctx, k8s, ns, runs, dbRuns, dbPVCs, podRetainAfterTerminal, now)
+			s.reconcileNS(ctx, k8s, ns, runs, dbRuns, dbPVCs, validCRs, podRetainAfterTerminal, now)
 		}
 	}
-	_ = byClusterNS
 }
 
 func (s *Service) reconcileNS(ctx context.Context, k8s interface {
@@ -92,7 +118,7 @@ func (s *Service) reconcileNS(ctx context.Context, k8s interface {
 	DeletePipeline(ctx context.Context, namespace, name string) error
 	ListTaskRunPods(ctx context.Context, namespace string) (map[string]string, error)
 	DeletePod(ctx context.Context, namespace, name string) error
-}, ns string, runs []model.CIRun, dbRuns map[string]model.CIRun, dbPVCs map[string]bool, podRetainAfterTerminal time.Duration, now time.Time) {
+}, ns string, runs []model.CIRun, dbRuns map[string]model.CIRun, dbPVCs, validCRs map[string]bool, podRetainAfterTerminal time.Duration, now time.Time) {
 	// 1) 孤儿 PipelineRun
 	if prs, err := k8s.ListPipelineRuns(ctx, ns); err == nil {
 		for _, name := range prs {
@@ -119,21 +145,15 @@ func (s *Service) reconcileNS(ctx context.Context, k8s interface {
 		}
 	}
 
-	// 3) 旧版本 Pipeline CR（DB 版本表之外的 pl-* 全部清理）
-	var vers []model.CIPipelineVersion
-	if err := s.db.WithContext(ctx).Select("pipeline_id", "version").Find(&vers).Error; err == nil {
-		validCRs := map[string]bool{}
-		for i := range vers {
-			validCRs[fmt.Sprintf("pl-%d-v%d", vers[i].PipelineID, vers[i].Version)] = true
-		}
-		if pls, err := k8s.ListPipelines(ctx, ns); err == nil {
-			for _, name := range pls {
-				if !validCRs[name] {
-					if err := k8s.DeletePipeline(ctx, ns, name); err != nil {
-						log.Printf("reconcile: 删孤儿 Pipeline CR %s: %v", name, err)
-					} else {
-						log.Printf("reconcile: 清理孤儿 Pipeline CR %s", name)
-					}
+	// 3) 孤儿 Pipeline CR（不在活跃 run 保护集内的 pl-* 全部清理：
+	//    终态 run 的 CR 正常已在 finishRun 删除，这里是删除失败/崩溃的兜底）
+	if pls, err := k8s.ListPipelines(ctx, ns); err == nil {
+		for _, name := range pls {
+			if !validCRs[name] {
+				if err := k8s.DeletePipeline(ctx, ns, name); err != nil {
+					log.Printf("reconcile: 删孤儿 Pipeline CR %s: %v", name, err)
+				} else {
+					log.Printf("reconcile: 清理孤儿 Pipeline CR %s", name)
 				}
 			}
 		}

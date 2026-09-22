@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { notifyApi, type NotifyChannelItem, type NotifyLogItem } from '../api'
@@ -152,6 +152,10 @@ async function removeCh(row: NotifyChannelItem) {
   await notifyApi.deleteChannel(row.id)
   await load()
 }
+
+// 切到「通知记录」tab 时拉取日志（旧实现只在 onMounted 且 tab=logs 时拉，
+// 而初始 tab 恒为 channels → 记录表格永远空白）
+watch(tab, () => load())
 
 onMounted(load)
 </script>

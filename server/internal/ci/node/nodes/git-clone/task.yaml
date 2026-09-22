@@ -85,14 +85,24 @@ steps:
       printf '%s' "$REVISION" > $(results.git_branch.path)
       printf '%s' "$(params.url)" > $(results.git_url.path)
       # build_tag = <分支/tag名>-<构建时刻>-<CommitSHA>，供 build-image 默认 tag 引用：
-      # Docker tag 合法字符集 [a-zA-Z0-9._-]，把分支/中的 / 与 + 等归一化为 -，空 ref 记 HEAD；
-      # 时间戳按北京时间（容器默认 UTC，显式 TZ 保证跨节点一致）
+      # Docker tag 合法字符集 [a-zA-Z0-9._-] 且必须以小写字母/数字结尾。git ref 允许
+      # ~#%^&() 等任意字符（原实现只归一化 / + 空格，其余会产出非法 tag），这里把全部
+      # 非法字符归一化为 -；时间戳按北京时间（容器默认 UTC，显式 TZ 保证跨节点一致）
       REF="$REVISION"
       [ -z "$REF" ] && REF="HEAD"
-      REF=$(printf '%s' "$REF" | tr '/+ ' '---')
+      REF=$(printf '%s' "$REF" | tr -c 'a-zA-Z0-9._-' '-')
       TS=$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)
+      # POSIX sh（dash）无 ${var:0:n} 子串扩展，截断用 cut（旧写法在长 ref 上 Bad substitution）
+      SHORT_SHA=$(printf '%s' "$SHA" | cut -c1-7)
       BUILD_TAG="${REF}-${TS}-${SHA}"
       # Docker tag 长度上限 128：超长时先缩短 SHA 到 7 位，仍超长则硬截断（字符集已合法）
-      [ "${#BUILD_TAG}" -gt 128 ] && BUILD_TAG="${REF}-${TS}-${SHA:0:7}"
-      [ "${#BUILD_TAG}" -gt 128 ] && BUILD_TAG="${BUILD_TAG:0:128}"
+      [ "${#BUILD_TAG}" -gt 128 ] && BUILD_TAG="${REF}-${TS}-${SHORT_SHA}"
+      [ "${#BUILD_TAG}" -gt 128 ] && BUILD_TAG=$(printf '%s' "$BUILD_TAG" | cut -c1-128)
+      # 截断可能让 tag 以 - 或 . 结尾（Docker tag 须以字母数字结尾）：从尾部逐个剥掉；
+      # 极端情况全剥空则回退短 SHA（REF 至少是 HEAD，正常不会发生）
+      while [ -n "$BUILD_TAG" ]; do
+        case "$BUILD_TAG" in *[a-zA-Z0-9]) break ;; esac
+        BUILD_TAG="${BUILD_TAG%?}"
+      done
+      [ -z "$BUILD_TAG" ] && BUILD_TAG="build-${SHORT_SHA}"
       printf '%s' "$BUILD_TAG" > $(results.build_tag.path)

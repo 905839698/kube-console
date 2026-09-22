@@ -25,7 +25,7 @@
         <!-- 常规字段 -->
         <el-input-number v-else-if="kind(p) === 'number'" v-model="form[p.name]" size="small" :controls="false" style="width: 100%" />
         <el-switch v-else-if="kind(p) === 'boolean'" v-model="form[p.name]" />
-        <el-input v-else-if="kind(p) === 'text'" v-model="form[p.name]" type="textarea" :rows="3" size="small" />
+        <el-input v-else-if="kind(p) === 'text'" v-model="form[p.name]" type="textarea" :autosize="{ minRows: 3, maxRows: 16 }" size="small" />
         <el-input v-else v-model="form[p.name]" size="small" />
 
         <div v-if="metaOf(p).error" class="err">{{ metaOf(p).error }}</div>
@@ -42,6 +42,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ciApi, type CIGraph, type CIPNode, type CIPropSchema, type CICredential } from '../../../api/ci'
 import { k8sApi, type NamespaceItem } from '../../../api'
+import { useClusterStore } from '../../../store/cluster'
 import { useNodeTypes } from '../nodes'
 
 interface Props { node: CIPNode | null; graph?: CIGraph }
@@ -49,6 +50,7 @@ const props = withDefaults(defineProps<Props>(), { graph: undefined })
 const emit = defineEmits<{ (e: 'params', params: Record<string, unknown>): void }>()
 
 const { types } = useNodeTypes()
+const clusterStore = useClusterStore()
 const meta = computed(() => types.value.find((t) => t.type === props.node?.type))
 
 // 表单模型：切换节点时按 node.params 重建（避免上一节点残留值）
@@ -94,18 +96,36 @@ interface Meta { loading: boolean; error?: string; hint?: string }
 const fetched = reactive<Record<string, { loading: boolean; error?: string; options: Opt[] }>>({})
 const fetchedOf = (p: CIPropSchema) => (fetched[p.name] ||= { loading: false, options: [] })
 
-// 凭据列表（credential 字段选项）
+// 凭据列表（credential 字段选项；随集群走，切换集群后重新拉取）
 const credentials = ref<CICredential[]>([])
-watch(() => props.node?.id, () => {
+watch([() => props.node?.id, () => clusterStore.current], () => {
   void ciApi.credentials().then((cs) => { credentials.value = cs }).catch(() => { credentials.value = [] })
 }, { immediate: true })
 
 // 命名空间列表（k8s-ns 字段选项；kube-console 自身 API，随 X-Cluster）
 const namespaces = ref<NamespaceItem[]>([])
+let nsCluster = ''
 function ensureNamespaces() {
-  if (namespaces.value.length) return
-  void k8sApi.namespaces().then((ns) => { namespaces.value = ns }).catch(() => undefined)
+  const cl = clusterStore.current || ''
+  // 缓存按集群键控：切到别的集群后旧列表不再命中
+  if (cl && nsCluster === cl && namespaces.value.length) return
+  nsCluster = cl
+  void k8sApi.namespaces().then((ns) => {
+    if ((clusterStore.current || '') === cl) namespaces.value = ns
+  }).catch(() => undefined)
 }
+
+// 切换集群：所有集群维度的选项缓存立即失效（namespaces/凭据/deployments/git refs），
+// 避免下拉里还显示着上一个集群的内容
+watch(() => clusterStore.current, (cl, oldCl) => {
+  if (!cl || cl === oldCl) return
+  nsCluster = ''
+  namespaces.value = []
+  for (const f of Object.values(fetched)) {
+    f.options = []
+    f.error = undefined
+  }
+})
 
 // upstream-task：画布中产出 result 的普通节点
 function upstreamOptions(): Opt[] {

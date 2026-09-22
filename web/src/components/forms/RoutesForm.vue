@@ -30,12 +30,13 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { computed, reactive, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
 
 const props = defineProps<{ modelValue: any }>()
-const emit = defineEmits(['update:modelValue'])
-const o = props.modelValue
+// computed 而非 const 快照：父级（ObjectEditor）替换 modelValue 后，
+// 表单必须跟着指向新对象，否则继续写一个没人引用的旧对象（编辑静默丢失）
+const o = computed(() => props.modelValue)
 
 interface Entry { path: string; service: string; port: number; protocol: string; host: string }
 
@@ -43,24 +44,33 @@ interface Entry { path: string; service: string; port: number; protocol: string;
 const ANN_KEY = 'console.kube.io/routes'
 const entries = reactive<Entry[]>([])
 
-// 初始化：从 annotations 解析
-try {
-  const raw = o.metadata?.annotations?.[ANN_KEY]
+// 从 annotations 解析条目
+function initEntries() {
   entries.length = 0
-  if (raw) entries.push(...(JSON.parse(raw) || []))
-} catch {
-  entries.length = 0
+  try {
+    const raw = o.value?.metadata?.annotations?.[ANN_KEY]
+    if (raw) entries.push(...(JSON.parse(raw) || []))
+  } catch {
+    entries.length = 0
+  }
+  if (entries.length === 0) addEntry()
 }
-if (entries.length === 0) addEntry()
+initEntries()
+
+// modelValue 被整体替换（如 YAML tab 重新同步）→ 按新对象重新解析
+watch(() => props.modelValue, (nv, ov) => {
+  if (nv && nv !== ov) initEntries()
+})
 
 // 条目变更 → 写回 annotations（防抖由 ObjectEditor 的 deep watch 接管，这里同步即可）
 watch(entries, () => {
-  o.metadata = o.metadata || {}
-  o.metadata.annotations = o.metadata.annotations || {}
+  if (!o.value) return
+  o.value.metadata = o.value.metadata || {}
+  o.value.metadata.annotations = o.value.metadata.annotations || {}
   if (entries.length) {
-    o.metadata.annotations[ANN_KEY] = JSON.stringify(entries)
+    o.value.metadata.annotations[ANN_KEY] = JSON.stringify(entries)
   } else {
-    delete o.metadata.annotations[ANN_KEY]
+    delete o.value.metadata.annotations[ANN_KEY]
   }
 }, { deep: true })
 

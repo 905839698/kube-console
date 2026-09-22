@@ -43,7 +43,7 @@
         <el-form-item label="角色名称"><el-input v-model="o.roleRef.name" /></el-form-item>
         <el-form-item label="主体 (subjects)">
           <div v-for="(s, i) in o.subjects || []" :key="i" class="kv-row">
-            <el-select v-model="s.kind" size="small" style="width: 22%">
+            <el-select v-model="s.kind" size="small" style="width: 22%" @change="onSubjectKind(s)">
               <el-option v-for="t in ['User', 'Group', 'ServiceAccount']" :key="t" :label="t" :value="t" />
             </el-select>
             <el-input v-model="s.name" placeholder="名称" size="small" style="width: 30%" />
@@ -76,5 +76,11 @@ function addRule() {
 function addSubject() {
   o.value.subjects = o.value.subjects || []
   o.value.subjects.push({ kind: 'ServiceAccount', name: '', namespace: '' })
+}
+
+// namespace 只对 ServiceAccount 合法：切到 User/Group 时残留的 namespace 会让 API 拒绝整个绑定
+function onSubjectKind(s: any) {
+  if (s.kind !== 'ServiceAccount') delete s.namespace
+  else if (s.namespace == null) s.namespace = ''
 }
 </script>

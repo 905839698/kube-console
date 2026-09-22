@@ -5,5 +5,7 @@ export function downloadText(text: string, filename: string, mime = 'text/plain;
   a.href = URL.createObjectURL(blob)
   a.download = filename
   a.click()
-  URL.revokeObjectURL(a.href)
+  // 延迟释放：浏览器对 blob 的读取是异步的，同步 revoke 在部分浏览器
+  // （Safari/Firefox 历史版本）会导致下载被取消/空文件
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
 }

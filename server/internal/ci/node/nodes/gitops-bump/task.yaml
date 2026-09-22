@@ -103,7 +103,9 @@ steps:
             case "$stripped" in
               tag:*|'- 'tag:*)
                 btag="${btag%"${btag##*[! ]}"}"  # 防御：tag 尾随空白不入清单
-                line="${line%tag:*}tag: ${btag}"
+                # %%（首个 tag:）而非 %（最后一个）：tag 值里含 tag: 子串（如 tag: "mytag:x"）
+                # 时按最后一个切会把行截断成未闭合引号的坏 YAML
+                line="${line%%tag:*}tag: ${btag}"
                 inblk=0; bf_hit=1
                 ;;
             esac
@@ -149,13 +151,17 @@ steps:
         REPO_ESC=$(printf '%s' "$REPO_PREFIX" | sed -e 's/[][\.*^$()+?{}|]/\\&/g')
         HIT=0
         # ---- 形态 1：整串（全部文件）----
+        # 行尾锚 [[:space:]]*$ 是前缀边界：没有它，reg/app 会命中 reg/app-v2:1.0
+        # （tag 组以 [@:] 开头匹配不上 -v2，但前缀后无边界约束），sed 会把它写成
+        # reg/app:2.0-v2:1.0 这种坏引用。组4 = 注释及其前导空格，整体保留
+        # （YAML 中 # 前无空格不是注释，替换不能把两者连起来）
         for f in $FILES; do
           [ -f "$f" ] || { echo "WARN: 文件不存在 $f" >&2; continue; }
-          CNT=$(grep -cE "^[[:space:]]*(-[[:space:]]*)?image[[:space:]]*:[[:space:]]*[\"']?${REPO_ESC}([:@][^\"'[:space:]]*)?[\"']?" "$f" || true)
+          CNT=$(grep -cE "^[[:space:]]*(-[[:space:]]*)?image[[:space:]]*:[[:space:]]*[\"']?${REPO_ESC}([:@][^\"'[:space:]]*)?[\"']?([[:space:]]*(#.*)?)?[[:space:]]*$" "$f" || true)
           if [ "$CNT" -gt 0 ]; then
             HIT=1
             # sed 分隔符用 |：替换模式含 #.*?（行尾注释组），用 # 会撞分隔符
-            sed -i -E "s|^([[:space:]]*(-[[:space:]]*)?image[[:space:]]*:[[:space:]]*)[\"']?${REPO_ESC}([:@][^\"'[:space:]]*)?[\"']?(#.*)?|\1${r}\4|" "$f"
+            sed -i -E "s|^([[:space:]]*(-[[:space:]]*)?image[[:space:]]*:[[:space:]]*)[\"']?${REPO_ESC}([:@][^\"'[:space:]]*)?[\"']?([[:space:]]*(#.*)?)?[[:space:]]*$|\1${r}\4|" "$f"
           fi
         done
         # ---- 形态 2：拆分（整串一个都没命中才进入）----
@@ -189,6 +195,13 @@ steps:
         BUMPED="${BUMPED:+$BUMPED,}$r"
       done
       unset IFS
+      # IMAGES 归一后没有任何有效引用（上游结果解析成空串 / 引用未配置）：直接失败。
+      # 否则会空转循环后走到「镜像无变化」分支，什么都没 bump 却报成功
+      if [ -z "$BUMPED" ]; then
+        echo "ERROR: 未解析到任何镜像引用（IMAGES 为空）。上游任务（如 build-image）可能未产出结果，" >&2
+        echo "       或镜像引用参数未配置/引用写错——请检查流水线连线与节点参数" >&2
+        exit 1
+      fi
 
       git add -A
       if git diff --cached --quiet; then

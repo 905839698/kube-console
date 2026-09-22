@@ -27,7 +27,9 @@ function expandField(field: string, min: number, max: number): Set<number> {
   const out = new Set<number>()
   for (const part of field.split(',')) {
     let [range, step] = part.split('/')
-    const stepN = step ? parseInt(step, 10) : 1
+    // step=0（*/0）非法：parseInt 得 0 会让 for 循环永不前进，
+    // 本函数在详情 computed 里同步调用 → 主线程卡死；钳到 1
+    const stepN = step ? Math.max(1, parseInt(step, 10) || 1) : 1
     let lo = min, hi = max
     if (range !== '*' && range !== '?') {
       const [a, b] = range.split('-')
@@ -51,7 +53,8 @@ export function cronNextRun(expr: string, from = new Date()): Date | null {
     hours = expandField(f[1], 0, 23)
     days = expandField(f[2], 1, 31)
     months = expandField(f[3], 1, 12)
-    weekdays = expandField(f[4].replace('7', '0'), 0, 6)
+    // 星期 7→0 归一：逐段替换（旧实现只替换首个字符，5-7 → 5-0 空集，永不显示下次执行）
+    weekdays = expandField(f[4].split(',').map((p) => p.replace(/7/g, '0')).join(','), 0, 6)
   } catch {
     return null
   }
@@ -61,8 +64,14 @@ export function cronNextRun(expr: string, from = new Date()): Date | null {
   const limit = new Date(from.getTime() + 366 * 24 * 3600 * 1000)
   while (d <= limit) {
     if (!months.has(d.getMonth() + 1)) { d.setMonth(d.getMonth() + 1, 1); d.setHours(0, 0, 0, 0); continue }
-    const dayMatch = days.has(d.getDate()) && weekdays.has(d.getDay())
-    if (f[2] === '*' && f[4] !== '*') { /* 只限周 */ } else if (f[2] !== '*' && f[4] === '*') { /* 只限日 */ }
+    // 日/周匹配：两者都受限时标准 cron 是 OR 语义（0 0 1 * 1 = 每月 1 号或每周一），
+    // 旧实现恒 AND，计算的下次执行时间偏晚甚至永远匹配不到
+    const dayConstrained = f[2] !== '*' && f[2] !== '?'
+    const wdayConstrained = f[4] !== '*' && f[4] !== '?'
+    const dayMatch =
+      dayConstrained && wdayConstrained
+        ? days.has(d.getDate()) || weekdays.has(d.getDay())
+        : (!dayConstrained || days.has(d.getDate())) && (!wdayConstrained || weekdays.has(d.getDay()))
     if (!dayMatch) { d.setDate(d.getDate() + 1); d.setHours(0, 0, 0, 0); continue }
     if (!hours.has(d.getHours())) { d.setHours(d.getHours() + 1, 0, 0, 0); continue }
     if (!minutes.has(d.getMinutes())) { d.setMinutes(d.getMinutes() + 1, 0, 0); continue }

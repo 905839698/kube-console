@@ -224,13 +224,21 @@ func (r *RegistryClient) TriggerScan(ctx context.Context, project, repo, referen
 // GetArtifactScan 查询制品扫描状态与漏洞计数
 func (r *RegistryClient) GetArtifactScan(ctx context.Context, project, repo, reference string) (*ScanOverview, error) {
 	var raw map[string]any
-	if _, body, err := r.doRequest(ctx, http.MethodGet,
+	code, body, err := r.doRequest(ctx, http.MethodGet,
 		fmt.Sprintf("/api/v2.0/projects/%s/repositories/%s/artifacts/%s?with_scan_overview=true",
-			url.PathEscape(project), url.PathEscape(repo), url.PathEscape(reference)), nil); err != nil {
+			url.PathEscape(project), url.PathEscape(repo), url.PathEscape(reference)), nil)
+	if err != nil {
 		return nil, err
-	} else if isHTMLBody("", body) {
+	}
+	// 非 200（404 制品不存在等）必须报错：Harbor 的错误体是合法 JSON，
+	// 旧实现照解析后拿不到 scan_overview，「不存在」被显示成「未扫描/0 漏洞」
+	if code != http.StatusOK {
+		return nil, fmt.Errorf("查询扫描状态返回 %d: %s", code, truncateStr(string(body), 200))
+	}
+	if isHTMLBody("", body) {
 		return nil, htmlResponseErr
-	} else if err := json.Unmarshal(body, &raw); err != nil {
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("响应解析失败: %w", err)
 	}
 	out := &ScanOverview{Counts: map[string]int64{}}
@@ -286,11 +294,14 @@ type VulnReport struct {
 
 // GetVulnerabilities 拉取制品 CVE 明细（Trivy 报告）
 func (r *RegistryClient) GetVulnerabilities(ctx context.Context, project, repo, reference string) (*VulnReport, error) {
-	_, body, err := r.doRequest(ctx, http.MethodGet,
+	code, body, err := r.doRequest(ctx, http.MethodGet,
 		fmt.Sprintf("/api/v2.0/projects/%s/repositories/%s/artifacts/%s/additions/vulnerabilities",
 			url.PathEscape(project), url.PathEscape(repo), url.PathEscape(reference)), nil)
 	if err != nil {
 		return nil, err
+	}
+	if code != http.StatusOK {
+		return nil, fmt.Errorf("拉取漏洞报告返回 %d: %s", code, truncateStr(string(body), 200))
 	}
 	if isHTMLBody("", body) {
 		return nil, htmlResponseErr

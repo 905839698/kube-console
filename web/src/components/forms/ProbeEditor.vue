@@ -7,13 +7,20 @@
           <el-option v-for="o in ['httpGet', 'tcpSocket', 'exec']" :key="o" :label="o" :value="o" />
         </el-select>
         <el-input v-if="p.type === 'httpGet'" v-model="p.path" placeholder="/health" size="small" style="width: 130px" />
-        <el-input-number v-if="p.type !== 'exec'" v-model="p.port" :min="1" :max="65535" size="small" style="width: 110px" />
-        <el-input v-else v-model="p.command" placeholder="如 cat /tmp/healthy" size="small" style="width: 200px" />
+        <!-- 端口是 IntOrString：允许命名端口（字符串），数字输入会在 build 时转回 number -->
+        <el-input v-if="p.type !== 'exec'" v-model="p.port" placeholder="8080 或命名端口" size="small" style="width: 120px" />
+        <el-input v-else v-model="p.command" type="textarea" :rows="2" placeholder="每行一个参数，如 cat /tmp/healthy" size="small" style="width: 240px" />
         <template v-if="!titleOnly">
           <span class="probe-label">初始延迟</span>
           <el-input-number v-model="p.initialDelaySeconds" :min="0" :max="3600" size="small" style="width: 90px" />
           <span class="probe-label">间隔(s)</span>
           <el-input-number v-model="p.periodSeconds" :min="1" :max="3600" size="small" style="width: 90px" />
+          <span class="probe-label">超时(s)</span>
+          <el-input-number v-model="p.timeoutSeconds" :min="1" :max="3600" size="small" style="width: 80px" />
+          <span class="probe-label">失败阈值</span>
+          <el-input-number v-model="p.failureThreshold" :min="1" :max="100" size="small" style="width: 80px" />
+          <span class="probe-label">成功阈值</span>
+          <el-input-number v-model="p.successThreshold" :min="1" :max="100" size="small" style="width: 80px" />
         </template>
       </div>
     </template>

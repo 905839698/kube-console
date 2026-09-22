@@ -51,9 +51,11 @@ steps:
       [ -n "$username" ] || { echo "ERROR: 未注入 nexus 凭证（username/password）"; exit 1; }
       cd $(workspaces.source.path)
       VERSION={{version}}
+      # 版本为空会拼出 repository//file 空段（Nexus 400），直接失败
+      [ -n "$VERSION" ] || { echo "ERROR: version 为空（未配置且无上游 GIT_COMMIT 可取），请在节点参数填写" >&2; exit 1; }
       count=0
       for f in {{path}}; do
-        [ -e "$f" ] || continue
+        [ -f "$f" ] || continue
         sum=$(sha256sum "$f" | awk '{print $1}')
         base=$(basename "$f")
         target="{{nexusBase}}/repository/{{repository}}/${VERSION}/${base}"
@@ -81,9 +83,11 @@ steps:
       mc mb --ignore-existing "local/{{minioBucket}}"
       cd $(workspaces.source.path)
       VERSION={{version}}
+      # 版本为空会拼出 bucket//file 空段，直接失败
+      [ -n "$VERSION" ] || { echo "ERROR: version 为空（未配置且无上游 GIT_COMMIT 可取），请在节点参数填写" >&2; exit 1; }
       count=0
       for f in {{path}}; do
-        [ -e "$f" ] || continue
+        [ -f "$f" ] || continue
         sum=$(sha256sum "$f" | awk '{print $1}')
         base=$(basename "$f")
         key="{{repository}}/${VERSION}/${base}"

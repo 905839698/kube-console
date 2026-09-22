@@ -89,7 +89,8 @@ steps:
       if [ -z "$DOCKER_CONFIG" ] || [ ! -f "$DOCKER_CONFIG/config.json" ]; then
         if [ -n "$username" ] && [ -n "$password" ]; then
           mkdir -p /tmp/docker-cfg
-          AUTH=$(printf '%s:%s' "$username" "$password" | base64)
+          # base64 默认 76 列换行，长凭证的换行会写进 JSON 使其非法
+          AUTH=$(printf '%s:%s' "$username" "$password" | base64 | tr -d '\n')
           cat > /tmp/docker-cfg/config.json <<EOF
       {"auths":{"{{registry}}":{"username":"$username","password":"$password","auth":"$AUTH"}}}
       EOF
@@ -178,8 +179,10 @@ steps:
       fi
       echo "pushed $IMAGE"
       printf '%s' "$IMAGE" > $(results.imageRef.path)
-      # digest 从 buildctl 元数据输出里提取（image 输出的 digest 形如 sha256:...）
-      DIGEST=$(grep -oE 'sha256:[0-9a-f]{64}' /tmp/build-meta.json | head -1 || true)
+      # digest 从 buildctl 元数据输出里提取。metadata 键按字母序，config.digest
+      # 排在 containerimage.digest 之前——直接取第一个 sha256 会拿到 config blob
+      # 的 digest（与镜像 digest 不符），必须按键匹配
+      DIGEST=$(grep -oE '"containerimage\.digest":"sha256:[0-9a-f]{64}"' /tmp/build-meta.json | head -1 | grep -oE 'sha256:[0-9a-f]{64}' || true)
       printf '%s' "${DIGEST:-}" > $(results.imageDigest.path)
       printf '%s' "" > $(results.sbom_path.path)
   - name: generate-sbom
@@ -208,7 +211,8 @@ steps:
       if [ -z "$DOCKER_CONFIG" ] || [ ! -f "$DOCKER_CONFIG/config.json" ]; then
         if [ -n "$username" ] && [ -n "$password" ]; then
           mkdir -p /tmp/syft-cfg
-          AUTH=$(printf '%s:%s' "$username" "$password" | base64)
+          # base64 默认 76 列换行，长凭证的换行会写进 JSON 使其非法
+          AUTH=$(printf '%s:%s' "$username" "$password" | base64 | tr -d '\n')
           cat > /tmp/syft-cfg/config.json <<EOF
       {"auths":{"{{registry}}":{"username":"$username","password":"$password","auth":"$AUTH"}}}
       EOF

@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -10,6 +12,7 @@ import (
 
 	"kube-console/server/internal/kube"
 	"kube-console/server/internal/middleware"
+	"kube-console/server/internal/model"
 	"kube-console/server/internal/service"
 	"kube-console/server/pkg/response"
 )
@@ -19,12 +22,17 @@ type K8sHandler struct {
 	clusters  *service.ClusterManager
 	k8s       *service.K8sService
 	jwtSecret string
+	// perm 写权限判定（对齐授权页的命名空间粒度授权）。yaml/apply 是多文档提交，
+	// 目标 ns 取自文档内容而不是 query，路由中间件判不了，故在 handler 内逐文档查。
+	perm *service.PermissionService
 	// OnNamespaceCreated 命名空间创建后的联动钩子（Nacos 自动同步），由 router 装配注入；可为 nil
 	OnNamespaceCreated func(cluster, namespace string)
+	// LogSourceFor 取集群 ES 日志源（日志采集 Sidecar 生成输出配置用），由 router 装配注入；可为 nil
+	LogSourceFor func(clusterName string) (*model.LogSource, error)
 }
 
-func NewK8sHandler(clusters *service.ClusterManager, k8s *service.K8sService, jwtSecret string) *K8sHandler {
-	return &K8sHandler{clusters: clusters, k8s: k8s, jwtSecret: jwtSecret}
+func NewK8sHandler(clusters *service.ClusterManager, k8s *service.K8sService, jwtSecret string, perm *service.PermissionService) *K8sHandler {
+	return &K8sHandler{clusters: clusters, k8s: k8s, jwtSecret: jwtSecret, perm: perm}
 }
 
 // client 解析 X-Cluster 头并返回集群客户端，失败时写入响应并返回 nil
@@ -317,6 +325,12 @@ func (h *K8sHandler) ExecPod(c *gin.Context) {
 		response.Fail(c, http.StatusBadRequest, 400, "缺少 cluster 参数")
 		return
 	}
+	// Pod 终端 = pods/exec，按 KubeSphere 口径归入命名空间写权限（edit/admin 或平台管理员）。
+	// 权限关放在连通性检查之前：越权一律 403，不因集群恰好不可达而降级成 400
+	if h.perm != nil && !h.perm.Access(c.Request.Context(), cluster, claims.Username).CanWriteNS(queryNamespace(c)) {
+		response.Fail(c, http.StatusForbidden, 403, "Pod 终端需要该命名空间的写权限（edit/admin 角色或平台管理员）")
+		return
+	}
 	client, err := h.clusters.ClientChecked(cluster)
 	if err != nil {
 		response.Fail(c, http.StatusBadRequest, 400, err.Error())
@@ -336,11 +350,9 @@ func (h *K8sHandler) ExecPod(c *gin.Context) {
 	container := c.Query("container")
 	shell := c.Query("shell")
 	debug := c.Query("debug") == "1"
-	if err := h.k8s.ExecPod(c.Request.Context(), client, ws, queryNamespace(c), c.Param("name"), container, shell, debug); err != nil {
-		// 升级后无法返回 HTTP 错误，经 WS 发送错误消息
-		_ = ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"exit","message":"`+err.Error()+`"}`))
-		_ = ws.Close()
-	}
+	// ExecPod 内部已负责发送 exit 消息并关闭 WS（含错误分支），
+	// 这里不再重复写——连接已关，且错误串拼接进 JSON 含引号/换行时是非法 JSON
+	_ = h.k8s.ExecPod(c.Request.Context(), client, ws, queryNamespace(c), c.Param("name"), container, shell, debug)
 }
 
 // ------------------- 工作负载 -------------------
@@ -380,17 +392,23 @@ func (h *K8sHandler) ScaleWorkload(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Replicas int32 `json:"replicas" binding:"required"`
+		// 指针：binding:"required" 对数值按「非零值」校验，{"replicas":0} 会被拒，
+		// 而缩容到 0（停工作负载）是合法操作
+		Replicas *int32 `json:"replicas"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, 400, 400, "replicas 不能为空")
 		return
 	}
-	if req.Replicas < 0 {
+	if req.Replicas == nil {
+		response.Fail(c, 400, 400, "replicas 不能为空")
+		return
+	}
+	if *req.Replicas < 0 {
 		response.Fail(c, 400, 400, "replicas 不能为负数")
 		return
 	}
-	if err := h.k8s.ScaleWorkload(c.Request.Context(), client, c.Param("kind"), queryNamespace(c), c.Param("name"), req.Replicas); err != nil {
+	if err := h.k8s.ScaleWorkload(c.Request.Context(), client, c.Param("kind"), queryNamespace(c), c.Param("name"), *req.Replicas); err != nil {
 		response.K8sError(c, err)
 		return
 	}
@@ -417,6 +435,62 @@ func (h *K8sHandler) DeleteWorkload(c *gin.Context) {
 		return
 	}
 	if err := h.k8s.DeleteWorkload(c.Request.Context(), client, c.Param("kind"), queryNamespace(c), c.Param("name")); err != nil {
+		response.K8sError(c, err)
+		return
+	}
+	response.OK(c, nil)
+}
+
+// ------------------- 容器内日志采集（Fluent Bit Sidecar） -------------------
+
+// GetLogCollection 查询日志采集状态
+func (h *K8sHandler) GetLogCollection(c *gin.Context) {
+	client := h.client(c)
+	if client == nil {
+		return
+	}
+	st, err := h.k8s.GetLogCollection(c.Request.Context(), client, c.Param("kind"), queryNamespace(c), c.Param("name"))
+	if err != nil {
+		response.K8sError(c, err)
+		return
+	}
+	response.OK(c, st)
+}
+
+// SetLogCollection 开启/更新日志采集（注入 Sidecar，触发滚动更新）
+func (h *K8sHandler) SetLogCollection(c *gin.Context) {
+	client := h.client(c)
+	if client == nil {
+		return
+	}
+	var in service.LogCollectionInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		response.Fail(c, 400, 400, "参数错误")
+		return
+	}
+	if h.LogSourceFor == nil {
+		response.Fail(c, 500, 500, "日志源查询未启用")
+		return
+	}
+	src, err := h.LogSourceFor(h.clusterName(c))
+	if err != nil || src == nil || !src.Enabled {
+		response.Fail(c, 400, 400, "该集群未启用日志源（平台管理-日志源配置），无法生成 ES 采集配置")
+		return
+	}
+	if err := h.k8s.EnableLogCollection(c.Request.Context(), client, c.Param("kind"), queryNamespace(c), c.Param("name"), &in, src); err != nil {
+		response.K8sError(c, err)
+		return
+	}
+	response.OK(c, nil)
+}
+
+// RemoveLogCollection 关闭日志采集（摘除 Sidecar 与配置资源）
+func (h *K8sHandler) RemoveLogCollection(c *gin.Context) {
+	client := h.client(c)
+	if client == nil {
+		return
+	}
+	if err := h.k8s.RemoveLogCollection(c.Request.Context(), client, c.Param("kind"), queryNamespace(c), c.Param("name")); err != nil {
 		response.K8sError(c, err)
 		return
 	}
@@ -540,6 +614,13 @@ func (h *K8sHandler) ApplyYAML(c *gin.Context) {
 		response.Fail(c, 400, 400, "yaml 不能为空")
 		return
 	}
+	// 多文档提交：先逐文档判定写权限再提交（避免只写成功一半）。
+	// 命名空间级文档需该 ns 的 edit/admin；集群级文档（Namespace/ClusterRole/CRD 等）
+	// 需集群级权限或平台管理员——否则只读用户能借 apply 绕过命名空间粒度授权。
+	if msg := h.checkApplyPermission(c, req.YAML); msg != "" {
+		response.Fail(c, http.StatusForbidden, http.StatusForbidden, msg)
+		return
+	}
 	created, err := h.k8s.ApplyYAML(c.Request.Context(), client, req.YAML)
 	if err != nil {
 		response.K8sError(c, err)
@@ -552,6 +633,63 @@ func (h *K8sHandler) ApplyYAML(c *gin.Context) {
 	// Route 跨命名空间引用：自动创建 ReferenceGrant 授权
 	_ = h.k8s.SyncReferenceGrant(c.Request.Context(), client, req.YAML)
 	response.OK(c, gin.H{"created": created})
+}
+
+// checkApplyPermission 逐文档判定写权限，返回空串表示放行，否则返回拒绝原因。
+// 作用域判定优先用集群 discovery（ResourceDefs，含 CRD 的 namespaced 标志），
+// 取不到时退回平台的静态表 kube.IsClusterScoped（与 /resources/:kind 的口径一致）。
+func (h *K8sHandler) checkApplyPermission(c *gin.Context, yamlStr string) string {
+	docs, err := kube.ParseYAMLDocs(yamlStr)
+	if err != nil {
+		return "" // 解析失败交给 ApplyYAML 报错，这里不重复报
+	}
+	if h.perm == nil {
+		return ""
+	}
+	cluster := middleware.ClusterName(c)
+	acc := h.perm.Access(c.Request.Context(), cluster, middleware.CurrentUser(c))
+	if acc.PlatformAdmin {
+		return ""
+	}
+	namespaced := map[string]bool{}
+	if defs, derr := h.clusters.ResourceDefs(cluster, false); derr == nil {
+		for _, g := range defs {
+			for _, r := range g.Resources {
+				if r.Kind != "" {
+					namespaced[strings.ToLower(r.Kind)] = r.Namespaced
+				}
+			}
+		}
+	}
+	for i, obj := range docs {
+		kind, name := obj.GetKind(), obj.GetName()
+		if kind == "" {
+			continue
+		}
+		isNS, known := namespaced[strings.ToLower(kind)]
+		if !known {
+			// discovery 不可用时的兜底：按平台静态表判断（KindMap 推出复数名）
+			plural := strings.ToLower(kind)
+			if gvr, ok := kube.KindMap[kind]; ok {
+				plural = gvr.Resource
+			}
+			isNS = !kube.IsClusterScoped(plural)
+		}
+		if !isNS {
+			if !acc.CanWriteCluster() {
+				return fmt.Sprintf("第 %d 个文档 %s/%s 是集群级资源，需要集群级权限或平台管理员", i+1, kind, name)
+			}
+			continue
+		}
+		ns := obj.GetNamespace()
+		if ns == "" {
+			ns = "default"
+		}
+		if !acc.CanWriteNS(ns) {
+			return fmt.Sprintf("没有命名空间 %s 的写权限（第 %d 个文档 %s/%s）：请在「授权」页授予该命名空间的 edit 或 admin 角色", ns, i+1, kind, name)
+		}
+	}
+	return ""
 }
 
 // ExportYAML POST /yaml/export  {"resources":[{"kind","namespace","name"}]} → 多文档 YAML + 跳过项
@@ -610,6 +748,12 @@ func (h *K8sHandler) ExecNode(c *gin.Context) {
 	cluster := c.Query("cluster")
 	if cluster == "" {
 		response.Fail(c, http.StatusBadRequest, 400, "缺少 cluster 参数")
+		return
+	}
+	// 节点终端 = 宿主机 root shell + 创建调试 Pod，属集群级操作（cluster-admin 或平台管理员）；
+	// 权限关先于连通性检查（越权一律 403）
+	if h.perm != nil && !h.perm.Access(c.Request.Context(), cluster, claims.Username).CanWriteCluster() {
+		response.Fail(c, http.StatusForbidden, 403, "节点终端需要集群级权限（cluster-admin 角色或平台管理员）")
 		return
 	}
 	client, err := h.clusters.ClientChecked(cluster)

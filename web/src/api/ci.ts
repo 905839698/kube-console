@@ -52,7 +52,7 @@ export interface CIPipelineDetail {
   latestVersion?: CIPipelineVersion | null
   graph?: CIGraph | null
 }
-export type CIRunStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled'
+export type CIRunStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled' | 'skipped'
 export interface CIRun {
   id: number; pipelineId: number; versionId: number; runNo: number
   status: CIRunStatus; triggerType: string
@@ -224,7 +224,9 @@ export const ciApi = {
 
 export async function taskLogsUrl(runId: number, taskId: number): Promise<string> {
   const { token } = await ciApi.streamToken()
-  return `/api/ci/runs/${runId}/tasks/${taskId}/logs?token=${encodeURIComponent(token)}`
+  // 带 cluster 供服务端做集群维度校验（与其它 run 端点一致）
+  const cluster = activeCluster.value || localStorage.getItem('kc-cluster') || ''
+  return `/api/ci/runs/${runId}/tasks/${taskId}/logs?token=${encodeURIComponent(token)}&cluster=${encodeURIComponent(cluster)}`
 }
 
 export async function runWsUrl(runId: number): Promise<string> {

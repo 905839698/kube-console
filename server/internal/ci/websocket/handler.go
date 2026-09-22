@@ -57,6 +57,19 @@ func Handler(hub *Hub, guard RunGuard) gin.HandlerFunc {
 		msgs, cancel := hub.Subscribe(runID)
 		defer cancel()
 
+		// 读泵：消费客户端的控制帧（close/pong）。没有读循环时客户端 close 帧无人
+		// 处理，handler 要等某次写失败（或 TCP 重传超时）才退出，半开连接下清理被
+		// 拉长；gorilla/websocket 支持单读 + 单写并发。
+		peerGone := make(chan struct{})
+		go func() {
+			defer close(peerGone)
+			for {
+				if _, _, rerr := conn.ReadMessage(); rerr != nil {
+					return
+				}
+			}
+		}()
+
 		// 心跳，防止代理掐断空闲连接
 		ping := time.NewTicker(30 * time.Second)
 		defer ping.Stop()
@@ -75,6 +88,8 @@ func Handler(hub *Hub, guard RunGuard) gin.HandlerFunc {
 					websocket.PingMessage, []byte{}, time.Now().Add(5*time.Second)); err != nil {
 					return
 				}
+			case <-peerGone:
+				return
 			case <-c.Request.Context().Done():
 				return
 			}

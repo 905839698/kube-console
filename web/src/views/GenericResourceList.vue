@@ -10,7 +10,7 @@
             <el-button size="default" @click="exportVisible = true">导出</el-button>
             <el-button size="default" @click="importDlg?.pick()">导入</el-button>
           </template>
-          <el-button v-if="!unavailable" type="primary" size="default" @click="openCreate">
+          <el-button v-if="!unavailable" type="primary" size="default" :disabled="!canWriteCreate" @click="openCreate">
             <el-icon><Plus /></el-icon>&nbsp;新建
           </el-button>
         </div>
@@ -26,7 +26,7 @@
       style="margin-bottom: 12px"
     />
 
-    <el-table border v-else :data="items" v-loading="loading" stripe @row-click="onRowClick">
+    <el-table border v-else :data="paged" v-loading="loading" stripe @row-click="onRowClick">
       <el-table-column label="名称" prop="name" min-width="200" sortable>
         <template #default="{ row }">
           <el-link type="primary" @click="onNameClick(row)">{{ row.name }}</el-link>
@@ -58,7 +58,7 @@
       <el-table-column label="操作" width="160" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="viewDetail(row)">详情</el-button>
-          <el-button size="small" type="danger" @click="remove(row)">删除</el-button>
+          <el-button size="small" type="danger" :disabled="!canWrite(row)" @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -131,6 +131,7 @@ import ResourceExportDialog from '../components/ResourceExportDialog.vue'
 import ResourceImportDialog from '../components/ResourceImportDialog.vue'
 import { useClusterStore } from '../store/cluster'
 import { useNamespaceStore } from '../store/namespace'
+import { usePerm } from '../store/perm'
 import { parseDuration } from '../utils/sort'
 import { confirmDelete } from '../utils/confirm'
 
@@ -141,6 +142,13 @@ const route = useRoute()
 const router = useRouter()
 const clusterStore = useClusterStore()
 const nsStore = useNamespaceStore()
+
+// 写权限：集群级资源（PV/StorageClass/CRD 等）看 canWriteCluster，其余按行所属 ns
+const perm = usePerm()
+const CLUSTER_SCOPED = ['persistentvolumes', 'storageclasses', 'nodes', 'namespaces', 'clusterroles', 'clusterrolebindings', 'customresourcedefinitions', 'gatewayclasses']
+const kindClusterScoped = computed(() => CLUSTER_SCOPED.includes(String(kind.value)))
+const canWrite = (row: any) => (kindClusterScoped.value ? perm.canWriteCluster() : perm.canWriteNS(row?.namespace || nsStore.selected?.[0]))
+const canWriteCreate = computed(() => (kindClusterScoped.value ? perm.canWriteCluster() : perm.canWriteNS(nsStore.selected?.[0])))
 
 // 两种模式：kind 模式（/resources/:kind）或 GVR 模式（/crd/:group/:version/:resource）
 const isGvr = computed(() => !!route.params.group)

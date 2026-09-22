@@ -3,4 +3,4 @@ name: NPM 编译
 category: build
 icon: npm
 version: "1.0"
-description: npm / pnpm / yarn 前端或 Node 编译
+description: 自定义 Node 构建脚本（registry/代理、依赖安装、构建命令都写在 script 里）

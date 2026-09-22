@@ -128,9 +128,19 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			response.ServerError(c, err)
 			return
 		}
-		// 兜底：与初始 admin 密码比较，防止种子化失败导致无法登录
+		// 兜底：与初始 admin 密码比较，防止种子化失败导致无法登录。
+		// 回写 DB（bcrypt 存哈希）：下次登录走正常路径；ID 由 DB 分配
+		// （旧实现硬编码 ID=1：若 ID 1 已被其它用户占用，JWT uid 指向他人，
+		// 审计 / API Token 归属错乱）
 		if h.cfg.Admin.Username == req.Username && subtle.ConstantTimeCompare([]byte(req.Password), []byte(h.cfg.Admin.Password)) == 1 {
-			user.ID, user.Username, user.Role = 1, h.cfg.Admin.Username, model.RoleAdmin
+			if hash, herr := bcrypt.GenerateFromPassword([]byte(req.Password), 10); herr == nil {
+				nu := model.User{Username: h.cfg.Admin.Username, Role: model.RoleAdmin, PasswordHash: string(hash)}
+				if cerr := h.db.Create(&nu).Error; cerr == nil {
+					user = &nu
+				}
+			}
+			user.Username = h.cfg.Admin.Username
+			user.Role = model.RoleAdmin
 			isFallbackAdmin = true
 		} else {
 			fail()

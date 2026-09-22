@@ -156,6 +156,8 @@ const tableNote = computed(() =>
   instantRows.value.length > TABLE_MAX ? `共 ${instantRows.value.length} 个序列，表格仅展示前 ${TABLE_MAX} 个` : '',
 )
 
+let execSeq = 0
+
 async function execute() {
   const q = query.value.trim()
   if (!q) {
@@ -163,6 +165,8 @@ async function execute() {
     return
   }
   if (!clusterStore.current) return
+  // 防慢查询的过期响应覆盖新查询结果（如连续点「执行」或切换 Range 后旧查询晚返回）
+  const seq = ++execSeq
   loading.value = true
   try {
     // 瞬时查询（表格）与范围查询（图形）并行
@@ -170,6 +174,7 @@ async function execute() {
       k8sApi.monitorQuery(q),
       k8sApi.monitorQueryRange(q, range.value),
     ])
+    if (seq !== execSeq) return
     instantRows.value = instant || []
     rangeResults.value = ranged || []
     queryTime.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
@@ -177,7 +182,7 @@ async function execute() {
   } catch {
     /* 拦截器已提示 */
   } finally {
-    loading.value = false
+    if (seq === execSeq) loading.value = false
   }
 }
 

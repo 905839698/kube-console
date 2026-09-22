@@ -19,7 +19,8 @@ export const useClusterStore = defineStore('cluster', {
   actions: {
     async load() {
       try {
-        this.clusters = await clusterApi.list()
+        // /my-clusters：普通用户只有最小字段（完整信息走「集群管理」页的 /clusters）
+        this.clusters = await clusterApi.mine()
         // 当前集群不存在时回退到第一个；并始终持久化，确保 localStorage 与 current 一致
         if (this.clusters.length > 0) {
           const valid = this.clusters.some((c) => c.name === this.current)
@@ -35,7 +36,7 @@ export const useClusterStore = defineStore('cluster', {
     async recheck(name?: string) {
       const target = name || this.current
       if (!target) return
-      const updated = await clusterApi.connectivity(target)
+      const updated = await clusterApi.mineConnectivity(target)
       const idx = this.clusters.findIndex((c) => c.name === updated.name)
       if (idx >= 0) this.clusters[idx] = { ...this.clusters[idx], ...updated }
       else this.clusters.push(updated)

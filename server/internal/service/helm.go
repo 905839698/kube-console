@@ -344,12 +344,11 @@ func (s *HelmService) ReleaseHistory(ctx context.Context, c *kube.Client, ns, na
 	}
 	out := make([]HelmReleaseHistory, 0, len(rels))
 	for _, r := range rels {
-		hh := HelmReleaseHistory{
-			Version: r.Version,
-			Updated: r.Info.LastDeployed.Format(time.RFC3339),
-			Age:     ageOfTime(r.Info.LastDeployed.Time),
-		}
+		hh := HelmReleaseHistory{Version: r.Version}
+		// Info 可能为 nil（历史遗留 release），nil 检查必须在解引用之前
 		if r.Info != nil {
+			hh.Updated = r.Info.LastDeployed.Format(time.RFC3339)
+			hh.Age = ageOfTime(r.Info.LastDeployed.Time)
 			hh.Status = string(r.Info.Status)
 		}
 		if r.Chart != nil && r.Chart.Metadata != nil {
@@ -467,10 +466,14 @@ func (s *HelmService) RollbackRelease(ctx context.Context, c *kube.Client, ns, n
 	rb.Version = version
 	rb.Wait = wait
 	rb.Timeout = 5 * time.Minute
+	// helm v3.17 的 Rollback/Uninstall 无 RunWithContext（仅 Install/Upgrade 有），
+	// 由 rb.Timeout 5min 兜底
 	return rb.Run(name)
 }
 
-// UninstallRelease 卸载 release，ns 为该 release 所在命名空间
+// UninstallRelease 卸载 release，ns 为该 release 所在命名空间。
+// keepHistory=false（默认）：连 release 记录一并清除——列表行彻底消失，
+// 不会残留「uninstalled 状态永不更新」的记录。
 func (s *HelmService) UninstallRelease(ctx context.Context, c *kube.Client, ns, name string, keepHistory bool) error {
 	cfg, err := s.helmActionCfg(c, ns)
 	if err != nil {
@@ -480,7 +483,22 @@ func (s *HelmService) UninstallRelease(ctx context.Context, c *kube.Client, ns, 
 	un.KeepHistory = keepHistory
 	un.Timeout = 5 * time.Minute
 	_, err = un.Run(name)
-	return err
+	if err == nil || keepHistory {
+		return err
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "not found") && !strings.Contains(msg, "already uninstalled") {
+		return err
+	}
+	// 历史版本用 --keep-history 留下的 uninstalled 记录：helm 拒绝再次卸载，
+	// 直接清掉 release Secret（owner=helm,name=<release>），让界面能彻底删除
+	return s.purgeReleaseSecrets(ctx, c, ns, name)
+}
+
+func (s *HelmService) purgeReleaseSecrets(ctx context.Context, c *kube.Client, ns, name string) error {
+	return c.Clientset.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{
+		LabelSelector: "owner=helm,name=" + name,
+	})
 }
 
 func (s *HelmService) toReleaseInfo(r *release.Release) *HelmReleaseInfo {
@@ -608,7 +626,11 @@ func (s *HelmService) RefreshRepo(id uint) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("解析仓库 index 失败: %w", err)
 	}
+	// repoCache 是并发读写共享 map（RefreshRepo 写 + RepoCharts/ListRepos 的
+	// getCachedIndex 读），必须持锁——裸写触发 runtime fatal 崩整个进程
+	s.reposMu.Lock()
 	s.repoCache[keyOf(id)] = cachedRepoIndex{index: idx, fetched: time.Now()}
+	s.reposMu.Unlock()
 	return len(idx.Entries), nil
 }
 

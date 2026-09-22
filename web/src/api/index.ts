@@ -33,6 +33,8 @@ export interface NodeSummary {
   roles: string
   internalIP: string
   version: string
+  kernelVersion: string
+  containerRuntime: string
   cpuCores: string
   memGi: string
   age: string
@@ -146,6 +148,18 @@ export interface WorkloadDetail {
   schedule?: string
 }
 
+// 容器内日志采集（Fluent Bit Sidecar）：目标容器 + 日志文件路径 + 格式
+export interface LogCollectionConfig {
+  container: string
+  logPath: string
+  format: string // text | json
+  image: string
+}
+export interface LogCollectionStatus {
+  enabled: boolean
+  config?: LogCollectionConfig
+}
+
 export interface ContainerInfo {
   name: string
   image: string
@@ -187,9 +201,7 @@ export interface NodeDetail extends NodeSummary {
   taintItems: { key: string; value: string; effect: string }[]
   schedulable: boolean
   pods: PodItem[]
-  containerRuntime: string
   osImage: string
-  kernelVersion: string
 }
 
 export interface ResourceDef {
@@ -384,29 +396,19 @@ export interface WorkloadMonitor {
   netTxTrend: TrendPoint[]
 }
 
-export interface ContainerSeries {
-  name: string
-  data: TrendPoint[]
-}
-
 export interface PodMonitor {
-  // null = 容器未全覆盖 limit，无有效百分比（前端显示 --）
-  cpuUsagePct: number | null
-  memUsageMi: number
-  memUsagePct: number | null
+  cpuUsage: number      // 核数（绝对值）
+  memUsageMi: number    // Mi（绝对值）
   netRxMBs: number
   netTxMBs: number
   diskWriteMBs: number
   fsUsageMi?: number
-  cpuUsageTrend: TrendPoint[]
-  memUsageTrend: TrendPoint[]
+  cpuUsageTrend: TrendPoint[]   // 核
+  memUsageTrend: TrendPoint[]   // Mi
   netRxTrend: TrendPoint[]
   netTxTrend: TrendPoint[]
   diskWriteTrend: TrendPoint[]
   fsUsageTrend: TrendPoint[]
-  // 按容器细分趋势（对齐 Grafana Compute Resources / Pod）
-  containerCpu: ContainerSeries[]
-  containerMem: ContainerSeries[]
 }
 
 // ---------------- 告警 ----------------
@@ -476,7 +478,11 @@ export const authApi = {
 // ---------------- 集群管理 ----------------
 
 export const clusterApi = {
+  // 完整列表（apiserver 地址/监控配置）：仅平台角色可见
   list: () => request<Cluster[]>({ url: '/clusters' }),
+  // 顶栏切换器最小信息源（name/status/errorMessage/grafanaURL）：所有登录用户
+  mine: () => request<Cluster[]>({ url: '/my-clusters' }),
+  mineConnectivity: (name: string) => request<Cluster>({ url: '/my-clusters/connectivity', params: { name } }),
   create: (name: string, kubeconfig: string) =>
     request<Cluster>({ url: '/clusters', method: 'post', data: { name, kubeconfig } }),
   update: (name: string, kubeconfig: string) =>
@@ -525,6 +531,14 @@ export const k8sApi = {
   deleteWorkload: (kind: string, namespace: string, name: string) =>
     request({ url: `/workloads/${kind}/${name}`, method: 'delete', params: { namespace } }),
 
+  // 容器内日志采集（Fluent Bit Sidecar + 共享 emptyDir -> ES）
+  logCollection: (kind: string, namespace: string, name: string) =>
+    request<LogCollectionStatus>({ url: `/workloads/${kind}/${name}/logcollection`, params: { namespace } }),
+  saveLogCollection: (kind: string, namespace: string, name: string, cfg: LogCollectionConfig) =>
+    request({ url: `/workloads/${kind}/${name}/logcollection`, method: 'put', params: { namespace }, data: cfg }),
+  removeLogCollection: (kind: string, namespace: string, name: string) =>
+    request({ url: `/workloads/${kind}/${name}/logcollection`, method: 'delete', params: { namespace } }),
+
   resources: (kind: string, namespace: string, search = '') =>
     request<GenericItem[]>({ url: `/resources/${kind}`, params: { namespace, search } }),
   resourceYaml: (kind: string, namespace: string, name: string) =>
@@ -561,7 +575,12 @@ export const k8sApi = {
     request<WorkloadMonitor>({ url: '/monitor/workload', params: { kind, namespace, name, range } }),
   monitorPod: (namespace: string, name: string, range = '6h') =>
     request<PodMonitor>({ url: '/monitor/pod', params: { namespace, name, range } }),
-  monitorCheck: () => request<{ status: string; prometheus: string }>({ url: '/monitor/prometheus-check' }),
+  // cluster 可选：对指定集群探测（缺省用当前集群）
+  monitorCheck: (cluster?: string) =>
+    request<{ status: string; prometheus: string }>({
+      url: '/monitor/prometheus-check',
+      headers: cluster ? { 'X-Cluster': encodeURIComponent(cluster) } : undefined,
+    }),
   monitorAlerts: () => request<AlertRulesResponse>({ url: '/monitor/alerts' }),
 
   // 任意 GVR（CRD 浏览）
@@ -737,14 +756,88 @@ export const auditApi = {
     request<{ total: number; items: AuditItem[]; page: number; size: number }>({ url: '/audit', params }),
 }
 
+export interface RoleBrief {
+  name: string
+  displayName: string
+  level: 'platform' | 'cluster' | 'project'
+  cluster?: string
+  namespaces?: string
+}
+
+export interface MyPermissions {
+  platformAdmin: boolean
+  platformViewer?: boolean
+  allNsWrite: boolean
+  clusterWrite: boolean
+  namespaces: Record<string, boolean>
+  roles?: RoleBrief[]
+}
+
 export const authzApi = {
   userPermissions: (username: string) =>
     request<{ username: string; groups: string[]; permissions: UserPermItem[] }>({ url: '/authz/user-permissions', params: { username } }),
+  // 当前用户在当前集群的权限快照（KubeSphere 式三层角色）：
+  // 只用于菜单/按钮动态渲染，后端仍逐接口强制判定
+  myPermissions: () => request<MyPermissions>({ url: '/rbac/my-permissions' }),
   grant: (data: { username: string; role: string; namespaces: string[] }) =>
     request<{ created: number; binding: string }>({ url: '/authz/grant', method: 'post', data }),
   bindings: () => request<GrantItem[]>({ url: '/authz/bindings' }),
   revoke: (kind: string, name: string, namespace = '') =>
     request({ url: `/authz/bindings/${kind}/${name}`, method: 'delete', params: { namespace } }),
+}
+
+// ------------------- 权限管理（KubeSphere 式三层角色） -------------------
+
+export interface RbacRule {
+  apiGroup?: string
+  resources: string[]
+  verbs: string[]
+}
+
+export interface RbacRole {
+  id: number
+  name: string
+  level: 'platform' | 'cluster' | 'project'
+  displayName: string
+  description: string
+  builtin: boolean
+  rules: RbacRule[]
+}
+
+export interface RbacBindingItem {
+  id: number
+  level: 'platform' | 'cluster' | 'project'
+  cluster: string
+  roleName: string
+  roleDisplay: string
+  granteeType: 'user' | 'group'
+  granteeName: string
+  namespaces: string[]
+  builtin: boolean
+  legacy: boolean
+  bindingName?: string
+  createdAt?: string
+}
+
+export interface PermissionItemsCatalog {
+  items: { group: string; apiGroup: string; resources: string[]; namespaced: boolean }[]
+  verbs: string[]
+  verbGroups: { label: string; verbs: string[] }[]
+}
+
+export const rbacApi = {
+  roles: (level?: string) => request<RbacRole[]>({ url: '/rbac/roles', params: level ? { level } : {} }),
+  createRole: (data: { name: string; level: string; displayName?: string; description?: string; rules?: RbacRule[] }) =>
+    request<RbacRole>({ url: '/rbac/roles', method: 'post', data }),
+  updateRole: (id: number, data: { name?: string; level?: string; displayName?: string; description?: string; rules?: RbacRule[] }) =>
+    request<RbacRole>({ url: `/rbac/roles/${id}`, method: 'put', data }),
+  deleteRole: (id: number) => request({ url: `/rbac/roles/${id}`, method: 'delete' }),
+  permissionItems: () => request<PermissionItemsCatalog>({ url: '/rbac/permission-items' }),
+  bindings: (cluster: string) => request<RbacBindingItem[]>({ url: '/rbac/bindings', params: { cluster } }),
+  grant: (data: { level: string; cluster?: string; roleName: string; granteeType: string; granteeName: string; namespaces?: string[] }) =>
+    request<RbacBindingItem>({ url: '/rbac/bindings', method: 'post', data }),
+  revoke: (id: number) => request({ url: `/rbac/bindings/${id}`, method: 'delete' }),
+  userRoles: (username: string) => request<RoleBrief[]>({ url: '/rbac/user-roles', params: { username } }),
 }
 
 // ------------------- 事件中心 -------------------
@@ -820,7 +913,7 @@ export interface PodFacet { pod: string; count: number }
 export interface LogSearchResult { total: number; items: LogHit[]; took: number; podFacet: PodFacet[] }
 export interface LogSourceItem {
   id: number; clusterName: string; namespace: string; service: string; port: number
-  directURL: string; indexPrefix: string; username: string; enabled: boolean
+  directURL: string; indexPrefix: string; jsonIndexPrefix: string; username: string; enabled: boolean
   eventEnabled: boolean; eventIndexPrefix: string
 }
 export interface NotifyChannelItem {
@@ -929,6 +1022,8 @@ export const alertEventApi = {
   list: (q: { cluster?: string; state?: string; name?: string; namespace?: string; days?: number; page?: number; size?: number }) =>
     request<{ total: number; items: AlertEventItem[]; page: number; size: number }>({ url: '/alertevents', params: q }),
   stats: (days = 7) => request<AlertEventStatsItem>({ url: '/alertevents/stats', params: { days } }),
+  // 归档轮询状态：cluster -> 最近一轮轮询错误（键不存在 = 正常）
+  syncStatus: () => request<{ status: Record<string, string> }>({ url: '/alertevents/sync-status' }),
 }
 
 // ------------------- Nacos 微服务集成 -------------------
@@ -1061,10 +1156,58 @@ export interface ArgoCDApp {
   destNamespace: string
   age: string
   autoSync: boolean
+  /** automated.suspend=true：原生 PAUSED 标记 */
+  paused?: boolean
   /** AppProject 名（spec.project）：指向不存在的项目时 ArgoCD 拒绝加载 */
   project?: string
   /** status.conditions 里的 InvalidSpecError 原文（spec 非法时唯一的原因说明） */
   specError?: string
+}
+
+export interface ArgoAppResource {
+  group?: string
+  version?: string
+  kind: string
+  namespace?: string
+  name: string
+  sync?: string
+  health?: string
+  requiresPruning?: boolean
+  hook?: boolean
+}
+
+export interface ArgoAppOpState {
+  phase?: string
+  message?: string
+  startedAt?: string
+  finishedAt?: string
+  revision?: string
+  retryCount?: number
+}
+
+export interface ArgoAppDetailResp {
+  base: ArgoCDApp
+  destServer: string
+  syncRevision: string
+  prune: boolean
+  selfHeal: boolean
+  createdAt: string
+  conditions: { type: string; message: string }[]
+  resources: ArgoAppResource[]
+  operation: ArgoAppOpState
+  history: { revision?: string; author?: string; message?: string; deployedAt?: string; initiator?: string }[]
+}
+
+export interface ArgoTreeNode {
+  group?: string
+  kind: string
+  namespace?: string
+  name: string
+  health?: string
+  sync?: string
+  requiresPruning?: boolean
+  missing?: boolean
+  children?: ArgoTreeNode[]
 }
 
 // ArgoCD AppProject：应用的 spec.project 必须指向其中之一，且仓库/目标需被该项目允许
@@ -1095,8 +1238,23 @@ export interface ArgoCDRepo {
 
 export const argocdApi = {
   apps: () => request<{ installed: boolean; items: ArgoCDApp[] }>({ url: '/argocd/apps' }),
-  refresh: (namespace: string, name: string) =>
-    request({ url: `/argocd/apps/${namespace}/${name}/refresh`, method: 'post' }),
+  refresh: (namespace: string, name: string, mode: 'normal' | 'hard' = 'normal') =>
+    request({ url: `/argocd/apps/${namespace}/${name}/refresh`, method: 'post', params: { mode } }),
+  // 详情抽屉：基础信息 + 操作进度 + 托管资源 + conditions + 历史
+  detail: (namespace: string, name: string) =>
+    request<ArgoAppDetailResp>({ url: `/argocd/apps/${namespace}/${name}/detail` }),
+  // 托管资源层级树（ownerRef 组装，TTL 短缓存）
+  tree: (namespace: string, name: string) =>
+    request<{ tree: ArgoTreeNode[] }>({ url: `/argocd/apps/${namespace}/${name}/tree` }),
+  // CR operation 触发一次同步（老版本 CRD 不支持时后端返回明确错误）
+  sync: (namespace: string, name: string) =>
+    request<{ ok: boolean }>({ url: `/argocd/apps/${namespace}/${name}/sync`, method: 'post' }),
+  setAutoSync: (namespace: string, name: string, enabled: boolean) =>
+    request({ url: `/argocd/apps/${namespace}/${name}/autosync`, method: 'put', params: { enabled } }),
+  setPause: (namespace: string, name: string, paused: boolean) =>
+    request({ url: `/argocd/apps/${namespace}/${name}/pause`, method: 'put', params: { paused } }),
+  remove: (namespace: string, name: string, cascade: boolean) =>
+    request({ url: `/argocd/apps/${namespace}/${name}`, method: 'delete', params: { cascade } }),
   // 完整 Application 对象 YAML（可视化编辑器加载）
   appDetail: (namespace: string, name: string) =>
     request<{ yaml: string }>({ url: `/argocd/apps/${namespace}/${name}` }),

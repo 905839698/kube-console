@@ -3,12 +3,18 @@ package gitrepo
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func init() {
+	// httptest 服务器监听在 127.0.0.1：关掉环回复检（生产路径不受影响）
+	checkResolvedIP = func(ip net.IP) bool { return false }
+}
 
 func TestValidateURL(t *testing.T) {
 	for _, ok := range []string{

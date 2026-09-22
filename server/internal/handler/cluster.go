@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"kube-console/server/internal/model"
 	"kube-console/server/internal/service"
 	"kube-console/server/pkg/response"
 )
@@ -23,7 +24,7 @@ type clusterReq struct {
 	Kubeconfig string `json:"kubeconfig" binding:"required"`
 }
 
-// List 集群列表
+// List 集群列表（完整信息：apiserver 地址、监控/面板配置等——仅平台角色，见 router）
 func (h *ClusterHandler) List(c *gin.Context) {
 	clusters, err := h.clusters.List()
 	if err != nil {
@@ -31,6 +32,43 @@ func (h *ClusterHandler) List(c *gin.Context) {
 		return
 	}
 	response.OK(c, clusters)
+}
+
+// ClusterBrief 普通用户可见的最小集群信息：顶栏切换器与就绪判断用，
+// 不暴露 kubeconfig、apiserver 地址与监控配置
+type ClusterBrief struct {
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	ErrorMessage string `json:"errorMessage"`
+	GrafanaURL   string `json:"grafanaURL"` // Grafana 面板页 iframe 需要
+}
+
+func toBrief(cl *model.Cluster) ClusterBrief {
+	return ClusterBrief{Name: cl.Name, Status: cl.Status, ErrorMessage: cl.ErrorMessage, GrafanaURL: cl.GrafanaURL}
+}
+
+// ListMine GET /my-clusters —— 所有登录用户：集群切换器所需最小字段
+func (h *ClusterHandler) ListMine(c *gin.Context) {
+	clusters, err := h.clusters.List()
+	if err != nil {
+		response.ServerError(c, err)
+		return
+	}
+	out := make([]ClusterBrief, 0, len(clusters))
+	for i := range clusters {
+		out = append(out, toBrief(&clusters[i]))
+	}
+	response.OK(c, out)
+}
+
+// ConnectivityMine GET /my-clusters/connectivity?name= —— 「集群不可达」面板重新检测
+func (h *ClusterHandler) ConnectivityMine(c *gin.Context) {
+	cluster, err := h.clusters.TestConnectivity(c.Query("name"))
+	if err != nil {
+		response.Fail(c, 400, 400, err.Error())
+		return
+	}
+	response.OK(c, toBrief(cluster))
 }
 
 // Create 添加集群

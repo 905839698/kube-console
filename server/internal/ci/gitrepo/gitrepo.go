@@ -37,8 +37,66 @@ const lsRemoteTimeout = 20 * time.Second
 // maxAdvertisementBytes ref 广告响应体上限（超大仓库防护）。
 const maxAdvertisementBytes = 16 << 20
 
-// lsRemoteHTTP 复用的 HTTP 客户端（默认 Transport 自动处理 gzip/重定向）。
-var lsRemoteHTTP = &http.Client{Timeout: lsRemoteTimeout}
+// checkResolvedIP 解析后的 IP 复检：环回/链路本地/未指定一律拒绝（私网段
+// 10/172.16/192.168 是内网 git 服务的常见落点，不拦）。包级变量便于测试绕过
+// 环回拦截（httptest 服务器监听在 127.0.0.1）。
+var checkResolvedIP = func(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+// safeDialContext 对解析出的每个 IP 复检后再建连。
+// ValidateURL 只比对字面量，`127.0.0.1.xip.io`、`localhost.`（尾点）、DNS rebinding
+// 这类能绕过字面量检查；解析后复检才能堵住。TLS 的 ServerName 仍取自 URL host
+// （DialContext 只换拨号地址，不影响握手），私网 git 服务不受影响。
+func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips := []net.IP{}
+	if ip := net.ParseIP(host); ip != nil {
+		ips = []net.IP{ip}
+	} else {
+		addrs, rerr := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if rerr != nil {
+			return nil, rerr
+		}
+		for _, a := range addrs {
+			ips = append(ips, a.IP)
+		}
+	}
+	for _, ip := range ips {
+		if checkResolvedIP(ip) {
+			return nil, &net.DNSError{Err: "禁止访问的地址", Name: host, IsTemporary: false}
+		}
+	}
+	if len(ips) == 0 {
+		return nil, &net.DNSError{Err: "无可用地址", Name: host, IsTemporary: false}
+	}
+	var d net.Dialer
+	d.Timeout = 10 * time.Second
+	return d.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+}
+
+// lsRemoteHTTP 复用的 HTTP 客户端。
+var lsRemoteHTTP = &http.Client{
+	Timeout: lsRemoteTimeout,
+	Transport: &http.Transport{
+		DialContext:           safeDialContext,
+		ResponseHeaderTimeout: 15 * time.Second,
+	},
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return errors.New("仓库重定向过多（>3）")
+		}
+		// 重定向目标必须重跑校验：攻击者控制（或已被攻陷）的 git host 可以
+		// 302 到元数据服务/内网，且解析失败只会得到「空 ref 列表」不会被拦
+		if err := ValidateURL(req.URL.String()); err != nil {
+			return err
+		}
+		return nil
+	},
+}
 
 // ValidateURL 只接受 http(s) 仓库地址。
 // 拒绝 ssh/file/git 等协议：凭证注入逻辑只覆盖 http(s)，且本实现只会发起 HTTP 请求。

@@ -26,6 +26,7 @@ const props = defineProps<{
 const chartEl = ref<HTMLElement>()
 let chart: ReturnType<typeof echarts.init> | null = null
 let observer: ResizeObserver | null = null
+let resizeFallback: (() => void) | null = null
 
 function render() {
   if (!chartEl.value) return
@@ -58,7 +59,9 @@ function render() {
           let html = `<div style="font-size:12px">${time}</div>`
           for (const p of params) {
             const s = series[p.seriesIndex]
-            const v = typeof p.value[1] === 'number' ? p.value[1].toFixed(2) : p.value[1]
+            // 小数值自适应精度：空闲 Pod 的 CPU 用量 ~0.0000x 核，固定 2 位小数会全显 0.00
+            const raw = p.value[1]
+            const v = typeof raw === 'number' ? (Math.abs(raw) < 0.01 ? raw.toFixed(4) : raw.toFixed(2)) : raw
             html += `<div>${s.name}: <b>${v}${s.unit || ''}</b></div>`
           }
           return html
@@ -111,17 +114,21 @@ onMounted(() => {
       }
     })
     observer.observe(chartEl.value)
-  } else {
-    const onResize = () => chart?.resize()
-    window.addEventListener('resize', onResize)
-    ;(chartEl.value as any)?.__resizeHandler && ((chartEl.value as any).__resizeHandler = onResize)
+  } else if (chartEl.value) {
+    // 旧实现把 handler 存到 __resizeHandler 短路赋值（首挂载时 undefined → 永不赋值），
+    // unmount 时 removeEventListener(undefined) 移不掉 → 每次挂载泄漏一个 resize 监听
+    resizeFallback = () => chart?.resize()
+    window.addEventListener('resize', resizeFallback)
   }
 })
 
 onBeforeUnmount(() => {
   observer?.disconnect()
   observer = null
-  window.removeEventListener('resize', (chartEl.value as any)?.__resizeHandler)
+  if (resizeFallback) {
+    window.removeEventListener('resize', resizeFallback)
+    resizeFallback = null
+  }
   chart?.dispose()
   chart = null
 })

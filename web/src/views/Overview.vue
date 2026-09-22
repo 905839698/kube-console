@@ -68,6 +68,8 @@
             <el-table-column prop="roles" label="角色" width="90" sortable />
             <el-table-column prop="internalIP" label="IP" width="120" sortable />
             <el-table-column prop="version" label="版本" width="80" />
+            <el-table-column prop="kernelVersion" label="内核版本" width="130" show-overflow-tooltip />
+            <el-table-column prop="containerRuntime" label="运行时版本" width="130" show-overflow-tooltip />
             <el-table-column prop="cpuCores" label="CPU" width="60" align="center" sortable :sort-by="(row) => Number(row.cpuCores || 0)" />
             <el-table-column prop="memGi" label="内存" width="60" align="center" sortable :sort-by="(row) => Number(row.memGi || 0)" />
           </el-table>
@@ -167,7 +169,11 @@ const pvVisible = computed(
   () => (monitor.value?.pvCount ?? 0) > 0 || (monitor.value?.pvTopUsed || []).length > 0,
 )
 const cpTrendVisible = computed(
-  () => (monitor.value?.apiserverQpsTrend || []).length > 0 || (monitor.value?.coreDnsQpsTrend || []).length > 0,
+  () =>
+    (monitor.value?.apiserverQpsTrend || []).length > 0 ||
+    (monitor.value?.coreDnsQpsTrend || []).length > 0 ||
+    // etcd 趋势卡片也在这一行：只有 etcd 指标时不能整行隐藏
+    (monitor.value?.etcdDbSizeTrend || []).length > 0,
 )
 
 // 分配占比副文案：requests/limits 占集群可分配资源的百分比

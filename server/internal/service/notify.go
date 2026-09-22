@@ -62,6 +62,11 @@ func sendDingtalk(ch model.NotifyChannel, title, markdown string) error {
 		},
 	}
 	return postJSON(webhook, payload, func(respBody []byte, status int) error {
+		// 先校验 HTTP 状态：webhook 配错/网关 502/WAF 拦截返回 HTML 或无 errcode 的
+		// JSON 时，旧实现「解析不到 errcode 就当成功」，通知实际未送达却记录成功
+		if status >= 400 {
+			return fmt.Errorf("钉钉 webhook 返回 %d: %s", status, truncateStr(string(respBody), 200))
+		}
 		var dr struct {
 			ErrCode int    `json:"errcode"`
 			ErrMsg  string `json:"errmsg"`

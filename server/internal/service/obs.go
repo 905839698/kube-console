@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,11 +28,17 @@ type LogQuery struct {
 	Namespace string `json:"namespace"`
 	Pod       string `json:"pod"`
 	Container string `json:"container"`
-	Keyword   string `json:"keyword"`
-	Level     string `json:"level"` // error/warn/info，空=全部
-	Minutes   int    `json:"minutes"`
-	Page      int    `json:"page"`
-	Size      int    `json:"size"`
+	// Source 日志来源：空=全部，stdout=标准输出，file=单行文本文件采集，json=JSON 结构化采集
+	Source  string `json:"source"`
+	Keyword string `json:"keyword"`
+	Level   string `json:"level"` // error/warn/info，空=全部
+	Minutes int    `json:"minutes"`
+	// From/To 绝对时间范围（RFC3339 字符串或 epoch 毫秒）。任一非空即生效，
+	// 缺省的一端不限制；都为空时按 Minutes 相对范围
+	From string `json:"from"`
+	To   string `json:"to"`
+	Page int    `json:"page"`
+	Size int    `json:"size"`
 }
 
 // LogHit 一条日志
@@ -83,6 +91,8 @@ func esRequest(ctx context.Context, c *kube.Client, src *model.LogSource, method
 		if err != nil {
 			return nil, err
 		}
+		// rest 客户端默认无 Timeout：ES 挂起时流式读取无上界
+		httpClient.Timeout = 45 * time.Second
 	}
 	var rdr io.Reader
 	if body != nil {
@@ -136,6 +146,75 @@ func directHTTPClient() *http.Client {
 }
 
 // SearchLogs 检索历史日志（fluentd 字段约定：kubernetes.pod_name 等）
+// parseLogTime 解析日志检索的绝对时间：epoch 毫秒或 RFC3339；空串返回 nil（该端不限制）
+func parseLogTime(s string) (any, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	if ms, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return ms, nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return nil, err
+	}
+	return t.UnixMilli(), nil
+}
+
+// logIndexPatterns 按来源选出检索索引模式（行日志与 JSON 采集分索引）
+// source: 空=全部；stdout/file=行日志前缀；json=JSON 前缀
+func logIndexPatterns(src *model.LogSource, source, ns string) []string {
+	var prefixes []string
+	switch source {
+	case "json":
+		prefixes = []string{jsonIndexPrefix(src)}
+	case "stdout", "file":
+		prefixes = []string{lineIndexPrefix(src)}
+	default:
+		prefixes = []string{lineIndexPrefix(src), jsonIndexPrefix(src)}
+	}
+	out := []string{}
+	for _, p := range prefixes {
+		pat := indexPattern(p, ns)
+		if !slices.Contains(out, pat) {
+			out = append(out, pat)
+		}
+	}
+	return out
+}
+
+// indexPattern 前缀 → 通配模式。与写入侧 collectIndex 的分名规则一致（裸前缀用 "-" 拼命名空间），
+// 含 {namespace} 占位符时按命名空间展开，不限命名空间展开为 *
+func indexPattern(prefix, ns string) string {
+	base := strings.ToLower(strings.TrimRight(prefix, "-*"))
+	if strings.Contains(base, "{namespace}") {
+		wild := strings.ToLower(ns) // 空命名空间 → 占位符替换为空，后面拼的 * 即通配
+		return strings.ReplaceAll(base, "{namespace}", wild) + "*"
+	}
+	if base == "" {
+		base = strings.TrimRight(DefaultIndexPrefix, "-*")
+	}
+	return base + "-*"
+}
+
+// sourceFilters 来源筛选：Sidecar 采集文档带 kube-console.log-* 标记，fluentd 标准输出没有
+func sourceFilters(source string) (must, mustNot []map[string]any) {
+	exists := map[string]any{"exists": map[string]any{"field": LogCollectionField}}
+	switch source {
+	case "stdout":
+		return nil, []map[string]any{exists}
+	case "file":
+		// 旧版本采集文档无 log-format 字段，只排除 json
+		return []map[string]any{exists}, []map[string]any{
+			{"term": map[string]any{LogFormatField + ".keyword": "json"}},
+		}
+	case "json":
+		return []map[string]any{{"term": map[string]any{LogFormatField + ".keyword": "json"}}}, nil
+	}
+	return nil, nil
+}
+
 func SearchLogs(ctx context.Context, c *kube.Client, src *model.LogSource, q LogQuery) (*LogSearchResult, error) {
 	if src == nil || !src.Enabled {
 		return nil, fmt.Errorf("该集群未配置日志源，请到「平台管理-日志源配置」填写 Elasticsearch 地址")
@@ -165,6 +244,10 @@ func SearchLogs(ctx context.Context, c *kube.Client, src *model.LogSource, q Log
 	for k, v := range terms {
 		must = append(must, map[string]any{"term": map[string]any{k: v}})
 	}
+	srcMust, srcMustNot := sourceFilters(q.Source)
+	must = append(must, srcMust...)
+	var mustNot []map[string]any
+	mustNot = append(mustNot, srcMustNot...)
 	if q.Keyword != "" {
 		must = append(must, map[string]any{"query_string": map[string]any{
 			"query": q.Keyword, "fields": []string{"log", "message"},
@@ -185,30 +268,39 @@ func SearchLogs(ctx context.Context, c *kube.Client, src *model.LogSource, q Log
 		filter = append(filter, map[string]any{"bool": map[string]any{"should": should, "minimum_should_match": 1}})
 	}
 	now := time.Now().UnixNano() / int64(time.Millisecond)
-	filter = append(filter, map[string]any{"range": map[string]any{
-		"@timestamp": map[string]any{"gte": now - int64(q.Minutes)*60*1000, "lte": now, "format": "epoch_millis"},
-	}})
+	if q.From != "" || q.To != "" {
+		rg := map[string]any{"format": "epoch_millis"}
+		if v, err := parseLogTime(q.From); err != nil {
+			return nil, fmt.Errorf("起始时间非法（%s）: %w", q.From, err)
+		} else if v != nil {
+			rg["gte"] = v
+		}
+		if v, err := parseLogTime(q.To); err != nil {
+			return nil, fmt.Errorf("结束时间非法（%s）: %w", q.To, err)
+		} else if v != nil {
+			rg["lte"] = v
+		}
+		filter = append(filter, map[string]any{"range": map[string]any{"@timestamp": rg}})
+	} else {
+		filter = append(filter, map[string]any{"range": map[string]any{
+			"@timestamp": map[string]any{"gte": now - int64(q.Minutes)*60*1000, "lte": now, "format": "epoch_millis"},
+		}})
+	}
 
-	// 索引模式：前缀支持 {namespace} 占位符（索引按命名空间拆分时，
-	// 如 logstash-{namespace}- → 查 dev 展开为 logstash-dev*，不限命名空间展开为 logstash-*）
-	index := "logstash-*"
-	if src.IndexPrefix != "" {
-		index = strings.TrimRight(src.IndexPrefix, "-*")
-		if strings.Contains(index, "{namespace}") {
-			ns := q.Namespace
-			if ns == "" {
-				ns = "*"
-			}
-			index = strings.ReplaceAll(index, "{namespace}", ns)
-		}
-		if !strings.HasSuffix(index, "*") {
-			index += "*"
-		}
+	// 索引模式：行日志与 JSON 采集两条前缀（各自支持 {namespace} 占位符），
+	// 按来源筛选只查命中的那条，避免无谓的全索引扫描
+	index := strings.Join(logIndexPatterns(src, q.Source, q.Namespace), ",")
+	boolQ := map[string]any{"filter": filter}
+	if len(must) > 0 {
+		boolQ["must"] = must
+	}
+	if len(mustNot) > 0 {
+		boolQ["must_not"] = mustNot
 	}
 	body := map[string]any{
 		"from":  (q.Page - 1) * q.Size,
 		"size":  q.Size,
-		"query": map[string]any{"bool": map[string]any{"must": must, "filter": filter}},
+		"query": map[string]any{"bool": boolQ},
 		"aggs":  map[string]any{"pods": map[string]any{"terms": map[string]any{"field": "kubernetes.pod_name.keyword", "size": 30}}},
 		"sort":  []map[string]any{{"@timestamp": map[string]any{"order": "desc"}}},
 	}
@@ -265,6 +357,11 @@ func parseLogHit(src map[string]any) LogHit {
 		if lvl, ok := kubeObj["labels"].(map[string]any); ok {
 			hit.Level, _ = lvl["level"].(string)
 		}
+	} else if _, ok := src["kubernetes.namespace_name"]; ok {
+		// 控制台 Fluent Bit Sidecar 采集文档：modify 过滤器写的是字面带点 key，_source 原样保留
+		hit.Namespace, _ = src["kubernetes.namespace_name"].(string)
+		hit.Pod, _ = src["kubernetes.pod_name"].(string)
+		hit.Container, _ = src["kubernetes.container_name"].(string)
 	}
 	if m, ok := src["log"].(string); ok && m != "" {
 		hit.Message = strings.TrimRight(m, "\n")

@@ -61,16 +61,10 @@ function encodeMap(map: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(map)) {
     if (!k.trim()) continue
-    try {
-      // 已是 base64 可解码的内容保持原样，否则编码
-      if (v && btoa(atob(v)) === v) {
-        out[k] = v
-      } else {
-        out[k] = btoa(unescape(encodeURIComponent(v)))
-      }
-    } catch {
-      out[k] = btoa(unescape(encodeURIComponent(v)))
-    }
+    // 永远编码：编辑器里展示的是 decodeMap 的明文，不能靠「值恰好也是合法 base64」
+    // 猜测它已是密文——例如明文 password 会被 btoa(atob()) 回环误判成已编码，
+    // 原样写回后 Secret 里的值就不是原明文的 base64（数据损坏）
+    out[k] = btoa(unescape(encodeURIComponent(v)))
   }
   return out
 }

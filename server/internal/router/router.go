@@ -9,6 +9,7 @@ import (
 	"kube-console/server/internal/config"
 	"kube-console/server/internal/handler"
 	"kube-console/server/internal/middleware"
+	"kube-console/server/internal/model"
 	"kube-console/server/internal/service"
 )
 
@@ -20,21 +21,39 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 
 	api := r.Group("/api")
 
+	// 写操作鉴权：按「授权」页写入集群的 RBAC 绑定判定（view=只读 / edit=该 ns 可写 /
+	// admin=该 ns 可写；节点、命名空间增删、授权本身等集群级操作需集群级授权或平台管理员）。
+	// 平台自身的写操作都用平台 kubeconfig 执行，K8s 不会替我们拦越权，必须显式判定。
+	permSvc := service.NewPermissionService(db, clusters, cfg.Admin.Username)
+	nsGuard := middleware.NamespaceWriteRequired(permSvc)
+	clusterGuard := middleware.ClusterWriteRequired(permSvc)
+	resourceGuard := middleware.ResourceWriteRequired(permSvc, clusters)
+
 	authHandler := handler.NewAuthHandler(db, cfg)
 	clusterHandler := handler.NewClusterHandler(clusters)
-	k8sHandler := handler.NewK8sHandler(clusters, service.NewK8sService(cfg.K8s.DebugImage), cfg.JWT.Secret)
+	k8sHandler := handler.NewK8sHandler(clusters, service.NewK8sService(cfg.K8s.DebugImage), cfg.JWT.Secret, permSvc)
 	monitorHandler := handler.NewMonitorHandler(clusters)
 	helmHandler := handler.NewHelmHandler(clusters, service.NewHelmService(db))
 	userHandler := handler.NewUserHandler(db, cfg)
-	authzHandler := handler.NewAuthzHandler(clusters)
-	platformHandler := handler.NewPlatformHandler(db, clusters, cfg.K8s.DebugImage)
-	ciHandler := handler.NewCIHandler(db, clusters)
+	authzHandler := handler.NewAuthzHandler(clusters, permSvc)
+	rbacSvc := service.NewRbacService(db, clusters, permSvc)
+	rbacHandler := handler.NewRbacHandler(rbacSvc, clusters, permSvc)
+	platformHandler := handler.NewPlatformHandler(db, clusters, cfg.K8s.DebugImage, cfg.Admin.Username)
+	ciHandler := handler.NewCIHandler(db, clusters, permSvc)
 	cicdHandler := handler.NewCICDHandler(ciDeps, db, cfg.JWT.Secret, cfg.Admin.Username)
 	// 可观测性扩展（Alertmanager 接入 / 告警历史 / 事件归档）
 	obsHandler := handler.NewObsHandler(db, clusters, archive, eventArchive)
 	// Nacos 微服务集成（配置/同步/注入/资源浏览）+ 命名空间创建联动钩子
 	nacosHandler := handler.NewNacosHandler(db, clusters, nacosSvc)
 	k8sHandler.OnNamespaceCreated = nacosSvc.SyncNamespaceAsync
+	// 日志采集 Sidecar 生成 ES 输出配置时读取集群日志源
+	k8sHandler.LogSourceFor = func(clusterName string) (*model.LogSource, error) {
+		var src model.LogSource
+		if err := db.Where("cluster_name = ?", clusterName).First(&src).Error; err != nil {
+			return nil, err
+		}
+		return &src, nil
+	}
 
 	// 公开接口
 	api.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok"}) })
@@ -63,26 +82,32 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		authed.GET("/events", k8sHandler.Events)
 		authed.POST("/events/archive/search", obsHandler.EventsArchiveSearch)
 
-		// 节点运维
-		authed.POST("/nodes/:name/cordon", k8sHandler.CordonNode)
-		authed.POST("/nodes/:name/drain", k8sHandler.DrainNode)
-		authed.PUT("/nodes/:name/taints", k8sHandler.UpdateNodeTaints)
-		authed.PUT("/nodes/:name/labels", k8sHandler.UpdateNodeLabels)
+		// 节点运维（集群级）
+		authed.POST("/nodes/:name/cordon", clusterGuard, k8sHandler.CordonNode)
+		authed.POST("/nodes/:name/drain", clusterGuard, k8sHandler.DrainNode)
+		authed.PUT("/nodes/:name/taints", clusterGuard, k8sHandler.UpdateNodeTaints)
+		authed.PUT("/nodes/:name/labels", clusterGuard, k8sHandler.UpdateNodeLabels)
 
-		// 驱逐 Pod（Eviction API，尊重 PDB）
-		authed.POST("/pods/:name/evict", k8sHandler.EvictPod)
+		// 驱逐 Pod（Eviction API，尊重 PDB）：命名空间级写
+		authed.POST("/pods/:name/evict", nsGuard, k8sHandler.EvictPod)
 
-		// 容器文件浏览器
+		// 容器文件浏览器（写操作按 ns 判定）
 		authed.GET("/pods/:name/files", k8sHandler.ListFiles)
 		authed.GET("/pods/:name/files/download", k8sHandler.DownloadFile)
-		authed.POST("/pods/:name/files/upload", k8sHandler.UploadFile)
-		authed.POST("/pods/:name/files/action", k8sHandler.FileAction)
+		authed.POST("/pods/:name/files/upload", nsGuard, k8sHandler.UploadFile)
+		authed.POST("/pods/:name/files/action", nsGuard, k8sHandler.FileAction)
 
-		// 授权管理（向导式创建/回收 RBAC 绑定）
-		authed.POST("/authz/grant", authzHandler.Grant)
+		// 授权管理：读开放（向导需要选组/看授权），写仅平台管理员（见下方 admin 组）
 		authed.GET("/authz/bindings", authzHandler.Grants)
-		authed.DELETE("/authz/bindings/:kind/:name", authzHandler.Revoke)
 		authed.GET("/authz/user-permissions", platformHandler.UserPermissions)
+		authed.GET("/authz/my-permissions", authzHandler.MyPermissions)
+
+		// 权限管理（KubeSphere 式三层角色）：角色 / 绑定 / 权限快照
+		authed.GET("/rbac/roles", rbacHandler.ListRoles)
+		authed.GET("/rbac/permission-items", rbacHandler.PermissionItems)
+		authed.GET("/rbac/bindings", rbacHandler.ListBindings)
+		authed.GET("/rbac/my-permissions", rbacHandler.MyPermissions)
+		authed.GET("/rbac/user-roles", rbacHandler.UserRoles)
 
 		// 平台扩展：日志检索 / 用量报表 / 备份概览 / 证书巡检
 		authed.POST("/logs/search", platformHandler.LogSearch)
@@ -157,8 +182,16 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		authed.GET("/ci/repo/refs", cicdHandler.RepoRefs)
 		authed.GET("/ci/k8s/targets", cicdHandler.K8sTargets)
 		// CD：ArgoCD 应用视图
+		// CD：ArgoCD 应用视图（读开放；动作按目标命名空间写权限在 handler 内判定）
 		authed.GET("/argocd/apps", ciHandler.ArgoApps)
 		authed.GET("/argocd/apps/:namespace/:name", ciHandler.ArgoAppGet)
+		authed.GET("/argocd/apps/:namespace/:name/detail", ciHandler.ArgoAppDetail)
+		authed.GET("/argocd/apps/:namespace/:name/tree", ciHandler.ArgoAppTree)
+		authed.POST("/argocd/apps/:namespace/:name/refresh", ciHandler.ArgoRefresh)
+		authed.POST("/argocd/apps/:namespace/:name/sync", ciHandler.ArgoAppSync)
+		authed.PUT("/argocd/apps/:namespace/:name/autosync", ciHandler.ArgoAppAutoSync)
+		authed.PUT("/argocd/apps/:namespace/:name/pause", ciHandler.ArgoAppPause)
+		authed.DELETE("/argocd/apps/:namespace/:name", ciHandler.ArgoAppDelete)
 		// AppProject 列表（应用 spec.project 必须指向其中之一，表单据此选项目并校验仓库/目标）
 		authed.GET("/argocd/projects", ciHandler.ArgoProjects)
 		authed.GET("/argocd/repos", ciHandler.ArgoRepos)
@@ -171,23 +204,54 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		authed.GET("/nacos/ready", nacosHandler.NacosReady)
 		authed.GET("/nacos/services", nacosHandler.NacosServices)
 		authed.GET("/nacos/instances", nacosHandler.NacosInstances)
-		authed.DELETE("/nacos/service", nacosHandler.NacosServiceDelete)
+		authed.DELETE("/nacos/service", nsGuard, nacosHandler.NacosServiceDelete)
 		authed.GET("/nacos/configs", nacosHandler.NacosConfigList)
 		authed.GET("/nacos/config-export", nacosHandler.NacosConfigExport)
 		authed.GET("/nacos/config-content", nacosHandler.NacosConfigContent)
-		authed.POST("/nacos/config-publish", nacosHandler.NacosConfigPublish)
-		authed.DELETE("/nacos/config-content", nacosHandler.NacosConfigDelete)
+		// Nacos 命名空间与 K8s 命名空间同名（平台同步时 1:1 映射），写操作按该 ns 判定
+		authed.POST("/nacos/config-publish", nsGuard, nacosHandler.NacosConfigPublish)
+		authed.DELETE("/nacos/config-content", nsGuard, nacosHandler.NacosConfigDelete)
 
-		// 平台管理（仅管理员）
+		// 平台管理（platform-admin 可写；platform-viewer 只读放开 GET——PlatformScoped）
 		admin := authed.Group("")
-		admin.Use(middleware.AdminRequired(db, cfg.Admin.Username))
+		admin.Use(middleware.PlatformScoped(db, cfg.Admin.Username))
 		{
+			// 角色管理（自定义角色 CRUD 属写操作，实际仅 platform-admin 可通过）
+			admin.POST("/rbac/roles", rbacHandler.CreateRole)
+			admin.PUT("/rbac/roles/:id", rbacHandler.UpdateRole)
+			admin.DELETE("/rbac/roles/:id", rbacHandler.DeleteRole)
+			// 授权管理（写 DB + 物化/清理 K8s RBAC）
+			admin.POST("/rbac/bindings", rbacHandler.CreateBinding)
+			admin.DELETE("/rbac/bindings/:id", rbacHandler.DeleteBinding)
+
 			admin.GET("/users", userHandler.List)
 			admin.POST("/users", userHandler.Create)
 			admin.PUT("/users/:id/password", userHandler.ResetPassword)
 			admin.PUT("/users/:id/role", userHandler.UpdateRole)
 			admin.DELETE("/users/:id", userHandler.Delete)
 			admin.GET("/audit", userHandler.AuditList)
+
+			// 授权管理：创建/回收 RBAC 绑定只允许平台管理员
+			// （否则任何登录用户都能给自己授 cluster-admin —— 授权页的 role 允许自定义 ClusterRole 名）
+			admin.POST("/authz/grant", authzHandler.Grant)
+			admin.DELETE("/authz/bindings/:kind/:name", authzHandler.Revoke)
+
+			// 集群管理：新增/修改/删除集群（含 kubeconfig）与监控连接配置；
+			// 完整列表与连通性探测 GET 对 platform-viewer 只读放开（PlatformScoped）
+			admin.GET("/clusters", clusterHandler.List)
+			admin.GET("/clusters/:name/connectivity", clusterHandler.Connectivity)
+			admin.POST("/clusters", clusterHandler.Create)
+			admin.PUT("/clusters/:name", clusterHandler.Update)
+			admin.DELETE("/clusters/:name", clusterHandler.Delete)
+			admin.PUT("/clusters/:name/prometheus", clusterHandler.UpdatePrometheus)
+			admin.PUT("/clusters/:name/grafana", clusterHandler.UpdateGrafana)
+
+			// Chart 仓库源（全局配置，不依赖 X-Cluster）
+			admin.GET("/helm/repos", helmHandler.ListRepos)
+			admin.POST("/helm/repos", helmHandler.AddRepo)
+			admin.PUT("/helm/repos/:id", helmHandler.UpdateRepo)
+			admin.DELETE("/helm/repos/:id", helmHandler.RemoveRepo)
+			admin.PUT("/helm/repos/:id/refresh", helmHandler.RefreshRepo)
 
 			// 用户组管理
 			admin.POST("/groups", platformHandler.SaveGroup)
@@ -206,7 +270,6 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 			admin.POST("/alertmanager", obsHandler.SaveAMConfig)
 			admin.DELETE("/alertmanager/:cluster", obsHandler.DeleteAMConfig)
 			admin.POST("/alertmanager/test", obsHandler.TestAMConfig)
-			admin.GET("/monitor/am/config-yaml", obsHandler.AMConfigYAMLGet)
 			admin.PUT("/monitor/am/config-yaml", obsHandler.AMConfigYAMLSave)
 
 			// Nacos 集成管理：连接配置 / 同步 / 密码轮换 / Nacos 侧命名空间与用户
@@ -237,21 +300,23 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 			admin.DELETE("/logsources/:cluster", platformHandler.DeleteLogSource)
 			admin.POST("/logsources/test", platformHandler.TestLogSource)
 
-			admin.POST("/argocd/apps/:namespace/:name/refresh", ciHandler.ArgoRefresh)
-			// ArgoCD 仓库（含账号密码）管理
+			// ArgoCD 仓库（含账号密码）管理（应用刷新/同步/删除已按目标 ns 写权限收口）
 			admin.POST("/argocd/repos", ciHandler.ArgoRepoCreate)
 			admin.PUT("/argocd/repos/:name", ciHandler.ArgoRepoUpdate)
 			admin.DELETE("/argocd/repos/:name", ciHandler.ArgoRepoDelete)
 		}
 
-		// 集群管理
-		authed.GET("/clusters", clusterHandler.List)
-		authed.POST("/clusters", clusterHandler.Create)
-		authed.PUT("/clusters/:name", clusterHandler.Update)
-		authed.DELETE("/clusters/:name", clusterHandler.Delete)
-		authed.GET("/clusters/:name/connectivity", clusterHandler.Connectivity)
-		authed.PUT("/clusters/:name/prometheus", clusterHandler.UpdatePrometheus)
-		authed.PUT("/clusters/:name/grafana", clusterHandler.UpdateGrafana)
+		// 含敏感凭证明文的读取：即便 platform-viewer 也不放行（alertmanager.yaml 内嵌 SMTP 密码）
+		strict := authed.Group("")
+		strict.Use(middleware.AdminRequired(db, cfg.Admin.Username))
+		{
+			strict.GET("/monitor/am/config-yaml", obsHandler.AMConfigYAMLGet)
+		}
+
+		// 集群管理（平台基础设施）：完整列表（apiserver 地址、监控配置）仅平台角色；
+		// /my-clusters 为普通用户的顶栏切换器最小信息源
+		authed.GET("/my-clusters", clusterHandler.ListMine)
+		authed.GET("/my-clusters/connectivity", clusterHandler.ConnectivityMine)
 		authed.GET("/monitor/grafana-check", obsHandler.GrafanaCheck)
 
 		// 监控（通过 X-Cluster 请求头选择集群，?range=1h|6h|24h）
@@ -269,10 +334,12 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		authed.GET("/monitor/am/status", obsHandler.AMStatus)
 		authed.GET("/monitor/am/alerts", obsHandler.AMAlerts)
 		authed.GET("/monitor/am/silences", obsHandler.AMSilenceList)
-		authed.POST("/monitor/am/silences", obsHandler.AMSilenceCreate)
-		authed.DELETE("/monitor/am/silences/:id", obsHandler.AMSilenceDelete)
+		// 静默是集群级操作（不属于任何命名空间）
+		authed.POST("/monitor/am/silences", clusterGuard, obsHandler.AMSilenceCreate)
+		authed.DELETE("/monitor/am/silences/:id", clusterGuard, obsHandler.AMSilenceDelete)
 		authed.GET("/alertevents", obsHandler.AlertEventList)
 		authed.GET("/alertevents/stats", obsHandler.AlertEventStats)
+		authed.GET("/alertevents/sync-status", obsHandler.AlertEventSyncStatus)
 
 		// 集群资源（通过 X-Cluster 请求头选择集群）
 		authed.GET("/overview", k8sHandler.Overview)
@@ -285,8 +352,8 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		authed.GET("/quotas/overview", k8sHandler.QuotaOverview)
 
 		authed.GET("/namespaces", k8sHandler.ListNamespaces)
-		authed.POST("/namespaces", k8sHandler.CreateNamespace)
-		authed.DELETE("/namespaces/:name", k8sHandler.DeleteNamespace)
+		authed.POST("/namespaces", clusterGuard, k8sHandler.CreateNamespace)
+		authed.DELETE("/namespaces/:name", clusterGuard, k8sHandler.DeleteNamespace)
 
 		authed.GET("/nodes", k8sHandler.ListNodeDetails)
 		authed.GET("/nodes/:name", k8sHandler.GetNodeDetail)
@@ -294,47 +361,47 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		authed.GET("/pods", k8sHandler.ListPods)
 		authed.GET("/pods/:name", k8sHandler.GetPodDetail)
 		authed.GET("/pods/:name/logs", k8sHandler.StreamPodLogs)
-		authed.DELETE("/pods/:name", k8sHandler.DeletePod)
+		authed.DELETE("/pods/:name", nsGuard, k8sHandler.DeletePod)
 
 		authed.GET("/workloads/:kind", k8sHandler.ListWorkloads)
 		authed.GET("/workloads/:kind/:name", k8sHandler.GetWorkloadDetail)
 		authed.GET("/workloads/:kind/:name/rollouts", k8sHandler.Rollouts)
-		authed.POST("/workloads/:kind/:name/rollback", k8sHandler.Rollback)
-		authed.PUT("/workloads/:kind/:name/scale", k8sHandler.ScaleWorkload)
-		authed.PUT("/workloads/:kind/:name/restart", k8sHandler.RestartWorkload)
-		authed.DELETE("/workloads/:kind/:name", k8sHandler.DeleteWorkload)
+		authed.POST("/workloads/:kind/:name/rollback", nsGuard, k8sHandler.Rollback)
+		authed.PUT("/workloads/:kind/:name/scale", nsGuard, k8sHandler.ScaleWorkload)
+		authed.PUT("/workloads/:kind/:name/restart", nsGuard, k8sHandler.RestartWorkload)
+		authed.DELETE("/workloads/:kind/:name", nsGuard, k8sHandler.DeleteWorkload)
+
+		// 容器内日志采集（Fluent Bit Sidecar + 共享 emptyDir -> ES）
+		authed.GET("/workloads/:kind/:name/logcollection", k8sHandler.GetLogCollection)
+		authed.PUT("/workloads/:kind/:name/logcollection", nsGuard, k8sHandler.SetLogCollection)
+		authed.DELETE("/workloads/:kind/:name/logcollection", nsGuard, k8sHandler.RemoveLogCollection)
 
 		// 通用资源（kind: services|ingresses|configmaps|secrets|pvc|pv|storageclasses 等 KindMap 资源）
 		authed.GET("/resources/:kind", k8sHandler.ListGeneric)
 		authed.GET("/resources/:kind/:name/yaml", k8sHandler.GetGenericYAML)
-		authed.DELETE("/resources/:kind/:name", k8sHandler.DeleteGeneric)
+		authed.DELETE("/resources/:kind/:name", resourceGuard, k8sHandler.DeleteGeneric)
 
 		// 任意 GVR（CRD 浏览）：group 为空用 core
 		authed.GET("/generic/:group/:version/:resource", k8sHandler.ListGenericGVR)
 		authed.GET("/generic/:group/:version/:resource/:name/yaml", k8sHandler.GetGenericGVRYAML)
-		authed.DELETE("/generic/:group/:version/:resource/:name", k8sHandler.DeleteGenericGVR)
+		authed.DELETE("/generic/:group/:version/:resource/:name", resourceGuard, k8sHandler.DeleteGenericGVR)
 
 		// YAML 应用与读取（export：按勾选的资源导出多文档 YAML，Kuboard 式逐层选择）
+		// apply 是多文档提交：ns 级/集群级逐文档判定在 handler 内做（ns 取自文档内容）
 		authed.POST("/yaml/apply", k8sHandler.ApplyYAML)
 		authed.GET("/yaml", k8sHandler.GetYAML)
 		authed.POST("/yaml/export", k8sHandler.ExportYAML)
 
-		// Helm 应用管理（release 操作通过 X-Cluster 选择集群）
+		// Helm 应用管理（release 操作通过 X-Cluster 选择集群；仓库源是全局配置 → admin 组）
 		authed.GET("/helm/releases", helmHandler.ListReleases)
 		authed.GET("/helm/releases/:name/info", helmHandler.ReleaseInfo)
 		authed.GET("/helm/releases/:name/history", helmHandler.ReleaseHistory)
 		authed.GET("/helm/releases/:name/upgrade-values", helmHandler.ReleaseUpgradeValues)
-		authed.PUT("/helm/releases/:name/rollback", helmHandler.RollbackRelease)
-		authed.PUT("/helm/releases/:name/upgrade", helmHandler.UpgradeRelease)
-		authed.DELETE("/helm/releases/:name", helmHandler.UninstallRelease)
-		authed.POST("/helm/releases", helmHandler.InstallRelease)
+		authed.PUT("/helm/releases/:name/rollback", nsGuard, helmHandler.RollbackRelease)
+		authed.PUT("/helm/releases/:name/upgrade", nsGuard, helmHandler.UpgradeRelease)
+		authed.DELETE("/helm/releases/:name", nsGuard, helmHandler.UninstallRelease)
+		authed.POST("/helm/releases", nsGuard, helmHandler.InstallRelease)
 
-		// Chart 仓库源（全局配置，不依赖 X-Cluster）
-		authed.GET("/helm/repos", helmHandler.ListRepos)
-		authed.POST("/helm/repos", helmHandler.AddRepo)
-		authed.PUT("/helm/repos/:id", helmHandler.UpdateRepo)
-		authed.DELETE("/helm/repos/:id", helmHandler.RemoveRepo)
-		authed.PUT("/helm/repos/:id/refresh", helmHandler.RefreshRepo)
 		authed.GET("/helm/charts/values", helmHandler.ChartValues)
 		authed.GET("/helm/repos/:id/charts", helmHandler.RepoCharts)
 	}

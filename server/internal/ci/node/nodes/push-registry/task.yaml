@@ -27,7 +27,9 @@ steps:
       REG=$(printf '%s' "{{registry}}" | tr -d '[:space:]')
       if [ -n "$REG" ]; then
         case "$IMAGE" in
-          *:*) DEST="$REG/${IMAGE##*/}" ;;
+          # 去掉源 host 段后保留剩余全部路径（含 project 层级）：
+          # harbor/project/app:tag → $REG/project/app:tag（只取末段会丢 project）
+          *:*) DEST="$REG/${IMAGE#*/}" ;;
           *) DEST="$REG/$IMAGE" ;;
         esac
       fi
@@ -38,7 +40,8 @@ steps:
         AUTHFILE="$DOCKER_CONFIG/config.json"
       elif [ -n "$username" ] && [ -n "$password" ]; then
         mkdir -p /tmp/docker-cfg
-        AUTH=$(printf '%s:%s' "$username" "$password" | base64)
+        # base64 默认 76 列换行，长凭证的换行会写进 JSON 使其非法
+        AUTH=$(printf '%s:%s' "$username" "$password" | base64 | tr -d '\n')
         cat > /tmp/docker-cfg/config.json <<EOF
       {"auths":{"${DEST%%/*}":{"username":"$username","password":"$password","auth":"$AUTH"}}}
       EOF

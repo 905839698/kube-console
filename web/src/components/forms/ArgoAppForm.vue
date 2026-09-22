@@ -18,8 +18,9 @@
       <el-select v-if="projects" v-model="projectName" filterable placeholder="default" style="width: 300px">
         <el-option v-for="p in projectOptions" :key="p.value" :value="p.value" :label="p.label" />
       </el-select>
-      <!-- 项目列表拉取失败时退回手填，不阻塞编辑 -->
-      <el-input v-else v-model="o.spec.project" placeholder="default" style="width: 260px" />
+      <!-- 项目列表拉取失败时退回手填，不阻塞编辑；同样走 projectName 归一（清空 = default，
+           避免存下空串——spec.project 是 CRD 必填字段，空串会被 API server 拒绝） -->
+      <el-input v-else v-model="projectName" placeholder="default" style="width: 260px" />
       <span class="hint">AppProject（必须是集群中已创建的项目）</span>
     </el-form-item>
     <el-alert v-for="(w, i) in projectWarnings" :key="i" type="warning" :closable="false" show-icon class="warn" :title="w" />
@@ -141,23 +142,37 @@ const projectName = computed({
   },
 })
 
-// 选项：集群现有项目 + 当前值（当前值不存在时也列出来，否则下拉会显示成空、看不出问题）
+// 应用对象所在 ns：ArgoCD 按【应用自己所在 ns】解析 AppProject，
+// 同名项目在不同 ns 是两个不同的项目，匹配必须带 ns
+const appNs = computed(() => String(o.value?.metadata?.namespace || '').trim())
+
+// 选项：本应用 ns 内的现有项目 + 当前值（当前值不在时也要列出来，否则下拉显示成空、看不出问题）
 const projectOptions = computed(() => {
-  const list = projects.value || []
-  const opts = list.map((p) => ({ value: p.name, label: p.description ? `${p.name}（${p.description}）` : p.name }))
+  const all = projects.value || []
+  const inNs = appNs.value ? all.filter((p) => p.namespace === appNs.value) : all
+  const opts = inNs.map((p) => ({ value: p.name, label: p.description ? `${p.name}（${p.description}）` : p.name }))
   const cur = projectName.value
-  if (cur && !list.some((p) => p.name === cur)) opts.unshift({ value: cur, label: `${cur}（不存在）` })
+  if (cur && !inNs.some((p) => p.name === cur)) {
+    // 区分「整个集群没有」与「在别的 ns」（后者 ArgoCD 同样解析不到）
+    const elsewhere = all.find((p) => p.name === cur && p.namespace !== appNs.value)
+    opts.unshift({ value: cur, label: elsewhere ? `${cur}（在 ${elsewhere.namespace}，非本应用 ns）` : `${cur}（不存在）` })
+  }
   return opts
 })
 
 const projectWarnings = computed(() => {
-  const list = projects.value
-  if (!list) return []
+  const all = projects.value
+  if (!all) return []
   const name = projectName.value
-  const known = list.find((p) => p.name === name)
+  const inNs = appNs.value ? all.filter((p) => p.namespace === appNs.value) : all
+  const known = inNs.find((p) => p.name === name)
   if (!known) {
-    const existing = list.map((p) => p.name).join('、') || '（无）'
-    return [`AppProject「${name}」不存在（集群现有：${existing}）。ArgoCD 会拒绝加载该应用并报 “app is not allowed in project ${name}, or the project does not exist”，状态恒为 Unknown——请改选已存在的项目，或先在 ArgoCD 中创建该项目。`]
+    const elsewhere = all.find((p) => p.name === name)
+    if (elsewhere && appNs.value) {
+      return [`AppProject「${name}」存在于 ${elsewhere.namespace}，但当前应用对象在 ${appNs.value}——ArgoCD 只解析应用自身 ns 内的项目，该应用会被拒绝加载（状态恒为 Unknown）。请在 ${appNs.value} 内创建同名项目，或把应用移到 ${elsewhere.namespace}。`]
+    }
+    const existing = inNs.map((p) => p.name).join('、') || '（无）'
+    return [`AppProject「${name}」在 ${appNs.value || '应用所在 ns'} 内不存在（现有：${existing}）。ArgoCD 会拒绝加载该应用并报 “app is not allowed in project ${name}, or the project does not exist”，状态恒为 Unknown——请改选已存在的项目，或先在 ArgoCD 中创建该项目。`]
   }
   return projectIssues(known, {
     repoURL: o.value?.spec?.source?.repoURL,

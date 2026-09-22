@@ -116,7 +116,9 @@ steps:
       for SEV in Critical High Medium Low Unknown Negligible; do
         C=$(grep -o "\"$SEV\":[0-9]*" /tmp/hb_body | head -n1 | cut -d: -f2)
         C="${C:-0}"
-        S="${S:+$S;}${SEV^^}=$C"
+        # POSIX sh（dash）无 ${var^^}，用 tr 转大写
+        SEV_U=$(printf '%s' "$SEV" | tr '[:lower:]' '[:upper:]')
+        S="${S:+$S;}${SEV_U}=$C"
         eval "N_$SEV=$C" 2>/dev/null || true
       done
       printf '%s' "$S" > $(results.vuln_summary.path)

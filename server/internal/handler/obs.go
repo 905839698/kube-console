@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"kube-console/server/internal/ci/errcode"
 	"kube-console/server/internal/kube"
 	"kube-console/server/internal/middleware"
 	"kube-console/server/internal/model"
@@ -99,16 +102,30 @@ func (h *ObsHandler) SaveAMConfig(c *gin.Context) {
 	if err := h.db.Where("cluster_name = ?", cfg.ClusterName).First(&existing).Error; err == nil {
 		cfg.ID = existing.ID
 		cfg.CreatedAt = existing.CreatedAt
-		h.db.Save(&cfg)
+		if err := h.db.Save(&cfg).Error; err != nil {
+			response.Fail(c, 500, 500, err.Error())
+			return
+		}
 	} else {
-		h.db.Create(&cfg)
+		if err := h.db.Create(&cfg).Error; err != nil && errcode.IsUniqueViolation(err) {
+			if h.db.Where("cluster_name = ?", cfg.ClusterName).First(&existing).Error == nil {
+				cfg.ID = existing.ID
+				_ = h.db.Save(&cfg).Error
+			}
+		} else if err != nil {
+			response.Fail(c, 500, 500, err.Error())
+			return
+		}
 	}
 	response.OK(c, cfg)
 }
 
 // DeleteAMConfig DELETE /alertmanager/:cluster
 func (h *ObsHandler) DeleteAMConfig(c *gin.Context) {
-	h.db.Where("cluster_name = ?", c.Param("cluster")).Delete(&model.AlertmanagerConfig{})
+	if err := h.db.Where("cluster_name = ?", c.Param("cluster")).Delete(&model.AlertmanagerConfig{}).Error; err != nil {
+		response.Fail(c, 500, 500, err.Error())
+		return
+	}
 	response.OK(c, nil)
 }
 
@@ -355,8 +372,12 @@ func (h *ObsHandler) AlertEventList(c *gin.Context) {
 	if v := c.Query("namespace"); v != "" {
 		q = q.Where("namespace = ?", v)
 	}
-	if days, err := strconv.Atoi(c.Query("days")); err == nil && days > 0 {
-		q = q.Where("started_at > ?", time.Now().AddDate(0, 0, -days))
+	// state=firing 是「当前快照」语义：跳过时间窗，与 stats 的 active（全量 firing）对齐，
+	// 否则持续超过 days 的长告警在「当前触发中」卡片计数、列表里却查不到
+	if v := c.Query("state"); v != model.AlertStateFiring {
+		if days, err := strconv.Atoi(c.Query("days")); err == nil && days > 0 {
+			q = q.Where("started_at > ?", time.Now().AddDate(0, 0, -days))
+		}
 	}
 	var total int64
 	q.Count(&total)
@@ -397,6 +418,13 @@ func (h *ObsHandler) AlertEventStats(c *gin.Context) {
 		Where("started_at > ?", since).Group("alert_name").Order("count DESC").Limit(5).Scan(&tops)
 	out["top"] = tops
 	response.OK(c, out)
+}
+
+// AlertEventSyncStatus GET /alertevents/sync-status
+// 归档轮询各集群的最近错误（空 = 正常）。历史页的「当前触发中」来自归档表，
+// 某集群轮询失败时该数字会静默过期，必须把错误露出来
+func (h *ObsHandler) AlertEventSyncStatus(c *gin.Context) {
+	response.OK(c, gin.H{"status": h.archive.StatusOf()})
 }
 
 // ------------------- 事件归档检索（authed） -------------------
@@ -464,6 +492,38 @@ func (h *ObsHandler) EventsArchiveSearch(c *gin.Context) {
 
 // ------------------- Grafana 内嵌（authed） -------------------
 
+// badSSRFIP 环回/链路本地/未指定一律拒绝（云元数据 169.254.169.254 是链路本地）。
+// 私网段（10/172.16/192.168）是 Grafana 的常见落点，不受限。
+func badSSRFIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+// checkURLTargetSafe 字面量 + DNS 解析后的 IP 双重检查：
+// 127.0.0.1.xip.io、localhost.（尾点）这类写法字面量比对拦不住，解析后复检才能堵住。
+func checkURLTargetSafe(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return fmt.Errorf("非法地址")
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		if badSSRFIP(ip) {
+			return fmt.Errorf("禁止访问该地址")
+		}
+		return nil
+	}
+	ipaddrs, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+	if err != nil {
+		return err
+	}
+	for _, a := range ipaddrs {
+		if badSSRFIP(a.IP) {
+			return fmt.Errorf("禁止访问该地址")
+		}
+	}
+	return nil
+}
+
 // GrafanaCheck GET /monitor/grafana-check?url= 服务端探测 Grafana 可达性（尽力而为：服务端不可达不代表浏览器端不可达）
 func (h *ObsHandler) GrafanaCheck(c *gin.Context) {
 	u := strings.TrimSpace(c.Query("url"))
@@ -475,7 +535,21 @@ func (h *ObsHandler) GrafanaCheck(c *gin.Context) {
 		response.Fail(c, 400, 400, "Grafana 地址需以 http:// 或 https:// 开头")
 		return
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	// 服务端代发起请求：字面量+解析后 IP 双重检查，防止被当 SSRF 探针
+	// （错误信息回显连接详情可探测内网拓扑）；重定向目标同样复检
+	if err := checkURLTargetSafe(u); err != nil {
+		response.Fail(c, 400, 400, err.Error())
+		return
+	}
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("重定向过多")
+			}
+			return checkURLTargetSafe(req.URL.String())
+		},
+	}
 	resp, err := client.Get(strings.TrimRight(u, "/") + "/api/health")
 	if err != nil {
 		msg := err.Error()

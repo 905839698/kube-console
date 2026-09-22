@@ -100,6 +100,17 @@ func (s *Store) Update(ctx context.Context, id uint, req UpdateReq) (*model.CIPi
 	}
 	updates := map[string]interface{}{}
 	if req.Name != nil && *req.Name != "" {
+		// 索引非唯一，改名撞项目内已有名称需显式拦截（否则静默产生同名流水线）
+		if *req.Name != p.Name {
+			var cnt int64
+			if err := s.db.WithContext(ctx).Model(&model.CIPipeline{}).
+				Where("project_id = ? AND name = ?", p.ProjectID, *req.Name).Count(&cnt).Error; err != nil {
+				return nil, err
+			}
+			if cnt > 0 {
+				return nil, errcode.Newf(errcode.Conflict, "流水线名已存在: %s", *req.Name)
+			}
+		}
 		updates["name"] = *req.Name
 	}
 	if req.Description != nil {
@@ -167,6 +178,20 @@ func (s *Store) SaveVersion(ctx context.Context, pipelineID, uid uint, g *dsl.Gr
 		CreatedBy:    uid,
 	}
 	if err := s.db.WithContext(ctx).Create(v).Error; err != nil {
+		// 并发保存同一流水线：两事务读到同一 MAX(version)，后者撞 (pipeline_id,version)
+		// 唯一键。重读 max 重试一次（与 nextRunNo 同一模式的兜底）
+		if isUniqueErr(err) {
+			var retryMax int
+			if serr := s.db.WithContext(ctx).Model(&model.CIPipelineVersion{}).
+				Where("pipeline_id = ?", pipelineID).
+				Select("COALESCE(MAX(version), 0)").Scan(&retryMax).Error; serr == nil && retryMax >= maxVer {
+				v.Version = retryMax + 1
+				if serr2 := s.db.WithContext(ctx).Create(v).Error; serr2 != nil {
+					return nil, serr2
+				}
+				return v, nil
+			}
+		}
 		return nil, err
 	}
 	return v, nil

@@ -12,12 +12,14 @@
         <el-input v-model="o.spec.clusterIP" placeholder="留空自动分配" />
       </el-form-item>
       <el-form-item label="外部流量">
-        <el-select v-model="o.spec.externalTrafficPolicy" clearable style="width: 200px" placeholder="默认 Cluster">
+        <el-select :model-value="o.spec.externalTrafficPolicy" clearable style="width: 200px" placeholder="默认 Cluster"
+          @update:model-value="(v) => setTrafficPolicy('externalTrafficPolicy', v)">
           <el-option v-for="t in ['Cluster', 'Local']" :key="t" :label="t" :value="t" />
         </el-select>
       </el-form-item>
       <el-form-item label="内部流量">
-        <el-select v-model="o.spec.internalTrafficPolicy" clearable style="width: 200px" placeholder="默认 Cluster">
+        <el-select :model-value="o.spec.internalTrafficPolicy" clearable style="width: 200px" placeholder="默认 Cluster"
+          @update:model-value="(v) => setTrafficPolicy('internalTrafficPolicy', v)">
           <el-option v-for="t in ['Cluster', 'Local']" :key="t" :label="t" :value="t" />
         </el-select>
       </el-form-item>
@@ -54,7 +56,8 @@
             <el-select v-model="p.protocol" size="small" style="width: 12%">
               <el-option v-for="t in ['TCP', 'UDP', 'SCTP']" :key="t" :label="t" :value="t" />
             </el-select>
-            <el-select v-if="p.protocol === 'TCP'" v-model="p.appProtocol" clearable size="small" style="width: 12%" placeholder="L7">
+            <el-select v-if="p.protocol === 'TCP'" :model-value="p.appProtocol" clearable size="small" style="width: 12%" placeholder="L7"
+              @update:model-value="(v) => setAppProtocol(p, v)">
               <el-option v-for="t in ['HTTP', 'HTTPS', 'auto']" :key="t" :label="t" :value="t" />
             </el-select>
             <el-button size="small" type="danger" text @click="o.spec.ports.splice(i, 1)"><el-icon><Delete /></el-icon></el-button>
@@ -64,7 +67,8 @@
           </el-button>
         </el-form-item>
         <el-form-item label="会话保持">
-          <el-select v-model="o.spec.sessionAffinity" clearable style="width: 180px">
+          <el-select :model-value="o.spec.sessionAffinity" clearable style="width: 180px"
+            @update:model-value="(v) => setSessionAffinity(v)">
             <el-option v-for="t in ['ClientIP']" :key="t" :label="t" :value="t" />
           </el-select>
           <template v-if="o.spec.sessionAffinity === 'ClientIP'">
@@ -186,6 +190,40 @@ const monitorPath = ref('/metrics')
 
 const portNames = computed(() => (o.value?.spec?.ports || []).map((p: any) => p.name).filter(Boolean))
 
+// clearable 下拉清空时 Element Plus 写回空串，而 K8s 这些字段不允许空值（如
+// externalTrafficPolicy: "" 直接被 API 拒绝）——统一改成「留空 = 删字段」
+function setTrafficPolicy(key: 'externalTrafficPolicy' | 'internalTrafficPolicy', v: string) {
+  o.value.spec = o.value.spec || {}
+  if (v) o.value.spec[key] = v
+  else delete o.value.spec[key]
+}
+function setSessionAffinity(v: string) {
+  o.value.spec = o.value.spec || {}
+  if (v) o.value.spec.sessionAffinity = v
+  else {
+    delete o.value.spec.sessionAffinity
+    delete o.value.spec.sessionAffinityConfig
+  }
+}
+function setAppProtocol(p: any, v: string) {
+  if (v) p.appProtocol = v
+  else delete p.appProtocol
+}
+
+// ExternalName Service 只允许 externalName：切过去时清掉不兼容的残留字段
+//（ports/selector 还在对象里会被 API 拒绝，界面上虽然隐藏了端口区但数据仍在）
+watch(() => o.value?.spec?.type, (t) => {
+  const spec = o.value?.spec
+  if (!spec || t !== 'ExternalName') return
+  delete spec.ports
+  delete spec.selector
+  delete spec.sessionAffinity
+  delete spec.sessionAffinityConfig
+  delete spec.externalIPs
+  delete spec.externalTrafficPolicy
+  delete spec.internalTrafficPolicy
+})
+
 // targetPort 支持端口号或端口名（IntOrString）
 function targetPortText(p: any): string {
   return p.targetPort == null ? '' : String(p.targetPort)
@@ -195,7 +233,7 @@ function setTargetPort(p: any, v: string) {
     delete p.targetPort
     return
   }
-  p.targetPort = /^\\d+$/.test(v) ? Number(v) : v
+  p.targetPort = /^\d+$/.test(v) ? Number(v) : v
 }
 
 // ClientIP 粘滞超时

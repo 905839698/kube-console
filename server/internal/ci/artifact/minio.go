@@ -5,6 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -22,9 +25,18 @@ func NewMinIOClient(cfg *config.CIConfig) (*MinIOClient, error) {
 	if cfg.MinIOEndpoint == "" {
 		return nil, fmt.Errorf("MinIO 未配置（ci.minioEndpoint）")
 	}
+	// 按 endpoint scheme 推导 TLS（Secure:false 硬编码会让 HTTPS MinIO 全部下载失败）
+	secure := strings.HasPrefix(cfg.MinIOEndpoint, "https")
+	// 客户端必须带上限：minio-go 默认 http.Client 无 Timeout，MinIO 挂起时
+	// goroutine 与连接永久占用。用 ResponseHeaderTimeout 卡「建连+响应头」，
+	// 不卡响应体（大文件流式下载不能按整请求超时，否则传满 120s 被截断）
 	c, err := minio.New(cfg.MinIOEndpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.MinIOAccessKey, cfg.MinIOSecretKey, ""),
-		Secure: false,
+		Secure: secure,
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:     90 * time.Second,
+		},
 	})
 	if err != nil {
 		return nil, err

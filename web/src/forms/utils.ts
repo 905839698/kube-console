@@ -38,6 +38,10 @@ export function cleanEmpty(obj: any): any {
       const c = cleanEmpty(v)
       if (c !== undefined && c !== null && !(typeof c === 'string' && c === '')) {
         out[k] = c
+      } else if (k === 'emptyDir' && v && typeof v === 'object') {
+        // emptyDir: {} 是合法的 K8s 卷源（无 sizeLimit/medium 时就是空对象），
+        // 不能按空对象清掉——否则卷失去 source，apply 直接失败
+        out[k] = {}
       }
     }
     return Object.keys(out).length > 0 ? out : undefined

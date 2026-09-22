@@ -92,11 +92,13 @@ func (m *MonitorService) doProm(ctx context.Context, c *kube.Client, cfg PromCon
 	if err != nil {
 		return nil, err
 	}
-	// 复用 rest.Config 的认证（token/cert）
+	// 复用 rest.Config 的认证（token/cert）。rest.HTTPClientFor 不设 Timeout：
+	// Prometheus 挂起时 goroutine 与连接无上界，显式加 45s
 	httpClient, err := rest.HTTPClientFor(c.Config)
 	if err != nil {
 		return nil, fmt.Errorf("构建 HTTP 客户端失败: %w", err)
 	}
+	httpClient.Timeout = 45 * time.Second
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -218,6 +220,7 @@ func (m *MonitorService) doPromRaw(ctx context.Context, c *kube.Client, cfg Prom
 	if err != nil {
 		return nil, fmt.Errorf("构建 HTTP 客户端失败: %w", err)
 	}
+	httpClient.Timeout = 45 * time.Second
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -324,7 +327,9 @@ func (m *MonitorService) AlertRules(ctx context.Context, c *kube.Client, cluster
 	data, _ := raw["data"].(map[string]interface{})
 	groupsRaw, _ := data["groups"].([]interface{})
 
-	out := &AlertRulesResponse{Groups: len(groupsRaw), Rules: []AlertRule{}, GroupList: []GroupSummary{}}
+	// Groups 只统计「告警分组」（含 ≥1 条 alerting 规则）：纯 recording 规则分组
+	// 没有告警语义，也不该出现在「告警分组」页（与 GroupList 口径一致）
+	out := &AlertRulesResponse{Rules: []AlertRule{}, GroupList: []GroupSummary{}}
 	out.Summary.BySeverity = map[string]int{}
 
 	for _, gRaw := range groupsRaw {
@@ -426,7 +431,10 @@ func (m *MonitorService) AlertRules(ctx context.Context, c *kube.Client, cluster
 			}
 			out.Summary.BySeverity[severity]++
 		}
-		out.GroupList = append(out.GroupList, gs)
+		if gs.AlertRules > 0 {
+			out.Groups++
+			out.GroupList = append(out.GroupList, gs)
+		}
 	}
 
 	// 回填规则源（PrometheusRule CR），供前端查看/编辑定位；CRD 不存在时静默降级
@@ -626,7 +634,11 @@ type controlCardDef struct {
 func (m *MonitorService) controlPlane(ctx context.Context, c *kube.Client, cfg PromConfig) []ControlPlaneItem {
 	// 组件 up 状态：按 job 统计就绪/总数
 	upByJob := map[string][2]int{}
-	if res, err := m.Query(ctx, c, cfg, `up{job=~"kube-apiserver|apiserver|kube-controller-manager|kube-scheduler|kube-proxy|coredns|kube-dns|etcd|kube-etcd"}`); err == nil {
+	// up 查询本身能返回 = 该 Prometheus 可达（「已接入」的最直接证据，
+	// 用于自监控 job 名猜不中时的 prometheus 组件兜底判定）
+	promReachable := false
+	if res, err := m.Query(ctx, c, cfg, `up{job=~"kube-apiserver|apiserver|kube-controller-manager|kube-scheduler|kube-proxy|coredns|kube-dns|etcd|kube-etcd|prometheus|prometheus-k8s"}`); err == nil {
+		promReachable = true
 		for _, r := range res {
 			job := r.Metric["job"]
 			v, _ := strconv.ParseFloat(fmt.Sprintf("%v", r.Value[1]), 64)
@@ -718,6 +730,13 @@ func (m *MonitorService) controlPlane(ctx context.Context, c *kube.Client, cfg P
 				item.Total += stat[1]
 				item.Ready += stat[0]
 			}
+		}
+		// prometheus 组件：自监控 job 名随发行版/手工配置而变（monitoring/self/kuboard-… 等），
+		// 候选列表猜不中时 Total 恒 0 → 前端误显「未接入」（而指标卡全部正常出数）。
+		// 兜底：job 没匹配到但 up 查询可达 = 已接入且健康，按 1/1 计
+		if item.Name == "prometheus" && item.Total == 0 && promReachable {
+			item.Total = 1
+			item.Ready = 1
 		}
 		// 回填指标卡片（保持原始顺序，组件未采集时静默跳过）
 		for j := range refs {
@@ -1353,23 +1372,21 @@ func (m *MonitorService) Workload(ctx context.Context, c *kube.Client, cluster *
 
 // PodMonitor Pod 级监控
 // CPUUsagePct / MemUsagePct 用 *float64：无有效 limit（容器未全覆盖）时为 nil，前端显示 --
+// PodMonitor Pod 监控（CPU/内存一律绝对值：核数 / Mi——
+// 百分比依赖 limit 全覆盖，覆盖不全时分母被低估、百分比虚高或恒 0，无参考价值）
 type PodMonitor struct {
-	CPUUsagePct    *float64    `json:"cpuUsagePct"`
-	MemUsageMi     float64     `json:"memUsageMi"`
-	MemUsagePct    *float64    `json:"memUsagePct"`
+	CPUUsage       float64     `json:"cpuUsage"` // 核
+	MemUsageMi     float64     `json:"memUsageMi"` // Mi
 	NetRxMBs       float64     `json:"netRxMBs"`
 	NetTxMBs       float64     `json:"netTxMBs"`
 	DiskWriteMBs   float64     `json:"diskWriteMBs"`
 	FsUsageMi      float64     `json:"fsUsageMi,omitempty"`
-	CPUUsageTrend  [][]float64 `json:"cpuUsageTrend"`
-	MemUsageTrend  [][]float64 `json:"memUsageTrend"`
+	CPUUsageTrend  [][]float64 `json:"cpuUsageTrend"`  // 核
+	MemUsageTrend  [][]float64 `json:"memUsageTrend"`  // Mi
 	NetRxTrend     [][]float64 `json:"netRxTrend"`
 	NetTxTrend     [][]float64 `json:"netTxTrend"`
 	DiskWriteTrend [][]float64 `json:"diskWriteTrend"`
 	FsUsageTrend   [][]float64 `json:"fsUsageTrend"`
-	// 按容器细分趋势（对齐 Grafana Compute Resources / Pod）
-	ContainerCpu []ContainerSeries `json:"containerCpu"` // 核
-	ContainerMem []ContainerSeries `json:"containerMem"` // Mi
 }
 
 // Pod Pod 监控
@@ -1393,25 +1410,12 @@ func (m *MonitorService) Pod(ctx context.Context, c *kube.Client, cluster *model
 		v, err := strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
 		return v, err == nil
 	}
-	// CPU/内存使用率：仅当该 Pod 所有容器都设置了 limit 时才有意义（覆盖不全时分母被低估，百分比虚高）
-	podRe := "^(" + name + ")$"
-	cpuLim, cpuLimCnt, cpuLimOk := m.sumLimitedCpu(ctx, c, cfg, namespace, podRe)
-	memLim, memLimCnt, memLimOk := m.sumLimitedMem(ctx, c, cfg, namespace, podRe)
-	totalContainers, contOk := m.countContainers(ctx, c, cfg, namespace, podRe)
-
-	cpuPctTrend := cpuLimOk && contOk && cpuLimCnt >= totalContainers && cpuLim > 0
-	memPctTrend := memLimOk && contOk && memLimCnt >= totalContainers && memLim > 0
-
-	if cpu, ok := q(cpuQL); ok && cpuPctTrend {
-		v := cpu / cpuLim * 100
-		out.CPUUsagePct = &v
+	// 绝对值口径：CPU 核数 / 内存 Mi（百分比依赖 limit 全覆盖，覆盖不全时虚高或恒 0，已弃用）
+	if cpu, ok := q(cpuQL); ok {
+		out.CPUUsage = cpu
 	}
 	if mem, ok := q(memQL); ok {
 		out.MemUsageMi = mem / 1024 / 1024
-		if memPctTrend {
-			v := mem / memLim * 100
-			out.MemUsagePct = &v
-		}
 	}
 	out.NetRxMBs, _ = q(netRxQL)
 	out.NetTxMBs, _ = q(netTxQL)
@@ -1428,48 +1432,14 @@ func (m *MonitorService) Pod(ctx context.Context, c *kube.Client, cluster *model
 		}
 		return series(res)
 	}
-	// CPU 趋势换算百分比（相对限额）；覆盖不全时保持原始核数；内存趋势保持 Mi 绝对值
-	if res, err := m.QueryRange(ctx, c, cfg, cpuQL, rs.Start, rs.End, rs.Step); err == nil {
-		raw := series(res)
-		if cpuPctTrend {
-			for i := range raw {
-				raw[i][1] = raw[i][1] / cpuLim * 100
-			}
-		}
-		out.CPUUsageTrend = raw
-	}
+	out.CPUUsageTrend = qr(cpuQL)
 	out.MemUsageTrend = convertTrend(qr(memQL), func(v float64) float64 { return v / 1024 / 1024 })
 	out.NetRxTrend = qr(netRxQL)
 	out.NetTxTrend = qr(netTxQL)
 	out.DiskWriteTrend = qr(diskWriteQL)
 	out.FsUsageTrend = qr(fsUsageQL)
 
-	// 按容器细分（对齐 Grafana Compute Resources / Pod 的 per-container 曲线；
-	// image!="" 过滤掉 pause 容器）
-	containerCpu := `sum by(container)(rate(container_cpu_usage_seconds_total{namespace="%s",pod="%s",container!="",image!=""}[5m]))`
-	containerMem := `sum by(container)(container_memory_working_set_bytes{namespace="%s",pod="%s",container!="",image!=""})`
-	if res, err := m.QueryRange(ctx, c, cfg, fmt.Sprintf(containerCpu, namespace, name), rs.Start, rs.End, rs.Step); err == nil {
-		out.ContainerCpu = multiSeries(res)
-	}
-	if res, err := m.QueryRange(ctx, c, cfg, fmt.Sprintf(containerMem, namespace, name), rs.Start, rs.End, rs.Step); err == nil {
-		out.ContainerMem = multiSeries(res)
-	}
 	return out, nil
-}
-
-// ContainerSeries 按容器细分的单序列（多序列图表用）
-type ContainerSeries struct {
-	Name string      `json:"name"`
-	Data [][]float64 `json:"data"`
-}
-
-// multiSeries 提取范围查询结果为多序列（按 series label 命名，如 container）
-func multiSeries(result []PromResult) []ContainerSeries {
-	out := make([]ContainerSeries, 0, len(result))
-	for _, r := range result {
-		out = append(out, ContainerSeries{Name: r.Metric["container"], Data: series([]PromResult{r})})
-	}
-	return out
 }
 
 // convertTrend 对趋势序列逐点做数值转换（如字节 -> Mi）

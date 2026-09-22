@@ -5,7 +5,7 @@
         <span>命名空间</span>
         <div class="header-right">
           <el-button :icon="Refresh" circle @click="load" />
-          <el-button type="primary" size="small" @click="openCreate">
+          <el-button type="primary" size="small" :disabled="!perm.canWriteCluster()" @click="openCreate">
             <el-icon><Plus /></el-icon>&nbsp;新建命名空间
           </el-button>
         </div>
@@ -34,7 +34,7 @@
         <template #default="{ row }">
           <el-button size="small" @click="goMonitor(row.name)">监控</el-button>
           <el-button size="small" @click="goPods(row.name)">查看 Pod</el-button>
-          <el-button size="small" type="danger" @click="remove(row.name)">删除</el-button>
+          <el-button size="small" type="danger" :disabled="!perm.canWriteCluster()" @click="remove(row.name)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -49,12 +49,14 @@ import { Refresh, Search } from '@element-plus/icons-vue'
 import { k8sApi, type NamespaceItem } from '../api'
 import StatusTag from '../components/StatusTag.vue'
 import { useClusterStore } from '../store/cluster'
+import { usePerm } from '../store/perm'
 import { parseDuration } from '../utils/sort'
 import { confirmDelete } from '../utils/confirm'
 
 const router = useRouter()
 const route = useRoute()
 const clusterStore = useClusterStore()
+const perm = usePerm()
 const items = ref<NamespaceItem[]>([])
 const search = ref(String(route.query.search || ''))
 const loading = ref(false)

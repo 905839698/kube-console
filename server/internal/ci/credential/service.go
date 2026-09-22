@@ -3,6 +3,8 @@ package credential
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
@@ -97,8 +99,10 @@ func (s *Service) EnsureInNamespace(ctx context.Context, cluster, namespace stri
 	return nil
 }
 
-// credParamValues 返回节点实例中所有 type=credential 属性对应的凭证名。
+// credParamValues 返回节点实例中所有 type=credential 属性对应的凭证引用值。
 // 只有这些属性名承载凭证引用，扫全部 string 参数值会把任意字符串误判成凭证名。
+// 值形态：string（凭证名，标准）或 float64（前端早期提交的凭证 id，JSON 数字）——
+// 两种都要收集，否则 id 形态的引用完全绕过删除守卫。
 func credParamValues(reg nodetype.Registry, n dsl.Node) []string {
 	if reg == nil || n.Params == nil {
 		return nil
@@ -112,8 +116,13 @@ func credParamValues(reg nodetype.Registry, n dsl.Node) []string {
 		if p.Type != "credential" {
 			continue
 		}
-		if v, ok := n.Params[p.Name].(string); ok && v != "" {
-			out = append(out, v)
+		switch v := n.Params[p.Name].(type) {
+		case string:
+			if v != "" {
+				out = append(out, v)
+			}
+		case float64:
+			out = append(out, strconv.FormatInt(int64(v), 10))
 		}
 	}
 	return out
@@ -147,6 +156,10 @@ var validForms = map[string]bool{
 	model.CIFormKubeconfig: true, model.CIFormAKSK: true, model.CIFormRaw: true,
 }
 
+// credNameRe 凭证名会拼进 K8s Secret 名（cred-<name>），必须是 DNS-1123 子域，
+// 否则 EnsureSecret 被 API server 拒绝，用户只能看到误导性的「写入 K8s Secret 失败」。
+var credNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
 // formFromType 旧数据/旧请求无 form 时按 type 推断（registry→basic，cosign→raw，minio→aksk）。
 func formFromType(t string) string {
 	switch t {
@@ -166,6 +179,21 @@ func (s *Service) Create(ctx context.Context, req CreateReq) (*model.CICredentia
 	}
 	if !validForms[form] {
 		return nil, errcode.Newf(errcode.InvalidParam, "非法凭证 form: %s", form)
+	}
+	if !credNameRe.MatchString(req.Name) {
+		return nil, errcode.Newf(errcode.InvalidParam, "凭证名非法: %s（须为小写字母/数字/-，字母数字开头结尾；会拼进 K8s Secret 名 cred-<name>）", req.Name)
+	}
+
+	// 0) 同集群重名先拒：Secret 名由 name 派生（cred-<name>），重名创建会覆写
+	//    既有凭证的密钥材料（EnsureSecret 对已存在 Secret 走合并 patch），
+	//    之后删除任一条记录会删光共享 Secret，让另一条记录悬空
+	var cnt int64
+	if err := s.db.WithContext(ctx).Model(&model.CICredential{}).
+		Where("cluster_name = ? AND name = ?", req.Cluster, req.Name).Count(&cnt).Error; err != nil {
+		return nil, err
+	}
+	if cnt > 0 {
+		return nil, errcode.Newf(errcode.Conflict, "凭证名已存在: %s", req.Name)
 	}
 
 	// 1) 先写 K8s Secret（成功才落库，保证引用不悬空）
@@ -246,48 +274,67 @@ func (s *Service) List(ctx context.Context, cluster string, projectID *uint) ([]
 	return cs, nil
 }
 
-// credReferences 扫描指定集群下流水线的最新版本 DSL，返回 凭证名 -> 引用它的流水线名列表。
-// 凭证与 Secret 都是集群隔离的，跨集群同名凭证不构成引用（否则会误拦/误报）。
-func (s *Service) credReferences(ctx context.Context, cluster string) map[string][]string {
-	out := map[string][]string{}
+// credReferences 扫描指定集群下流水线的最新版本 DSL，返回 凭证引用值 -> 引用它的流水线名列表。
+// 键是 DSL 里的原始引用值（凭证名或早期版本的数字 id 字符串）。
+// 凭证与 Secret 都是集群隔离的，只扫本集群的流水线——跨集群的同名/同 id 凭证
+// 不构成引用（旧实现 versions 查询不带集群过滤，其它集群的引用会混进来，
+// 导致删除被误拦且错误信息里出现空流水线名）。
+// 查询失败返回 error：删除守卫依赖此结果，DB 错误必须上抛而不是当「无引用」。
+func (s *Service) credReferences(ctx context.Context, cluster string) (map[string][]string, error) {
+	var pipes []model.CIPipeline
+	if err := s.db.WithContext(ctx).Where("cluster_name = ?", cluster).Find(&pipes).Error; err != nil {
+		return nil, err
+	}
+	idSet := map[uint]bool{}
+	nameByID := map[uint]string{}
+	for i := range pipes {
+		idSet[pipes[i].ID] = true
+		nameByID[pipes[i].ID] = pipes[i].Name
+	}
 	var versions []model.CIPipelineVersion
 	if err := s.db.WithContext(ctx).
 		Where("version = (SELECT MAX(version) FROM ci_pipeline_versions pv2 WHERE pv2.pipeline_id = ci_pipeline_versions.pipeline_id)").
 		Find(&versions).Error; err != nil {
-		return out
+		return nil, err
 	}
-	var pipes []model.CIPipeline
-	_ = s.db.WithContext(ctx).Where("cluster_name = ?", cluster).Find(&pipes).Error
-	nameByID := map[uint]string{}
-	for i := range pipes {
-		nameByID[pipes[i].ID] = pipes[i].Name
-	}
+	out := map[string][]string{}
 	for i := range versions {
+		if !idSet[versions[i].PipelineID] {
+			continue
+		}
 		g, err := pipelinesvc.ParseGraph(versions[i].GraphJSON)
 		if err != nil {
 			continue
 		}
 		pipe := nameByID[versions[i].PipelineID]
 		for _, n := range g.Nodes {
-			// 只认 schema 中 type=credential 的属性值（精确匹配凭证名），
+			// 只认 schema 中 type=credential 的属性值（精确匹配凭证名/id），
 			// 不再扫全部 string 参数值——任意业务字符串都不该被当成凭证引用
-			for _, credName := range credParamValues(s.reg, n) {
-				out[credName] = append(out[credName], pipe)
+			for _, ref := range credParamValues(s.reg, n) {
+				out[ref] = append(out[ref], pipe)
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (s *Service) fillReferences(ctx context.Context, cs []model.CICredential) {
 	if len(cs) == 0 {
 		return
 	}
-	// List 按集群过滤，cs 同属一个集群
-	refs := s.credReferences(ctx, cs[0].ClusterName)
+	// List 按集群过滤，cs 同属一个集群；引用展示失败不影响列表本身
+	refs, err := s.credReferences(ctx, cs[0].ClusterName)
+	if err != nil {
+		return
+	}
 	for i := range cs {
-		if r, ok := refs[cs[i].Name]; ok {
-			cs[i].References = r
+		// 名字引用 + 早期数字 id 引用都算
+		var merged []string
+		merged = append(merged, refs[cs[i].Name]...)
+		idStr := strconv.FormatUint(uint64(cs[i].ID), 10)
+		merged = append(merged, refs[idStr]...)
+		if len(merged) > 0 {
+			cs[i].References = merged
 		}
 	}
 }
@@ -295,12 +342,13 @@ func (s *Service) fillReferences(ctx context.Context, cs []model.CICredential) {
 // activeRunRefs 检查进行中的 run（pending/running）是否引用该凭证，返回 run id 列表。
 // 删除凭证会连带删 K8s Secret，排队中的 TaskRun 起 Pod 时 envFrom 会失败。
 // 按集群过滤：run 与凭证同集群，跨集群同名凭证不相关。
-func (s *Service) activeRunRefs(ctx context.Context, cluster, credName string) []uint {
+// 查询失败返回 error：DB 抖动时「查不到引用」不能当「无引用」放行删除。
+func (s *Service) activeRunRefs(ctx context.Context, cluster, credName, credIDStr string) ([]uint, error) {
 	var runs []model.CIRun
 	if err := s.db.WithContext(ctx).
 		Where("status IN ? AND cluster_name = ?", []string{model.CIRunStatusPending, model.CIRunStatusRunning}, cluster).
 		Find(&runs).Error; err != nil {
-		return nil
+		return nil, err
 	}
 	var out []uint
 	for i := range runs {
@@ -314,16 +362,16 @@ func (s *Service) activeRunRefs(ctx context.Context, cluster, credName string) [
 		}
 		for _, n := range g.Nodes {
 			// 只匹配 schema 中 type=credential 属性名的取值，避免参数值里恰好
-			// 出现同名字符串（如分支名/镜像名）造成的假阳性
-			for _, name := range credParamValues(s.reg, n) {
-				if name == credName {
+			// 出现同名字符串（如分支名/镜像名）造成的假阳性；名字与早期数字 id 都认
+			for _, ref := range credParamValues(s.reg, n) {
+				if ref == credName || ref == credIDStr {
 					out = append(out, runs[i].ID)
 					break
 				}
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // UpdateReq 更新凭证密钥材料。form/type/name 不可改（DSL 按 name 引用，改名会产生孤儿引用）。
@@ -484,14 +532,23 @@ func (s *Service) Delete(ctx context.Context, id uint) error {
 		}
 		return err
 	}
+	credIDStr := strconv.FormatUint(uint64(c.ID), 10)
 	// 0) 进行中的 run 仍引用该凭证时拒绝删除（删 Secret 会让排队 TaskRun 起 Pod 失败）
-	if refs := s.activeRunRefs(ctx, c.ClusterName, c.Name); len(refs) > 0 {
+	refs, err := s.activeRunRefs(ctx, c.ClusterName, c.Name, credIDStr)
+	if err != nil {
+		return errcode.Newf(errcode.Internal, "检查运行中引用失败，为避免误删已拒绝: %v", err)
+	}
+	if len(refs) > 0 {
 		return errcode.Newf(errcode.Conflict, "凭证被进行中的执行引用（run #%v），请等待其结束后再删除", refs)
 	}
 	// 0.5) 最新版本流水线仍引用时拒绝删除：删掉后流水线的 credential 引用悬空，
 	// 运行时注入会失败，表现为任务里"未注入 registry 凭证"之类莫名报错
-	// （文档承诺的"被引用拒绝"行为）
-	if pipes := s.credReferences(ctx, c.ClusterName)[c.Name]; len(pipes) > 0 {
+	// （文档承诺的"被引用拒绝"行为）；名字引用与早期数字 id 引用都算
+	refsMap, err := s.credReferences(ctx, c.ClusterName)
+	if err != nil {
+		return errcode.Newf(errcode.Internal, "检查流水线引用失败，为避免误删已拒绝: %v", err)
+	}
+	if pipes := append(append([]string{}, refsMap[c.Name]...), refsMap[credIDStr]...); len(pipes) > 0 {
 		return errcode.Newf(errcode.Conflict, "凭证被流水线 %v 的最新版本引用，请先在设计器中改选其它凭证或移除引用后再删除", pipes)
 	}
 	// 1) 删库  2) 删 K8s Secret（best effort）

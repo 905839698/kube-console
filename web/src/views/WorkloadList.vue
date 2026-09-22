@@ -4,13 +4,13 @@
       <div class="card-header">
         <span>{{ kindTitle }} ({{ items.length }})</span>
         <div class="header-right">
-          <el-button v-if="selected.length && !isPod" size="small" type="warning" plain :disabled="kind === 'cronjobs' || kind === 'jobs'" @click="batchRestart">重启选中 ({{ selected.length }})</el-button>
-          <el-button v-if="selected.length" size="small" type="danger" plain @click="batchDelete">删除选中 ({{ selected.length }})</el-button>
+          <el-button v-if="selected.length && !isPod" size="small" type="warning" plain :disabled="kind === 'cronjobs' || kind === 'jobs' || !canWriteSelected" @click="batchRestart">重启选中 ({{ selected.length }})</el-button>
+          <el-button v-if="selected.length" size="small" type="danger" plain :disabled="!canWriteSelected" @click="batchDelete">删除选中 ({{ selected.length }})</el-button>
           <el-input v-model="search" placeholder="搜索..." :prefix-icon="Search" clearable style="width: 200px" @input="load" />
           <el-button :icon="Refresh" circle @click="load" />
           <el-button size="default" @click="exportVisible = true">导出</el-button>
           <el-button size="default" @click="importDlg?.pick()">导入</el-button>
-          <el-button v-if="!isPod" type="primary" size="default" @click="openCreate">
+          <el-button v-if="!isPod" type="primary" size="default" :disabled="!perm.canWriteNS(createNs)" @click="openCreate">
             <el-icon><Plus /></el-icon>&nbsp;新建
           </el-button>
         </div>
@@ -59,18 +59,18 @@
                 <el-dropdown-item command="detail">详情</el-dropdown-item>
                 <el-dropdown-item command="logs">日志</el-dropdown-item>
                 <el-dropdown-item command="terminal">终端</el-dropdown-item>
-                <el-dropdown-item command="evict" divided>驱除（尊重 PDB）</el-dropdown-item>
-                <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                <el-dropdown-item command="evict" divided :disabled="noWrite(row)">驱除（尊重 PDB）</el-dropdown-item>
+                <el-dropdown-item command="delete" divided :disabled="noWrite(row)">删除</el-dropdown-item>
               </el-dropdown-menu>
               <el-dropdown-menu v-else>
                 <el-dropdown-item command="detail">详情</el-dropdown-item>
-                <el-dropdown-item command="edit">可视化编辑</el-dropdown-item>
-                <el-dropdown-item command="yaml" divided>编辑 YAML</el-dropdown-item>
-                <el-dropdown-item command="scale" :disabled="kind === 'daemonsets' || kind === 'cronjobs'">缩放</el-dropdown-item>
-                <el-dropdown-item command="restart" :disabled="kind === 'cronjobs' || kind === 'jobs'">重启</el-dropdown-item>
+                <el-dropdown-item command="edit" :disabled="noWrite(row)">可视化编辑</el-dropdown-item>
+                <el-dropdown-item command="yaml" divided :disabled="noWrite(row)">编辑 YAML</el-dropdown-item>
+                <el-dropdown-item command="scale" :disabled="noWrite(row) || kind === 'daemonsets' || kind === 'cronjobs'">缩放</el-dropdown-item>
+                <el-dropdown-item command="restart" :disabled="noWrite(row) || kind === 'cronjobs' || kind === 'jobs'">重启</el-dropdown-item>
                 <el-dropdown-item command="rollouts" v-if="kind === 'deployments'">历史版本/回滚</el-dropdown-item>
-                <el-dropdown-item command="image">调整镜像</el-dropdown-item>
-                <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                <el-dropdown-item command="image" :disabled="noWrite(row)">调整镜像</el-dropdown-item>
+                <el-dropdown-item command="delete" divided :disabled="noWrite(row)">删除</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -161,6 +161,7 @@ import ResourceExportDialog from '../components/ResourceExportDialog.vue'
 import ResourceImportDialog from '../components/ResourceImportDialog.vue'
 import { useClusterStore } from '../store/cluster'
 import { useNamespaceStore } from '../store/namespace'
+import { usePerm } from '../store/perm'
 import { parseDuration } from '../utils/sort'
 import { confirmDelete, confirmDeleteCount } from '../utils/confirm'
 
@@ -192,6 +193,11 @@ const paged = computed(() => {
 })
 
 const nsOf = (row: WorkloadItem) => row.namespace || namespace.value[0] || 'default'
+
+// 写权限（按「授权」页的命名空间粒度授权）：只读用户禁用写操作按钮，后端仍会强制判定
+const perm = usePerm()
+const noWrite = (row: WorkloadItem) => !perm.canWriteNS(nsOf(row))
+const canWriteSelected = computed(() => selected.value.length > 0 && selected.value.every((w) => perm.canWriteNS(nsOf(w))))
 
 async function batchDelete() {
   if (!selected.value.length) return

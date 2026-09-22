@@ -40,8 +40,15 @@ const emit = defineEmits(['update:modelValue'])
 const pairs = ref<{ k: string; v: string }[]>([])
 
 function syncFrom() {
-  pairs.value = Object.entries(props.modelValue || {}).map(([k, v]) => ({ k, v }))
-  if (pairs.value.length === 0) pairs.value = [{ k: '', v: '' }]
+  const next = Object.entries(props.modelValue || {}).map(([k, v]) => ({ k, v: String(v ?? '') }))
+  // 「改标签名」时先全选删除 key：空 key 行不在父对象里（sync 只输出非空 key），
+  // 直接重建会让正在编辑的行消失、value 静默丢失——保留有值的空 key 行
+  for (const p of pairs.value) {
+    if (!p.k.trim() && p.v && !next.some((n) => !n.k && n.v === p.v)) {
+      next.push({ k: '', v: p.v })
+    }
+  }
+  pairs.value = next.length ? next : [{ k: '', v: '' }]
 }
 
 watch(

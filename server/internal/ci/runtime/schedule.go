@@ -81,7 +81,7 @@ func (s *Scheduler) fire(ctx context.Context, sch *model.CISchedule, now time.Ti
 
 	runCtx, cancel := context.WithTimeout(ctx, startRunTimeout)
 	defer cancel()
-	run, err := s.rt.StartRun(runCtx, sch.PipelineID, 0, 0, "scheduler", "schedule", "")
+	run, err := s.rt.StartRun(runCtx, sch.PipelineID, 0, 0, "scheduler", "schedule", "", "")
 	if err != nil {
 		_ = s.db.WithContext(ctx).Model(&model.CISchedule{}).
 			Where("id = ?", sch.ID).Update("last_error", truncateStr(err.Error(), 500)).Error

@@ -227,7 +227,9 @@ func (h *K8sHandler) DrainNode(c *gin.Context) {
 		// kubectl drain 默认忽略 DaemonSet
 		req.IgnoreDaemonsets = true
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(req.TimeoutSeconds)*time.Second+30*time.Second)
+	// drain 是长时操作：不挂在请求 ctx 上——浏览器超时/关页不能把节点留在
+	// 「已 cordon + 部分 Pod 残留」的半截状态，按自身超时跑完
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.TimeoutSeconds)*time.Second+30*time.Second)
 	defer cancel()
 	nodeName := c.Param("name")
 
@@ -337,8 +339,9 @@ func evictDrain(ctx context.Context, client *kube.Client, pod *corev1.Pod, grace
 		if err == nil {
 			return nil
 		}
-		msg := fmt.Sprintf("%v", err)
-		if !strings.Contains(msg, "Too Many Requests") && !strings.Contains(msg, "429") {
+		// PDB 拦截是 StatusError reason=TooManyRequests（message 里并没有
+		// "Too Many Requests"/"429" 字样，按字符串匹配永不命中、重试逻辑形同虚设）
+		if !apierrors.IsTooManyRequests(err) {
 			return fmt.Errorf("%v", err)
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {

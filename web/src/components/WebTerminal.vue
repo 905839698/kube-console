@@ -120,8 +120,13 @@ function mountTerminal() {
   connect()
 }
 
+// 连接代际：重连时旧 socket 的 onclose 会晚于新连接触发，
+// 无代际校验会把「已连接」的新会话误标成「连接断开」
+let wsGen = 0
+
 function connect() {
   if (!term) return
+  const gen = ++wsGen
   status.value = '连接中...'
   connected.value = false
   term.writeln('\x1b[90m正在连接 Shell...\x1b[0m')
@@ -137,6 +142,7 @@ function connect() {
   ws.binaryType = 'arraybuffer'
 
   ws.onopen = () => {
+    if (gen !== wsGen) return // 已被更新的连接取代
     connected.value = true
     status.value = '已连接'
     if (term) {
@@ -169,6 +175,7 @@ function connect() {
     }
   }
   ws.onclose = () => {
+    if (gen !== wsGen) return // 旧连接的迟到 close 事件，不影响新会话
     connected.value = false
     if (!disposed && status.value !== '已断开') {
       status.value = '连接断开'
@@ -176,6 +183,7 @@ function connect() {
     }
   }
   ws.onerror = () => {
+    if (gen !== wsGen) return
     connected.value = false
     status.value = '连接失败'
   }

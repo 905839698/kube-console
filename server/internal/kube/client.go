@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
@@ -47,7 +48,13 @@ func NewClient(kubeconfig string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	disc, err := discovery.NewDiscoveryClientForConfig(restCfg)
+	// 连通性校验的 discovery 客户端单独限超时：restCfg.Timeout 未配置时
+	// （默认 0）对黑洞 IP 的 ServerVersion 会挂到 OS 层 TCP 超时（数分钟）
+	discCfg := *restCfg
+	if discCfg.Timeout == 0 {
+		discCfg.Timeout = 10 * time.Second
+	}
+	disc, err := discovery.NewDiscoveryClientForConfig(&discCfg)
 	if err != nil {
 		return nil, err
 	}

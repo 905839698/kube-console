@@ -79,12 +79,25 @@ func TestSyncAlertEventsLifecycle(t *testing.T) {
 	if err := db.Where("cluster = ? AND fingerprint = ?", "c1", "fp1").First(&ev).Error; err != nil {
 		t.Fatalf("记录应保留: %v", err)
 	}
+	// 短暂消失未过恢复宽限（10min）不判恢复——防 AM 重启/查询异常的单次
+	// 空列表批量误判 resolved
+	if ev.State != model.AlertStateFiring {
+		t.Fatalf("未过宽限不应判恢复: %+v", ev)
+	}
+
+	// 4. 持续消失超过宽限 → 判定恢复
+	if err := syncAlertEvents(db, "c1", nil, now1.Add(15*time.Minute)); err != nil {
+		t.Fatalf("同步失败: %v", err)
+	}
+	if err := db.Where("cluster = ? AND fingerprint = ?", "c1", "fp1").First(&ev).Error; err != nil {
+		t.Fatalf("记录应保留: %v", err)
+	}
 	if ev.State != model.AlertStateResolved || ev.ResolvedAt == nil {
 		t.Fatalf("应判定恢复: %+v", ev)
 	}
 
-	// 4. 同指纹再次 firing → 新开一条
-	if err := syncAlertEvents(db, "c1", alerts, now1.Add(3*time.Minute)); err != nil {
+	// 5. 同指纹再次 firing → 新开一条
+	if err := syncAlertEvents(db, "c1", alerts, now1.Add(16*time.Minute)); err != nil {
 		t.Fatalf("同步失败: %v", err)
 	}
 	db.Model(&model.AlertEvent{}).Where("cluster = ?", "c1").Count(&cnt)

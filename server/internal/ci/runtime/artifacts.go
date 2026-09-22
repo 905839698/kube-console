@@ -17,8 +17,9 @@ import (
 // enrichGraph 编译前对 DSL 做运行时增强：
 //   - upload-artifact 节点注入存储端点伪参数（nexusBase/minioEndpoint/minioBucket）
 //   - build-image 节点注入 BuildKit 构建器地址（buildkitdAddr）
-//   - branchOverride 非空时覆盖 git-clone 节点的 branch（Webhook 按实际推送分支）
-func (s *Service) enrichGraph(g *dsl.Graph, branchOverride string) {
+//   - branchOverride 非空时覆盖 git-clone 节点的 branch（Webhook 按实际推送分支）；
+//     否则 commitOverride 非空时覆盖 commit（重跑按原 commit 精确复现）
+func (s *Service) enrichGraph(g *dsl.Graph, branchOverride, commitOverride string) {
 	for i := range g.Nodes {
 		n := &g.Nodes[i]
 		switch n.Type {
@@ -52,6 +53,13 @@ func (s *Service) enrichGraph(g *dsl.Graph, branchOverride string) {
 				// 分支触发时清掉 tag/commit，避免歧义
 				delete(n.Params, "tag")
 				delete(n.Params, "commit")
+			} else if commitOverride != "" {
+				if n.Params == nil {
+					n.Params = map[string]interface{}{}
+				}
+				n.Params["commit"] = commitOverride
+				// commit 优先级最高（脚本内 commit > tag > branch），清 tag 避免歧义
+				delete(n.Params, "tag")
 			}
 		}
 	}
@@ -275,23 +283,6 @@ func appendUniqueString(ss []string, v string) []string {
 		}
 	}
 	return append(ss, v)
-}
-
-// injectTaskRunEnv 给每个 Task 的每个 step 注入 CI_TASK_RUN 环境变量（= 该 TaskRun 名）。
-// Tekton 不会自动注入 TaskRun 名，审批等需要「自发现本 TaskRun」的节点靠它。
-// Pipeline 任务的 TaskRun 名约定为 <pipelineRunName>-<taskName>。
-func (s *Service) injectTaskRunEnv(spec *compiler.PipelineSpec, runName string) {
-	for i := range spec.Spec.Tasks {
-		task := &spec.Spec.Tasks[i]
-		if task.TaskSpec == nil {
-			continue
-		}
-		trName := runName + "-" + task.Name
-		for j := range task.TaskSpec.Steps {
-			task.TaskSpec.Steps[j].Env = append(task.TaskSpec.Steps[j].Env,
-				nodetype.EnvVar{Name: "CI_TASK_RUN", Value: trName})
-		}
-	}
 }
 
 func (s *Service) projectIDOfPipeline(ctx context.Context, pipelineID uint) (uint, error) {

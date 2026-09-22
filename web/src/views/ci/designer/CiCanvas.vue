@@ -149,6 +149,8 @@ const edges = ref<Edge[]>(toVEs(props.edges))
 
 // 节点右上角 ×：连带移除关联边
 function deleteById(id: string) {
+  // 删的正是当前选中节点时同步清选择，否则属性面板继续显示幽灵节点的参数
+  if (props.selected?.id === id) props.onSelect(null)
   nodes.value = nodes.value.filter((n) => n.id !== id)
   edges.value = edges.value.filter((e) => e.source !== id && e.target !== id)
 }
@@ -199,12 +201,14 @@ function onEdgesChange(changes: EdgeChange[]) {
   edges.value = applyEdgeChanges(changes, edges.value)
 }
 
-// 连线：禁自环
+// 连线：禁自环 + 禁重复（同 id 重复边会让 vue-flow 渲染异常，DSL 里也是冗余边）
 function onConnect(conn: Connection) {
   const { source, target, sourceHandle } = conn
   if (!source || !target || source === target) return
+  const id = edgeId(source, sourceHandle, target)
+  if (edges.value.some((e) => e.id === id || (e.source === source && e.target === target))) return
   edges.value = [...edges.value, {
-    id: edgeId(source, sourceHandle, target),
+    id,
     source, target,
     sourceHandle: sourceHandle || undefined,
     animated: true,
@@ -234,8 +238,9 @@ function onDrop(e: DragEvent) {
   }]
 }
 function onDragOver(e: DragEvent) {
+  // 拖拽中逐帧触发：不要 setData（浏览器对 dragover 里写数据有限制且无意义，
+  // 数据在 NodePanel 的 dragstart 上写入即可）
   e.preventDefault()
-  e.dataTransfer?.setData('text/plain', '')
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
 }
 

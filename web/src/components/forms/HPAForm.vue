@@ -20,7 +20,8 @@
           <el-select v-model="m.resource.name" size="small" style="width: 160px">
             <el-option v-for="t in ['cpu', 'memory']" :key="t" :label="t" :value="t" />
           </el-select>
-          <el-select v-model="m.resource.target.type" size="small" style="width: 140px">
+          <el-select :model-value="m.resource.target.type" size="small" style="width: 140px"
+            @update:model-value="(v) => onTargetType(m, v)">
             <el-option v-for="t in ['Utilization', 'AverageValue']" :key="t" :label="t" :value="t" />
           </el-select>
           <el-input-number
@@ -32,7 +33,7 @@
             style="width: 130px"
           />
           <el-input v-else v-model="m.resource.target.averageValue" placeholder="如 100m" size="small" style="width: 130px" />
-          <span class="unit">%</span>
+          <span v-if="m.resource.target.type === 'Utilization'" class="unit">%</span>
           <el-button size="small" type="danger" text @click="removeMetric(i)"><el-icon><Delete /></el-icon></el-button>
         </div>
         <el-button size="small" type="primary" plain @click="addMetric"><el-icon><Plus /></el-icon>添加指标</el-button>
@@ -64,6 +65,27 @@ function addMetric() {
     type: 'Resource',
     resource: { name: 'cpu', target: { type: 'Utilization', averageUtilization: 80 } },
   })
+}
+
+// target.type 二选一：切过去必须清掉另一种的字段，
+// 否则 target 里同时有 averageUtilization 和 averageValue，API 直接拒绝整个 HPA
+function onTargetType(m: any, t: string) {
+  m.resource.target.type = t
+  if (t === 'Utilization') {
+    delete m.resource.target.averageValue
+    if (m.resource.target.averageUtilization == null) m.resource.target.averageUtilization = 80
+  } else {
+    delete m.resource.target.averageUtilization
+  }
+}
+
+// 结构保底（首帧渲染前）：旧 metric 缺 resource/target 时模板访问 undefined 会白屏
+for (const m of props.modelValue?.spec?.metrics || []) {
+  if (m.type !== 'Resource') continue
+  m.resource = m.resource || { name: 'cpu' }
+  m.resource.target = m.resource.target || { type: 'Utilization', averageUtilization: 80 }
+  if (m.resource.target.type === 'Utilization') delete m.resource.target.averageValue
+  else delete m.resource.target.averageUtilization
 }
 
 function removeMetric(idx: number) {

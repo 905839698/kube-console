@@ -3,7 +3,7 @@
     <template #header>
       <div class="card-header">
         <span>备份概览（Velero）</span>
-        <el-select v-model="clusterName" style="width: 200px" @change="load">
+        <el-select v-model="clusterName" style="width: 200px" @change="onClusterChange">
           <el-option v-for="cl in clusters" :key="cl" :label="cl" :value="cl" />
         </el-select>
         <el-button :icon="Refresh" circle size="small" @click="load" style="margin-left: 12px" />
@@ -36,6 +36,9 @@
 import { onMounted, ref } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { backupApi, clusterApi, type GenericItem } from '../api'
+import { useClusterStore } from '../store/cluster'
+
+const clusterStore = useClusterStore()
 
 const clusters = ref<string[]>([])
 const clusterName = ref('')
@@ -51,14 +54,22 @@ async function load() {
     items.value = r.items || []
     schedules.value = r.schedules || []
   } catch {
-    installed.value = false
+    // 请求失败（RBAC/网络）不等于「未安装 Velero」：保留原状态，
+    // 错误提示由拦截器负责（旧实现 catch 里置 installed=false 误导排查方向）
   }
+}
+
+// 下拉与顶栏全局集群选择联动：backupApi 经 http 层按 activeCluster 带 X-Cluster，
+// 本地 ref 不 select 的话选别的集群页面数据不变（显示与数据不一致）
+function onClusterChange(name: string) {
+  clusterStore.select(name)
+  load()
 }
 
 onMounted(async () => {
   try {
     clusters.value = (await clusterApi.list()).map((c) => c.name)
-    clusterName.value = clusters.value[0] || ''
+    clusterName.value = clusterStore.current || clusters.value[0] || ''
     await load()
   } catch { /* ignore */ }
 })

@@ -296,6 +296,9 @@ var placeholderRe = regexp.MustCompile(`\{\{(\w+)\}\}`)
 //  2. 独占一个 YAML 标量（`key: {{k}}` 整行）：字符串值加双引号（YAML 安全），
 //     数字/布尔不加引号。
 //  3. 其余（嵌在大 token 里、shell 脚本块内）：原样替换（脚本上下文需要原样）。
+//     值是多行文本时续行按占位符所在行的缩进补齐：块标量（script: |）里续行若顶格
+//     会直接终止标量，渲染出的 YAML 解析失败——多行 shell 参数（script / preShell /
+//     configFiles）正是这种输入。
 func renderTemplate(tmpl string, merged map[string]interface{}) string {
 	// 1) 双引号段内：转义替换
 	tmpl = quotedSegRe.ReplaceAllStringFunc(tmpl, func(seg string) string {
@@ -328,14 +331,69 @@ func renderTemplate(tmpl string, merged map[string]interface{}) string {
 		}
 		return m[1] + renderValue(v) + m[3]
 	})
-	// 3) 其余位置：原样替换（脚本块 / 嵌入 token）
-	for k, v := range merged {
-		tmpl = strings.ReplaceAll(tmpl, "{{"+k+"}}", fmt.Sprint(v))
-	}
-	// 兜底：无默认值且用户未填的参数，占位符替换为空串。
-	// 若残留字面量，脚本里的 [ -n "{{x}}" ] 会恒真，把占位符当合法值拼进命令。
-	tmpl = placeholderRe.ReplaceAllString(tmpl, "")
+	// 3) 其余位置：原样替换（脚本块 / 嵌入 token）。
+	// 单遍替换：用户值里可能含 {{word}} 字面量（如 commitMessage 写 release {{v2}} build），
+	// 若按 key 逐个对已替换文本做 ReplaceAll，用户内容会被二次吞掉（且 map 遍历顺序
+	// 不确定，编译结果随运气漂移）
+	tmpl = replaceWithIndent(tmpl, func(name string) string {
+		v, ok := merged[name]
+		if !ok {
+			// 兜底：无默认值且用户未填的参数，占位符替换为空串。
+			// 若残留字面量，脚本里的 [ -n "{{x}}" ] 会恒真，把占位符当合法值拼进命令。
+			return ""
+		}
+		return fmt.Sprint(v)
+	})
 	return tmpl
+}
+
+// replaceWithIndent 与 placeholderRe.ReplaceAllStringFunc 相同，但值是多行文本时
+// 把续行缩进到占位符所在行的前导空白（单行值逐字替换，与既有行为完全一致）。
+// 用 FindAllStringIndex 而非 ReplaceAllStringFunc 是因为缩进量取决于占位符在模板中
+// 的列位置，回调里拿不到偏移。
+func replaceWithIndent(tmpl string, value func(name string) string) string {
+	idx := placeholderRe.FindAllStringIndex(tmpl, -1)
+	if len(idx) == 0 {
+		return tmpl
+	}
+	var b strings.Builder
+	last := 0
+	for _, m := range idx {
+		ph := tmpl[m[0]:m[1]]
+		v := value(ph[2 : len(ph)-2])
+		// 多行值的续行必须与首行同缩进，否则块标量被顶格行终止
+		if strings.Contains(v, "\n") {
+			v = indentContinuation(tmpl, m[0], v)
+		}
+		b.WriteString(tmpl[last:m[0]])
+		b.WriteString(v)
+		last = m[1]
+	}
+	b.WriteString(tmpl[last:])
+	return b.String()
+}
+
+// indentContinuation 把多行值的续行缩进到 pos 所在行的前导空白（首行已在占位符位置，
+// 不再加缩进）。空行保持为空：块标量里空行不终止标量，补缩进反而会留下尾随空白。
+// 占位符前面并非纯空白（同一行还有别的内容）时无法安全推断缩进，原样返回。
+func indentContinuation(tmpl string, pos int, v string) string {
+	lineStart := strings.LastIndexByte(tmpl[:pos], '\n') + 1
+	prefix := tmpl[lineStart:pos]
+	if strings.TrimSpace(prefix) != "" {
+		return v
+	}
+	// 浏览器 textarea 提交的是 LF，这里兜住手工粘贴/接口直发的 CRLF，
+	// 避免 \r 落进 YAML 块标量内容
+	v = strings.ReplaceAll(v, "\r\n", "\n")
+	lines := strings.Split(v, "\n")
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "" {
+			lines[i] = ""
+			continue
+		}
+		lines[i] = prefix + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 var (

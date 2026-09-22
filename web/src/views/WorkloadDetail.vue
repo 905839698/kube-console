@@ -10,11 +10,12 @@
             <el-button size="small" @click="refresh">刷新</el-button>
             <el-button size="small" type="primary" @click="openFormEdit">可视化编辑</el-button>
             <el-button size="small" plain @click="openYaml">编辑 YAML</el-button>
-            <el-button size="small" @click="openScale" v-if="kind !== 'cronjobs' && kind !== 'jobs'">缩放</el-button>
-            <el-button size="small" type="warning" plain @click="openRollouts" v-if="kind === 'deployments'">历史版本/回滚</el-button>
+            <el-button size="small" :disabled="noWrite" @click="openScale" v-if="kind !== 'cronjobs' && kind !== 'jobs'">缩放</el-button>
+            <el-button size="small" type="warning" plain :disabled="noWrite" @click="openRollouts" v-if="kind === 'deployments'">历史版本/回滚</el-button>
             <el-button size="small" plain @click="imageVisible = true" v-if="kind !== 'pods'">调整镜像</el-button>
-            <el-button size="small" type="warning" plain @click="doRestart" v-if="kind !== 'cronjobs' && kind !== 'jobs'">重启</el-button>
-            <el-button size="small" type="danger" plain @click="doDelete">删除</el-button>
+            <el-button size="small" type="success" plain @click="collectVisible = true" v-if="['deployments', 'statefulsets', 'daemonsets'].includes(kind)">日志采集</el-button>
+            <el-button size="small" type="warning" plain :disabled="noWrite" @click="doRestart" v-if="kind !== 'cronjobs' && kind !== 'jobs'">重启</el-button>
+            <el-button size="small" type="danger" plain :disabled="noWrite" @click="doDelete">删除</el-button>
           </div>
         </div>
       </template>
@@ -58,6 +59,9 @@
                 </span>
               </el-descriptions-item>
               <el-descriptions-item label="更新策略">{{ detail?.strategy }}</el-descriptions-item>
+              <el-descriptions-item v-if="kind === 'cronjobs'" label="调度">
+                {{ detail?.schedule }}<span v-if="nextRun" class="next-run"> · 下次执行 {{ nextRun }}</span>
+              </el-descriptions-item>
               <el-descriptions-item label="运行时长">{{ detail?.age }}</el-descriptions-item>
               <el-descriptions-item label="选择器" :span="2">
                 <el-tag v-for="(v, k) in detail?.selector" :key="k" size="small" style="margin-right: 4px">{{ k }}={{ v }}</el-tag>
@@ -193,7 +197,7 @@
         <el-table-column prop="changeCause" label="变更说明" min-width="140" show-overflow-tooltip />
         <el-table-column label="操作" width="130" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="warning" plain :disabled="row.current" @click="doRollback(row)">回滚到此版本</el-button>
+            <el-button size="small" type="warning" plain :disabled="row.current || noWrite" @click="doRollback(row)">回滚到此版本</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -213,6 +217,17 @@
 
     <!-- 调整镜像版本（tag 从已配置仓库拉取） -->
     <ImageUpdateDialog v-model="imageVisible" :kind="kind" :namespace="namespace" :name="name" @saved="load" />
+
+    <!-- 容器内日志采集（Fluent Bit Sidecar） -->
+    <LogCollectionDialog
+      v-model="collectVisible"
+      :kind="kind"
+      :namespace="namespace"
+      :name="name"
+      :containers="(detail?.containers || []).map((c) => c.name)"
+      :no-write="noWrite"
+      @saved="load"
+    />
 
     <!-- Pod 日志抽屉 -->
     <PodLogsDrawer v-model="logsVisible" :pod="logsPod" :container="logsContainer" />
@@ -241,14 +256,20 @@ import EventTable from '../components/EventTable.vue'
 import PodLogsDrawer from '../components/PodLogsDrawer.vue'
 import WebTerminal from '../components/WebTerminal.vue'
 import ImageUpdateDialog from '../components/ImageUpdateDialog.vue'
+import LogCollectionDialog from '../components/LogCollectionDialog.vue'
 import MetricPanel, { type MetricCardDef, type MetricChartDef } from '../components/MetricPanel.vue'
 import RangeSwitch from '../components/RangeSwitch.vue'
 import { useClusterStore } from '../store/cluster'
+import { usePerm } from '../store/perm'
 import { confirmDelete } from '../utils/confirm'
 
 const route = useRoute()
 const router = useRouter()
 const clusterStore = useClusterStore()
+
+// 写权限（按「授权」页的命名空间粒度授权）：只读用户禁用写按钮，后端仍强制判定
+const perm = usePerm()
+const noWrite = computed(() => !perm.canWriteNS(namespace.value))
 
 const kind = computed(() => String(route.params.kind))
 
@@ -276,7 +297,11 @@ async function openRollouts() {
 }
 
 async function doRollback(row: RolloutItem) {
-  await ElMessageBox.confirm(`确定回滚到版本 ${row.revision}（镜像 ${row.image}）？将触发滚动更新。`, '回滚确认', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm(`确定回滚到版本 ${row.revision}（镜像 ${row.image}）？将触发滚动更新。`, '回滚确认', { type: 'warning' })
+  } catch {
+    return
+  }
   await k8sApi.rollback(namespace.value, name.value, row.revision)
   ElMessage.success(`已回滚到版本 ${row.revision}`)
   rolloutsVisible.value = false
@@ -553,6 +578,9 @@ async function doDelete() {
 
 // ------------------- 调整镜像版本（逻辑见 ImageUpdateDialog） -------------------
 const imageVisible = ref(false)
+
+// ------------------- 容器内日志采集（逻辑见 LogCollectionDialog） -------------------
+const collectVisible = ref(false)
 </script>
 
 <style scoped>
@@ -607,4 +635,6 @@ const imageVisible = ref(false)
 .view-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; color: #1f2937; }
 .view-sub { font-size: 12px; color: #9ca3af; font-weight: 400; }
 .sub-title { font-weight: 600; color: #606266; margin: 16px 0 8px; }
+
+.next-run { color: var(--el-color-primary); font-size: 12px; margin-left: 4px; }
 </style>

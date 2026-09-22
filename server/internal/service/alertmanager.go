@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 
@@ -277,18 +278,28 @@ func SaveAMConfigYAML(ctx context.Context, c *kube.Client, ref, yamlText string)
 	if err != nil {
 		return err
 	}
-	secret, err := c.Clientset.CoreV1().Secrets(ns).Get(ctx, name, v1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("读取 Secret %s 失败: %w", ref, err)
+	// Get→Update 无乐观锁保护：与 AM operator 写同一 Secret 并发（或两人同时保存）
+	// 会 409——重试（重新 Get 最新 resourceVersion 再编码写回）
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		secret, err := c.Clientset.CoreV1().Secrets(ns).Get(ctx, name, v1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("读取 Secret %s 失败: %w", ref, err)
+		}
+		if secret.Data == nil {
+			secret.Data = map[string][]byte{}
+		}
+		if err := amConfigEncode(secret.Data, yamlText); err != nil {
+			return err
+		}
+		if _, err := c.Clientset.CoreV1().Secrets(ns).Update(ctx, secret, v1.UpdateOptions{}); err != nil {
+			if apierrors.IsConflict(err) {
+				lastErr = err
+				continue
+			}
+			return fmt.Errorf("写回 Secret %s 失败: %w", ref, err)
+		}
+		return nil
 	}
-	if secret.Data == nil {
-		secret.Data = map[string][]byte{}
-	}
-	if err := amConfigEncode(secret.Data, yamlText); err != nil {
-		return err
-	}
-	if _, err := c.Clientset.CoreV1().Secrets(ns).Update(ctx, secret, v1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("写回 Secret %s 失败: %w", ref, err)
-	}
-	return nil
+	return fmt.Errorf("写回 Secret %s 冲突重试 3 次仍失败: %w", ref, lastErr)
 }

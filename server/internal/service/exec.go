@@ -133,10 +133,10 @@ func (s *K8sService) execShellFallback(ctx context.Context, c *kube.Client, ws *
 		isStartupFail := strings.Contains(err.Error(), "no such file or directory") ||
 			strings.Contains(err.Error(), "executable file not found")
 		if !isStartupFail || i == len(shells)-1 {
-			if isStartupFail {
-				allStartupFail = true
-			}
-			return friendlyShellError(err, allStartupFail)
+			// 仅当本次也是「shell 不存在」且之前每次都是时才判「无 shell」
+			// （旧实现累积标志：前面 sh 不存在、后面因 Pod 删除等其它原因失败时，
+			// 真实错误会被「容器内没有可用的 shell」误导）
+			return friendlyShellError(err, isStartupFail && allStartupFail)
 		}
 		allStartupFail = true
 		// 提示前端正在切换 shell
@@ -273,6 +273,10 @@ func (s *K8sService) execShellAttempt(ctx context.Context, c *kube.Client, ws *w
 	go func() {
 		defer wg.Done()
 		defer stdinW.Close()
+		// sizeCh 由消费协程（唯一写入方）退出时 close：client-go 的
+		// handleResizes goroutine 见 Next()==nil（channel 已关）即退出，
+		// 否则每个会话泄漏一个永久阻塞的 goroutine
+		defer func() { close(sizeCh) }()
 		for {
 			select {
 			case <-stop:
@@ -313,6 +317,9 @@ func (s *K8sService) execShellAttempt(ctx context.Context, c *kube.Client, ws *w
 	}
 	err = executor.StreamWithContext(ctx, opts)
 	close(stop)
+	// stdin 读端已停止读取：必须 close stdinR，否则正阻塞在 stdinW.Write 的
+	// 消费协程永远不会醒来，wg.Wait() 死锁、WS 永不关闭
+	_ = stdinR.Close()
 	wg.Wait()
 	return err
 }
@@ -449,6 +456,8 @@ func (s *K8sService) execNodeShellAttempt(ctx context.Context, c *kube.Client, w
 	go func() {
 		defer wg.Done()
 		defer stdinW.Close()
+		// sizeCh 由消费协程（唯一写入方）退出时 close（理由同 execShellAttempt）
+		defer func() { close(sizeCh) }()
 		for {
 			select {
 			case <-stop:
@@ -486,6 +495,7 @@ func (s *K8sService) execNodeShellAttempt(ctx context.Context, c *kube.Client, w
 	}
 	err = executor.StreamWithContext(ctx, opts)
 	close(stop)
+	_ = stdinR.Close()
 	wg.Wait()
 	return err
 }

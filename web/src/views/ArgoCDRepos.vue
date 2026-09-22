@@ -11,7 +11,7 @@
     </template>
 
     <el-alert v-if="!installed" type="info" :closable="false"
-      title="当前集群未部署 ArgoCD（未发现 repositories.argoproj.io CRD）。" />
+      title="当前集群未部署 ArgoCD（未发现 applications.argoproj.io CRD）。" />
 
     <el-table border v-else :data="repos" v-loading="loading" size="small" stripe>
       <el-table-column prop="name" label="名称" min-width="170">
@@ -141,6 +141,12 @@ const repos = ref<ArgoCDRepo[]>([])
 const dialogVisible = ref(false)
 const editing = ref(false)
 const saving = ref(false)
+// 编辑前的原始 URL：用于保存时检测「主机级 ↔ 完整仓库」语义翻转
+const editOrigUrl = ref('')
+// 编辑前原仓库是否已有对应凭据：决定「留空 = 保持原值」是否成立
+// （匿名仓库没有可保持的值，留空保存会产出「声明 http 认证但无密码」的坏 secret）
+const editOrigHasPassword = ref(false)
+const editOrigHasSSHKey = ref(false)
 const form = reactive({
   namespace: 'argocd',
   name: '',
@@ -163,18 +169,25 @@ async function load() {
     if (r.namespace) form.namespace = r.namespace
     repos.value = r.items || []
   } catch {
-    installed.value = false
+    // 列表失败（RBAC/网络）不等于「未部署」：后端仅在 CRD 不存在时才返回 installed:false，
+    // 其余错误由全局 toast 提示，installed 保持原值
   } finally {
     loading.value = false
   }
 }
 function openCreate() {
   editing.value = false
+  editOrigUrl.value = ''
+  editOrigHasPassword.value = false
+  editOrigHasSSHKey.value = false
   Object.assign(form, { namespace: form.namespace || 'argocd', name: '', url: '', type: 'git', authType: 'none', username: '', password: '', sshPrivateKey: '', insecure: false, enableLfs: false })
   dialogVisible.value = true
 }
 function openEdit(row: ArgoCDRepo) {
   editing.value = true
+  editOrigUrl.value = row.url
+  editOrigHasPassword.value = !!row.hasPassword
+  editOrigHasSSHKey.value = !!row.hasSSHKey
   Object.assign(form, {
     namespace: row.namespace,
     name: row.name,
@@ -195,6 +208,9 @@ function buildPayload() {
     name: form.name,
     url: form.url,
     type: form.type,
+    // 显式声明认证形态：服务端据此重置凭据（切 http 清掉残留的 ssh 密钥、切匿名清全部），
+    // 密码/私钥留空 = 保持原值
+    authType: form.authType,
     insecure: form.insecure,
     enableLfs: form.enableLfs,
     username: '',
@@ -209,22 +225,48 @@ function buildPayload() {
   }
   return payload
 }
+// URL 是否主机级（无路径）：决定 secret 是凭据模板（repo-creds）还是完整仓库（repository）
+function isHostOnly(u: string): boolean {
+  try {
+    const p = new URL(u)
+    return !p.pathname || p.pathname === '/'
+  } catch {
+    return false
+  }
+}
 async function save() {
   if (!form.name || !form.url) {
     ElMessage.warning('请填写仓库名称和 URL')
     return
   }
-  if (form.authType === 'http' && !editing && !form.password) {
+  // 密码/私钥留空 = 保持原值——但前提是原仓库确实有该凭据；
+  // 编辑匿名仓库切 http（或无 ssh 密钥的仓库切 ssh）时留空会保存出坏 secret
+  if (form.authType === 'http' && !form.password && !(editing && editOrigHasPassword.value)) {
     ElMessage.warning('请填写密码 / Token')
     return
   }
-  if (form.authType === 'ssh' && !editing && !form.sshPrivateKey) {
+  if (form.authType === 'ssh' && !form.sshPrivateKey && !(editing && editOrigHasSSHKey.value)) {
     ElMessage.warning('请填写 SSH 私钥')
     return
   }
+  // URL 跨「主机级 / 完整仓库」边界 = secret 语义翻转（凭据模板 ↔ 单仓库凭据），
+  // 会影响该域下其它仓库的凭据继承，保存前必须显式确认
+  if (editing && editOrigUrl && isHostOnly(editOrigUrl) !== isHostOnly(form.url)) {
+    try {
+      await ElMessageBox.confirm(
+        form.url && isHostOnly(form.url)
+          ? 'URL 改成了仅域名：该仓库将从「完整仓库凭据」变为「凭据模板」——此账号密码会被该域下所有仓库的 ArgoCD 应用继承，而不只作用于这一个仓库。'
+          : 'URL 改成了完整仓库地址：该仓库将从「凭据模板」（该域下所有仓库共享此凭据）变为「仅本仓库凭据」，其它仓库将失去继承的账号密码。',
+        '仓库语义变更确认',
+        { type: 'warning', confirmButtonText: '我理解，继续保存', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+  }
   saving.value = true
   try {
-    // 统一走 PUT upsert（服务端：不存在则创建，存在则合并更新），不依赖前端建/改状态
+    // 统一走 PUT upsert（服务端：不存在则创建，存在则更新真实 Secret），不依赖前端建/改状态
     await argocdApi.repoUpdate(form.name, buildPayload())
     ElMessage.success(editing ? '仓库已更新，ArgoCD 自动生效' : '仓库已创建')
     dialogVisible.value = false

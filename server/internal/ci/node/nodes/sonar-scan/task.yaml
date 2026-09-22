@@ -69,7 +69,8 @@ steps:
               | sed 's/.*"status":"\([A-Z_]*\)".*/\1/')
           fi
           case "$STATUS" in
-            OK|ERROR|NO_ANALYSIS) break ;;
+            # FAILED/WARN 是已定论的状态，继续轮询只会白等
+            OK|ERROR|NO_ANALYSIS|FAILED|WARN) break ;;
           esac
           sleep 15
           i=$((i+1))

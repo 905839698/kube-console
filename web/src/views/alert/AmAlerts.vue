@@ -160,15 +160,6 @@ const DURATIONS = [
   { l: '1 天', v: '1d' }, { l: '3 天', v: '3d' }, { l: '1 周', v: '1w' },
 ]
 
-const stats = computed(() => {
-  const list = items.value
-  return {
-    firing: list.filter((a) => a.status.state !== 'suppressed').length,
-    suppressed: list.filter((a) => a.status.state === 'suppressed').length,
-    critical: list.filter((a) => a.labels?.severity === 'critical').length,
-  }
-})
-
 const filtered = computed(() => {
   const kw = search.value.trim().toLowerCase()
   if (!kw) return items.value
@@ -177,6 +168,18 @@ const filtered = computed(() => {
       .toLowerCase()
       .includes(kw),
   )
+})
+
+// 统计卡与「活动告警总数」同源于 filtered：
+// 旧实现 firing/suppressed/critical 用未过滤的 items、总数用 filtered，
+// 一搜索就出现「触发中 18 / 总数 5」的同页矛盾
+const stats = computed(() => {
+  const list = filtered.value
+  return {
+    firing: list.filter((a) => a.status.state !== 'suppressed').length,
+    suppressed: list.filter((a) => a.status.state === 'suppressed').length,
+    critical: list.filter((a) => a.labels?.severity === 'critical').length,
+  }
 })
 const paged = computed(() => {
   const start = (page.value - 1) * pageSize

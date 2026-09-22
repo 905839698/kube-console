@@ -3,3 +3,4 @@ outputs:
   - git_commit
   - git_branch
   - git_url
+  - build_tag

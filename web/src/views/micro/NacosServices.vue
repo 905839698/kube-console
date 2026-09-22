@@ -147,11 +147,19 @@ async function openInstances(row: NacosServiceItem) {
   instLoading.value = true
   instances.value = []
   try {
-    instances.value = (await nacosApi.instances(cluster.value, row.namespace, row.name, row.groupName || 'DEFAULT_GROUP')) || []
+    const list = (await nacosApi.instances(cluster.value, row.namespace, row.name, row.groupName || 'DEFAULT_GROUP')) || []
+    // 慢响应守卫：拉取期间用户已切换到另一服务的实例，旧响应不能覆盖
+    const t = instTarget.value
+    if (t && t.name === row.name && t.namespace === row.namespace && t.groupName === row.groupName) {
+      instances.value = list
+    }
   } catch {
     /* 拦截器已提示 */
   } finally {
-    instLoading.value = false
+    const t = instTarget.value
+    if (t && t.name === row.name && t.namespace === row.namespace && t.groupName === row.groupName) {
+      instLoading.value = false
+    }
   }
 }
 

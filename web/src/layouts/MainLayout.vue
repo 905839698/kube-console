@@ -13,7 +13,7 @@
           <el-menu-item index="/overview"><el-icon><Odometer /></el-icon><span>集群总览</span></el-menu-item>
           <el-sub-menu index="cluster-group">
             <template #title><el-icon><Connection /></el-icon><span>集群</span></template>
-            <el-menu-item index="/clusters"><el-icon><Coordinate /></el-icon><span>集群管理</span></el-menu-item>
+            <el-menu-item v-if="showPlatform" index="/clusters"><el-icon><Coordinate /></el-icon><span>集群管理</span></el-menu-item>
             <el-menu-item index="/namespaces"><el-icon><Folder /></el-icon><span>命名空间</span></el-menu-item>
             <el-menu-item index="/nodes"><el-icon><Cpu /></el-icon><span>节点</span></el-menu-item>
             <el-menu-item index="/resources"><el-icon><Files /></el-icon><span>自定义资源</span></el-menu-item>
@@ -28,27 +28,6 @@
             <el-menu-item index="/workloads/jobs"><el-icon><Tickets /></el-icon><span>Job</span></el-menu-item>
             <el-menu-item index="/workloads/pods"><el-icon><Cherry /></el-icon><span>Pod</span></el-menu-item>
             <el-menu-item index="/resources/horizontalpodautoscalers"><el-icon><Sort /></el-icon><span>HPA</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu index="observe-group">
-            <template #title><el-icon><TrendCharts /></el-icon><span>可观测性</span></template>
-            <el-menu-item index="/monitor"><el-icon><DataLine /></el-icon><span>监控</span></el-menu-item>
-            <el-menu-item index="/monitor/alerts"><el-icon><Bell /></el-icon><span>告警</span></el-menu-item>
-            <el-menu-item index="/monitor/grafana"><el-icon><DataBoard /></el-icon><span>Grafana 面板</span></el-menu-item>
-            <el-menu-item index="/events"><el-icon><Warning /></el-icon><span>事件中心</span></el-menu-item>
-            <el-menu-item index="/logsearch"><el-icon><Document /></el-icon><span>日志检索</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu index="cicd-group">
-            <template #title><el-icon><Promotion /></el-icon><span>CI / CD</span></template>
-            <el-menu-item index="/ci"><el-icon><SetUp /></el-icon><span>CI 流水线</span></el-menu-item>
-            <el-menu-item index="/argocd"><el-icon><Compass /></el-icon><span>ArgoCD 应用</span></el-menu-item>
-            <el-menu-item index="/argocd/repos"><el-icon><FolderChecked /></el-icon><span>ArgoCD 仓库</span></el-menu-item>
-            <el-menu-item index="/helm/releases"><el-icon><Download /></el-icon><span>Helm Releases</span></el-menu-item>
-            <el-menu-item index="/helm/repos"><el-icon><FolderOpened /></el-icon><span>Chart 仓库</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu index="micro-group">
-            <template #title><el-icon><Coin /></el-icon><span>微服务</span></template>
-            <el-menu-item index="/micro/services"><el-icon><Connection /></el-icon><span>服务发现</span></el-menu-item>
-            <el-menu-item index="/micro/configs"><el-icon><Document /></el-icon><span>配置管理</span></el-menu-item>
           </el-sub-menu>
           <el-sub-menu index="network-group">
             <template #title><el-icon><Share /></el-icon><span>服务与网络</span></template>
@@ -87,6 +66,27 @@
             <el-menu-item index="/resources/persistentvolumes"><el-icon><FolderOpened /></el-icon><span>PV</span></el-menu-item>
             <el-menu-item index="/resources/storageclasses"><el-icon><Collection /></el-icon><span>StorageClass</span></el-menu-item>
           </el-sub-menu>
+          <el-sub-menu index="observe-group">
+            <template #title><el-icon><TrendCharts /></el-icon><span>可观测性</span></template>
+            <el-menu-item index="/monitor"><el-icon><DataLine /></el-icon><span>监控</span></el-menu-item>
+            <el-menu-item index="/monitor/alerts"><el-icon><Bell /></el-icon><span>告警</span></el-menu-item>
+            <el-menu-item index="/monitor/grafana"><el-icon><DataBoard /></el-icon><span>Grafana 面板</span></el-menu-item>
+            <el-menu-item index="/events"><el-icon><Warning /></el-icon><span>事件中心</span></el-menu-item>
+            <el-menu-item index="/logsearch"><el-icon><Document /></el-icon><span>日志检索</span></el-menu-item>
+          </el-sub-menu>
+          <el-sub-menu index="cicd-group">
+            <template #title><el-icon><Promotion /></el-icon><span>CI / CD</span></template>
+            <el-menu-item index="/ci"><el-icon><SetUp /></el-icon><span>CI 流水线</span></el-menu-item>
+            <el-menu-item index="/argocd"><el-icon><Compass /></el-icon><span>ArgoCD 应用</span></el-menu-item>
+            <el-menu-item index="/argocd/repos"><el-icon><FolderChecked /></el-icon><span>ArgoCD 仓库</span></el-menu-item>
+            <el-menu-item index="/helm/releases"><el-icon><Download /></el-icon><span>Helm Releases</span></el-menu-item>
+            <el-menu-item index="/helm/repos"><el-icon><FolderOpened /></el-icon><span>Chart 仓库</span></el-menu-item>
+          </el-sub-menu>
+          <el-sub-menu index="micro-group">
+            <template #title><el-icon><Coin /></el-icon><span>微服务</span></template>
+            <el-menu-item index="/micro/services"><el-icon><Connection /></el-icon><span>服务发现</span></el-menu-item>
+            <el-menu-item index="/micro/configs"><el-icon><Document /></el-icon><span>配置管理</span></el-menu-item>
+          </el-sub-menu>
           <el-sub-menu index="security-group">
             <template #title><el-icon><UserFilled /></el-icon><span>安全 (RBAC)</span></template>
             <el-menu-item index="/resources/roles"><el-icon><Avatar /></el-icon><span>Role</span></el-menu-item>
@@ -99,16 +99,17 @@
             <el-menu-item index="/quotas"><el-icon><PieChart /></el-icon><span>ResourceQuota</span></el-menu-item>
             <el-menu-item index="/resources/limitranges"><el-icon><Filter /></el-icon><span>LimitRange</span></el-menu-item>
           </el-sub-menu>
-          <el-sub-menu v-if="userStore.isAdmin" index="platform-group">
+          <el-sub-menu v-if="showPlatform" index="platform-group">
             <template #title><el-icon><Tools /></el-icon><span>平台管理</span></template>
-            <el-menu-item index="/users"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>
+            <el-menu-item v-if="userStore.isAdmin" index="/users"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>
             <el-menu-item index="/authz"><el-icon><Key /></el-icon><span>授权管理</span></el-menu-item>
+            <el-menu-item index="/roles"><el-icon><Stamp /></el-icon><span>角色管理</span></el-menu-item>
             <el-menu-item index="/audit"><el-icon><Tickets /></el-icon><span>审计日志</span></el-menu-item>
-            <el-menu-item index="/notify"><el-icon><Bell /></el-icon><span>通知管理</span></el-menu-item>
-            <el-menu-item index="/nacos"><el-icon><Connection /></el-icon><span>Nacos 管理</span></el-menu-item>
-            <el-menu-item index="/registry"><el-icon><Picture /></el-icon><span>镜像仓库</span></el-menu-item>
+            <el-menu-item v-if="userStore.isAdmin" index="/notify"><el-icon><Bell /></el-icon><span>通知管理</span></el-menu-item>
+            <el-menu-item v-if="userStore.isAdmin" index="/nacos"><el-icon><Connection /></el-icon><span>Nacos 管理</span></el-menu-item>
+            <el-menu-item v-if="userStore.isAdmin" index="/registry"><el-icon><Picture /></el-icon><span>镜像仓库</span></el-menu-item>
             <el-menu-item index="/usage"><el-icon><DataAnalysis /></el-icon><span>用量报表</span></el-menu-item>
-            <el-menu-item index="/backups"><el-icon><CopyDocument /></el-icon><span>备份概览</span></el-menu-item>
+            <el-menu-item v-if="userStore.isAdmin" index="/backups"><el-icon><CopyDocument /></el-icon><span>备份概览</span></el-menu-item>
           </el-sub-menu>
         </el-menu>
       </el-scrollbar>
@@ -259,6 +260,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '../store/user'
 import { useClusterStore } from '../store/cluster'
 import { useNamespaceStore } from '../store/namespace'
+import { usePerm } from '../store/perm'
 import { authApi, tokenApi, type ApiTokenItem } from '../api'
 import GlobalSearch from '../components/GlobalSearch.vue'
 import NamespaceSelect from '../components/NamespaceSelect.vue'
@@ -269,6 +271,7 @@ const router = useRouter()
 const userStore = useUserStore()
 const clusterStore = useClusterStore()
 const nsStore = useNamespaceStore()
+const perm = usePerm()
 
 // 当前选中集群处于不可达状态（error）时，内容区展示「集群不可达」面板而非挂载数据页。
 // 集群管理页（/clusters）豁免——那是排查/重测连通性的入口，不能因集群 down 而被锁住。
@@ -313,9 +316,13 @@ const activeMenu = computed(() => {
   return route.path
 })
 
+// 平台管理菜单：platform-admin 全量；platform-viewer 只读子集（授权/角色/审计/报表）
+const showPlatform = computed(() => userStore.isAdmin || userStore.viewer)
+
 onMounted(async () => {
-  // 旧会话只有 token 没有角色缓存时，拉取一次当前用户信息
-  if (userStore.token && !userStore.role) {
+  // 每次进入主界面都对齐一次角色：kc-role 是本地缓存，后台降级/提升后
+  // 旧缓存会让已降权用户继续看到 admin 菜单与路由入口（后端仍会拒绝，但 UI 误导）
+  if (userStore.token) {
     try {
       const me = await authApi.me()
       userStore.setRole((me as any).role || 'user')
@@ -330,6 +337,9 @@ onMounted(async () => {
       /* 401 已由拦截器处理 */
     }
   }
+  // 权限快照（KubeSphere 式三层角色）：写按钮与平台菜单据此渲染
+  await perm.load(true)
+  userStore.setViewer(!userStore.isAdmin && !!perm.access.value.platformViewer)
 })
 
 // 切换集群：以 change 事件的新值为准，经 select() 原子化更新 current 与 localStorage
@@ -338,6 +348,8 @@ onMounted(async () => {
 function onClusterChange(name: string) {
   clusterStore.select(name)
   ElMessage.success(`已切换到集群: ${name}`)
+  // 权限是按集群判定的（同一个人在不同集群的授权不同）：切集群必须重取
+  void perm.load(true)
 }
 
 // ------------------- 修改密码 -------------------
@@ -354,6 +366,10 @@ async function loadTokens() {
   tokens.value = await tokenApi.list()
 }
 async function doCreateToken() {
+  if (!tokenForm.name.trim()) {
+    ElMessage.warning('请填写 Token 名称')
+    return
+  }
   creatingToken.value = true
   try {
     const r = await tokenApi.create(tokenForm.name, tokenForm.days)
@@ -377,7 +393,7 @@ function copyPlain() {
 const pwdSaving = ref(false)
 const pwdForm = reactive({ oldPassword: '', newPassword: '', confirm: '' })
 
-function onUserCommand(cmd: string) {
+async function onUserCommand(cmd: string) {
   if (cmd === 'logout') {
     userStore.logout()
     router.push('/login')
@@ -385,7 +401,7 @@ function onUserCommand(cmd: string) {
     userStore.toggleDark()
   } else if (cmd === 'token') {
     tokenVisible.value = true
-    loadTokens()
+    await loadTokens().catch(() => {})
   } else if (cmd === 'password') {
     pwdForm.oldPassword = ''
     pwdForm.newPassword = ''

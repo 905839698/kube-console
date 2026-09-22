@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -127,6 +128,8 @@ func (s *Service) DownloadMeta(ctx context.Context, cluster string, id uint) (co
 	if name == "" {
 		name = fmt.Sprintf("artifact-%d", a.ID)
 	}
+	// name 来自流水线 results（用户可控），含引号会破坏响应头，先转义
+	name = strings.NewReplacer(`"`, `'`, "\r", "", "\n", "").Replace(name)
 	return "application/octet-stream", "attachment; filename=\"" + name + "\"", nil
 }
 

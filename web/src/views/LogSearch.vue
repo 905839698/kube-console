@@ -27,10 +27,30 @@
           <el-option v-for="l in ['error', 'warn', 'info']" :key="l" :label="l" :value="l" />
         </el-select>
       </el-form-item>
+      <el-form-item label="来源">
+        <el-select v-model="q.source" style="width: 130px">
+          <el-option label="全部" value="" />
+          <el-option label="标准输出" value="stdout" />
+          <el-option label="文本文件" value="file" />
+          <el-option label="JSON 采集" value="json" />
+        </el-select>
+      </el-form-item>
       <el-form-item label="时间范围">
         <el-select v-model="q.minutes" style="width: 120px">
           <el-option v-for="m in [15, 60, 360, 1440, 4320, 10080]" :key="m" :label="fmtRange(m)" :value="m" />
+          <el-option label="自定义…" :value="-1" />
         </el-select>
+      </el-form-item>
+      <el-form-item v-if="q.minutes === -1" label="起止时间">
+        <el-date-picker
+          v-model="range"
+          type="datetimerange"
+          range-separator="至"
+          start-placeholder="开始时间"
+          end-placeholder="结束时间"
+          :shortcuts="rangeShortcuts"
+          style="width: 380px"
+        />
       </el-form-item>
       <el-form-item>
         <el-button type="primary" :loading="loading" @click="doSearch(1)">检索</el-button>
@@ -88,6 +108,8 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { logsApi, k8sApi, type LogSearchResult } from '../api'
 import { useClusterStore } from '../store/cluster'
@@ -96,16 +118,41 @@ import LogSourceDialog from '../components/LogSourceDialog.vue'
 
 const userStore = useUserStore()
 const clusterStore = useClusterStore()
+const route = useRoute()
 
 const nsOptions = ref<string[]>([])
 const loading = ref(false)
 const page = ref(1)
 const result = ref<LogSearchResult>()
-const q = reactive<{ namespace: string; pod: string; container: string; keyword: string; level: string; minutes: number; size: number }>({
-  namespace: '', pod: '', container: '', keyword: '', level: '', minutes: 360, size: 50,
+const q = reactive<{ namespace: string; pod: string; container: string; source: string; keyword: string; level: string; minutes: number; size: number }>({
+  namespace: '', pod: '', container: '', source: '', keyword: '', level: '', minutes: 360, size: 50,
 })
 
 const cfgVisible = ref(false)
+
+// 自定义绝对时间范围（q.minutes === -1 时生效）；快捷项贴合排障习惯
+const range = ref<[Date, Date] | null>(null)
+const rangeShortcuts = [
+  {
+    text: '最近 1 小时',
+    value: () => { const end = new Date(); return [new Date(end.getTime() - 3600e3), end] },
+  },
+  {
+    text: '今天',
+    value: () => { const d = new Date(); d.setHours(0, 0, 0, 0); return [d, new Date()] },
+  },
+  {
+    text: '昨天',
+    value: () => {
+      const end = new Date(); end.setHours(0, 0, 0, 0)
+      return [new Date(end.getTime() - 86400e3), end]
+    },
+  },
+  {
+    text: '最近 7 天',
+    value: () => { const end = new Date(); return [new Date(end.getTime() - 7 * 86400e3), end] },
+  },
+]
 
 function fmtRange(m: number) {
   if (m < 60) return `${m} 分钟`
@@ -124,10 +171,20 @@ function togglePod(pod: string) {
 }
 
 async function doSearch(p = 1) {
+  if (q.minutes === -1 && !range.value) {
+    ElMessage.warning('请选择起止时间（或切回相对时间范围）')
+    return
+  }
   loading.value = true
   page.value = p
   try {
-    result.value = await logsApi.search({ ...q, page: p })
+    const payload: Record<string, any> = { ...q, page: p }
+    if (q.minutes === -1 && range.value) {
+      payload.from = new Date(range.value[0]).toISOString()
+      payload.to = new Date(range.value[1]).toISOString()
+      delete payload.minutes
+    }
+    result.value = await logsApi.search(payload)
   } catch {
     /* 拦截器已提示 */
   } finally {
@@ -149,6 +206,16 @@ function downloadCsv() {
 }
 
 onMounted(async () => {
+  // 支持从工作负载"查看已采集日志"跳转预填过滤条件
+  let prefilled = false
+  for (const k of ['namespace', 'pod', 'container', 'keyword', 'source'] as const) {
+    const v = route.query[k]
+    if (typeof v === 'string' && v) {
+      q[k] = v
+      prefilled = true
+    }
+  }
+  if (prefilled) doSearch(1)
   try {
     nsOptions.value = (await k8sApi.namespaces()).map((n: any) => n.name)
   } catch { /* ignore */ }

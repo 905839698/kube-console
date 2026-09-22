@@ -6,10 +6,10 @@
           <el-page-header :content="`Pod / ${name}`" @back="router.back()" />
           <div class="actions">
             <el-button size="small" @click="load">刷新</el-button>
-            <el-button size="small" type="success" plain @click="openTerminal()">终端</el-button>
+            <el-button size="small" type="success" plain :disabled="!perm.canWriteNS(namespace)" @click="openTerminal()">终端</el-button>
             <el-button size="small" type="primary" plain @click="logsVisible = true">日志</el-button>
-            <el-button size="small" type="info" plain @click="filesVisible = true">文件</el-button>
-            <el-button size="small" type="danger" plain @click="doDelete">删除</el-button>
+            <el-button size="small" type="info" plain :disabled="!perm.canWriteNS(namespace)" @click="filesVisible = true">文件</el-button>
+            <el-button size="small" type="danger" plain :disabled="!perm.canWriteNS(namespace)" @click="doDelete">删除</el-button>
           </div>
         </div>
       </template>
@@ -126,7 +126,7 @@
                   <el-icon><Box /></el-icon>
                   {{ selectedContainer?.name }}
                 </span>
-                <el-button size="small" type="success" plain @click="openTerminal(selectedContainer?.name)">终端</el-button>
+                <el-button size="small" type="success" plain :disabled="!perm.canWriteNS(namespace)" @click="openTerminal(selectedContainer?.name)">终端</el-button>
                 <el-button size="small" @click="openContainerLogs">查看日志</el-button>
               </div>
               <el-descriptions :column="2" border size="small">
@@ -163,16 +163,18 @@ import WebTerminal from '../components/WebTerminal.vue'
 import FileBrowser from '../components/FileBrowser.vue'
 import VulnChip from '../components/VulnChip.vue'
 import MetricPanel, { type MetricCardDef, type MetricChartDef } from '../components/MetricPanel.vue'
-import type { ContainerSeries } from '../api'
-import type { ChartSeries } from '../components/MetricChart.vue'
 import RangeSwitch from '../components/RangeSwitch.vue'
 import { Box, Grid } from '@element-plus/icons-vue'
 import { useClusterStore } from '../store/cluster'
+import { usePerm } from '../store/perm'
 import { confirmDelete } from '../utils/confirm'
 
 const route = useRoute()
 const router = useRouter()
 const clusterStore = useClusterStore()
+
+// 写权限：只读用户禁用删除按钮（后端仍强制判定）
+const perm = usePerm()
 
 const namespace = computed(() => String(route.params.namespace))
 const name = computed(() => String(route.params.name))
@@ -240,8 +242,14 @@ const range = ref('6h')
 const monitor = ref<PodMonitor>()
 const monitorLoading = ref(false)
 
+// 空闲 Pod CPU 用量可低至 ~0.0000x 核：固定 2 位小数会显示 0.00，看起来像没数据
+const cpuCardDecimals = computed(() => {
+  const v = monitor.value?.cpuUsage ?? 0
+  return v > 0 && v < 0.01 ? 4 : 2
+})
+
 const monitorCards = computed<MetricCardDef[]>(() => [
-  { label: 'CPU 使用率', value: monitor.value?.cpuUsagePct ?? null, unit: '%', color: '#409eff' },
+  { label: 'CPU 使用量', value: monitor.value?.cpuUsage ?? null, unit: '核', decimals: cpuCardDecimals, color: '#409eff' },
   { label: '内存使用', value: monitor.value?.memUsageMi ?? null, unit: 'Mi', color: '#67c23a' },
   { label: '网络接收', value: monitor.value?.netRxMBs ?? null, unit: 'MB/s', color: '#e6a23c' },
   { label: '网络发送', value: monitor.value?.netTxMBs ?? null, unit: 'MB/s', color: '#f56c6c' },
@@ -250,8 +258,8 @@ const monitorCards = computed<MetricCardDef[]>(() => [
 ])
 
 const monitorCharts = computed<MetricChartDef[]>(() => [
-  { title: 'CPU 使用率趋势', series: [{ name: 'CPU', data: monitor.value?.cpuUsageTrend || [], color: '#409eff', unit: '%' }], yAxisName: '%' },
-  { title: '内存使用趋势', series: [{ name: '内存', data: monitor.value?.memUsageTrend || [], color: '#67c23a', unit: 'Mi' }], yAxisName: 'Mi' },
+  { title: 'CPU 使用量趋势', series: [{ name: 'CPU', data: monitor.value?.cpuUsageTrend || [], color: '#409eff', unit: '核' }], yAxisName: '核' },
+  { title: '内存使用量趋势', series: [{ name: '内存', data: monitor.value?.memUsageTrend || [], color: '#67c23a', unit: 'Mi' }], yAxisName: 'Mi' },
   {
     title: '网络流量',
     series: [
@@ -262,23 +270,7 @@ const monitorCharts = computed<MetricChartDef[]>(() => [
   },
   { title: '磁盘写趋势', series: [{ name: '磁盘写', data: monitor.value?.diskWriteTrend || [], color: '#909399', unit: 'MB/s' }], yAxisName: 'MB/s' },
   { title: '文件系统使用趋势', series: [{ name: '文件系统', data: monitor.value?.fsUsageTrend || [], color: '#9254de', unit: 'Mi' }], yAxisName: 'Mi' },
-  {
-    title: '按容器 CPU',
-    series: toSeries(monitor.value?.containerCpu, '核'),
-    yAxisName: '核',
-  },
-  {
-    title: '按容器内存',
-    series: toSeries(monitor.value?.containerMem, 'Mi'),
-    yAxisName: 'Mi',
-  },
 ])
-
-// 按容器细分序列 → 图表 series（缺数据时隐藏该卡片）
-function toSeries(list: ContainerSeries[] | undefined, unit: string): ChartSeries[] {
-  const palette = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9254de', '#00c1de', '#ff7f50', '#d4b106']
-  return (list || []).map((s, i) => ({ name: s.name, data: s.data, color: palette[i % palette.length], unit }))
-}
 
 const podItem = computed<PodItem | undefined>(() =>
   detail.value

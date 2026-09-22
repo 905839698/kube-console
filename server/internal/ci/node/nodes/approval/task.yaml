@@ -1,7 +1,10 @@
 # approval Tekton Task 模板
 # 机制：step 轮询【本 TaskRun 的注解】ci-platform.io/approval。
 # 平台 UI「通过/驳回」由 ci-server 给该 TaskRun 打注解（approved/rejected）。
-# 本 TaskRun 名由平台运行时注入环境变量 CI_TASK_RUN（Tekton 不自动注入）。
+# 本 TaskRun 名靠 hostname 自发现：Tekton 的 Pod 命名规约 <taskrun-name>-pod，
+# 容器 hostname 默认即 Pod 名（v1.14 未向 step 注入 TASK_RUN 环境变量，现网实测）。
+# 不能把 run 专属值写进 Pipeline CR：pl-<id>-v<version> 对该版本所有 run 同名，
+# 并发触发时后 apply 整体覆盖，前一个 run 的 TaskRun 会读到后者的值 → 审批跨 run 泄漏。
 # 用 alpine 的 wget + SA token 直接读 k8s API（不依赖 kubectl，兼容无 shell 镜像源）。
 # 需 ci-projects/ci-bot SA 有 taskruns get 权限（见 deployments/rbac.yaml）。
 name: approval
@@ -21,12 +24,23 @@ steps:
       NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null || echo default)
       TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
       HOST=$KUBERNETES_SERVICE_HOST; PORT=$KUBERNETES_SERVICE_PORT
+      # 自发现本 TaskRun：优先用 CI_TASK_RUN 环境变量（如平台已注入），否则按 Tekton
+      # Pod 命名规约 <taskrun-name>-pod + 容器 hostname 默认=Pod 名（现网 Tekton 未注入
+      # TASK_RUN 环境变量，且平台不再把 run 专属值烤进共享 Pipeline CR——否则并发 run
+      # 互相覆盖 CR，前一个 run 的审批会读到后一个 run 的 TaskRun 名）
       TR="${CI_TASK_RUN:-}"
-      if [ -z "$TR" ]; then echo "缺少 CI_TASK_RUN 环境变量"; exit 1; fi
+      if [ -z "$TR" ]; then
+        H="$(hostname 2>/dev/null)"
+        case "$H" in
+          *-pod) TR="${H%-pod}" ;;
+        esac
+      fi
+      if [ -z "$TR" ]; then echo "无法自发现当前 TaskRun（CI_TASK_RUN 未设置且 hostname 无 -pod 后缀）"; exit 1; fi
       # 解析超时（支持 90s / 30m / 2h / 2h30m）；非法输入直接报错（不静默回退）
       parse_dur() {
         d="$1"; s=0
-        echo "$d" | grep -Eq '^[0-9]+(s|m|h)([0-9]+m)?([0-9]+s)?$' \
+        # 单位必须按 h→m→s 严格降序（旧正则放行 1s30m 这类乱序，后面 $(( 1s30 * 60 )) 算术报错）
+        echo "$d" | grep -Eq '^[0-9]+h([0-9]+m)?([0-9]+s)?$|^[0-9]+m([0-9]+s)?$|^[0-9]+s$' \
           || { echo "无法解析时长: '$d'（合法形式：90s / 30m / 2h / 2h30m）" >&2; exit 1; }
         case "$d" in *h*) s=$(( s + ${d%%h*} * 3600 )); d="${d#*h}" ;; esac
         case "$d" in *m*) s=$(( s + ${d%%m*} * 60 )); d="${d#*m}" ;; esac

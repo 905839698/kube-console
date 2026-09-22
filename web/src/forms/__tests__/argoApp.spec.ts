@@ -106,6 +106,11 @@ describe('projectIssues', () => {
     expect(projectIssues({ name: 'p', sourceRepos: ['*'], destinations: [{ server: 'https://kubernetes.default.svc' }] }, target)).toEqual([])
   })
 
+  it('应用侧未填 server（按集群 name 指定目标）时不做 destinations 误报', () => {
+    const named = { repoURL: 'http://gitlab.cqyxpt.site/cec/x.git', server: '', namespace: 'qa-yangjc' }
+    expect(projectIssues({ name: 'p', sourceRepos: ['*'], destinations: [{ server: 'https://kubernetes.default.svc', namespace: 'qa-*' }] }, named)).toEqual([])
+  })
+
   it('仓库/目标都允许时不提示；两者都不允许时两条都提示', () => {
     const proj = { name: 'p', sourceRepos: ['http://gitlab.cqyxpt.site/cec/helm-chart/*'], destinations: [{ server: 'https://kubernetes.default.svc', namespace: 'qa-*' }] }
     expect(projectIssues(proj, target)).toEqual([])

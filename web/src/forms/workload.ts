@@ -4,37 +4,49 @@ import { clone, textToList } from './utils'
 
 // ---------- 探针 / 生命周期 辅助 ----------
 
+// IntOrString：纯数字 -> number，否则按命名端口原样保留（字符串）
+function toIntOrString(v: any, def: number) {
+  const t = String(v ?? '').trim()
+  if (t === '') return def
+  return /^\d+$/.test(t) ? Number(t) : t
+}
+
 function probe(p: any, defPath: string, defPort: number) {
-  if (!p) return { enabled: false, type: 'httpGet', path: '/', port: defPort, command: '', initialDelaySeconds: 5, periodSeconds: 10 }
+  if (!p) return { enabled: false, type: 'httpGet', path: '/', port: String(defPort), command: '', initialDelaySeconds: 5, periodSeconds: 10, failureThreshold: 3, timeoutSeconds: 1, successThreshold: 1 }
   let type = 'httpGet'
   let path = '/'
-  let port = defPort
+  let port = String(defPort)
   let command = ''
   if (p.httpGet) {
     path = p.httpGet.path || '/'
-    port = p.httpGet.port ? Number(p.httpGet.port) : defPort
+    port = p.httpGet.port != null ? String(p.httpGet.port) : String(defPort)
   } else if (p.tcpSocket) {
     type = 'tcpSocket'
-    port = p.tcpSocket.port ? Number(p.tcpSocket.port) : defPort
+    port = p.tcpSocket.port != null ? String(p.tcpSocket.port) : String(defPort)
   } else if (p.exec) {
     type = 'exec'
-    command = (p.exec.command || []).join(' ')
+    // 换行分隔（每行一个参数）：按空格 join/split 会把带空格的参数（如 sh -c 脚本）拆碎
+    command = (p.exec.command || []).join('\n')
   }
   return {
     enabled: true, type, path, port, command,
     initialDelaySeconds: p.initialDelaySeconds ?? 5,
     periodSeconds: p.periodSeconds ?? 10,
+    failureThreshold: p.failureThreshold ?? 3,
+    timeoutSeconds: p.timeoutSeconds ?? 1,
+    successThreshold: p.successThreshold ?? 1,
   }
 }
 
 function buildProbe(p: any): any {
   if (!p?.enabled) return undefined
   const base: any = {}
-  if (p.initialDelaySeconds !== undefined) base.initialDelaySeconds = p.initialDelaySeconds
-  if (p.periodSeconds !== undefined) base.periodSeconds = p.periodSeconds
-  if (p.type === 'httpGet') return { ...base, httpGet: { path: p.path || '/', port: p.port || 80 } }
-  if (p.type === 'tcpSocket') return { ...base, tcpSocket: { port: p.port || 80 } }
-  return { ...base, exec: { command: (p.command || '').split(/\s+/).filter(Boolean) } }
+  for (const k of ['initialDelaySeconds', 'periodSeconds', 'failureThreshold', 'timeoutSeconds', 'successThreshold']) {
+    if (p[k] !== undefined && String(p[k]).trim() !== '' && Number.isFinite(Number(p[k]))) base[k] = Math.floor(Number(p[k]))
+  }
+  if (p.type === 'httpGet') return { ...base, httpGet: { path: p.path || '/', port: toIntOrString(p.port, 80) } }
+  if (p.type === 'tcpSocket') return { ...base, tcpSocket: { port: toIntOrString(p.port, 80) } }
+  return { ...base, exec: { command: textToList(p.command) } }
 }
 
 // 生命周期钩子 <-> 探针同构表单（enabled/type/path/port/command）
@@ -44,9 +56,9 @@ function lifecycleToProbe(h: any) {
 
 function probeToLifecycle(p: any): any {
   if (!p?.enabled) return undefined
-  if (p.type === 'httpGet') return { httpGet: { path: p.path || '/', port: p.port || 80 } }
-  if (p.type === 'tcpSocket') return { tcpSocket: { port: p.port || 80 } }
-  return { exec: { command: (p.command || '').split(/\s+/).filter(Boolean) } }
+  if (p.type === 'httpGet') return { httpGet: { path: p.path || '/', port: toIntOrString(p.port, 80) } }
+  if (p.type === 'tcpSocket') return { tcpSocket: { port: toIntOrString(p.port, 80) } }
+  return { exec: { command: textToList(p.command) } }
 }
 
 // 环境变量：对象 -> envList 行
@@ -73,8 +85,9 @@ function parseContainer(c: any): any {
     image: c.image || '',
     imagePullPolicy: c.imagePullPolicy || '',
     workingDir: c.workingDir || '',
-    command: (c.command || []).join(' '),
-    args: (c.args || []).join(' '),
+    // 每行一个参数（与 textToList 对称）；按空格 join 会在 build 时被整串当成单个参数
+    command: (c.command || []).join('\n'),
+    args: (c.args || []).join('\n'),
     envList: (c.env || []).map(parseEnv),
     envFrom: (c.envFrom || []).map((e: any) => ({
       type: e.configMapRef ? 'configMap' : 'secret',
@@ -103,6 +116,8 @@ function parseContainer(c: any): any {
       capAdd: (c.securityContext?.capabilities?.add || []).join(', '),
       capDrop: (c.securityContext?.capabilities?.drop || []).join(', '),
     },
+    // 原始 securityContext：build 时合并，保留表单未建模的字段（seccompProfile/allowPrivilegeEscalation/windowsOptions 等）
+    scRaw: c.securityContext || {},
   }
 }
 
@@ -160,16 +175,32 @@ function buildContainer(c: any): any {
       .filter((m: any) => m.name && m.mountPath)
       .map((m: any) => ({ name: m.name, mountPath: m.mountPath, ...(m.subPath ? { subPath: m.subPath } : {}), ...(m.readOnly ? { readOnly: true } : {}) }))
   }
-  const sc: any = {}
-  if (c.sc.runAsUser !== '' && c.sc.runAsUser != null && !isNaN(Number(c.sc.runAsUser))) sc.runAsUser = Number(c.sc.runAsUser)
-  if (c.sc.runAsGroup !== '' && c.sc.runAsGroup != null && !isNaN(Number(c.sc.runAsGroup))) sc.runAsGroup = Number(c.sc.runAsGroup)
+  // securityContext 与原始值合并：建模字段以表单为准（清空即移除），未建模字段原样保留
+  const sc: any = { ...(c.scRaw || {}) }
+  const setScNum = (key: string, v: any) => {
+    if (v !== '' && v != null && String(v).trim() !== '' && Number.isFinite(Number(v))) sc[key] = Number(v)
+    else delete sc[key]
+  }
+  setScNum('runAsUser', c.sc.runAsUser)
+  setScNum('runAsGroup', c.sc.runAsGroup)
   if (c.sc.privileged) sc.privileged = true
+  else delete sc.privileged
   if (c.sc.runAsNonRoot) sc.runAsNonRoot = true
+  else delete sc.runAsNonRoot
   if (c.sc.readOnlyRootFilesystem) sc.readOnlyRootFilesystem = true
-  const capAdd = (c.sc.capAdd || '').split(',').map((s: string) => s.trim()).filter(Boolean)
-  const capDrop = (c.sc.capDrop || '').split(',').map((s: string) => s.trim()).filter(Boolean)
-  if (capAdd.length) sc.capabilities = { ...(sc.capabilities || {}), add: capAdd }
-  if (capDrop.length) sc.capabilities = { ...(sc.capabilities || {}), drop: capDrop }
+  else delete sc.readOnlyRootFilesystem
+  const capAdd = (c.sc.capAdd || '').split(',').map((x: string) => x.trim()).filter(Boolean)
+  const capDrop = (c.sc.capDrop || '').split(',').map((x: string) => x.trim()).filter(Boolean)
+  if (capAdd.length || capDrop.length) {
+    const caps: any = { ...(sc.capabilities || {}) }
+    if (capAdd.length) caps.add = capAdd
+    else delete caps.add
+    if (capDrop.length) caps.drop = capDrop
+    else delete caps.drop
+    sc.capabilities = caps
+  } else {
+    delete sc.capabilities
+  }
   if (Object.keys(sc).length) container.securityContext = sc
   return container
 }
@@ -180,6 +211,8 @@ function parseVolume(v: any): any {
   let configMapName = ''
   let secretName = ''
   let hostPath = ''
+  let emptyDir: any = {}
+  let raw: any = null
   if (v.persistentVolumeClaim) {
     pvcName = v.persistentVolumeClaim.claimName || ''
   } else if (v.configMap) {
@@ -191,10 +224,16 @@ function parseVolume(v: any): any {
   } else if (v.hostPath) {
     type = 'hostPath'
     hostPath = v.hostPath.path || ''
-  } else {
+  } else if (v.emptyDir) {
     type = 'emptyDir'
+    emptyDir = v.emptyDir || {} // 保留 sizeLimit / medium
+  } else {
+    // downwardAPI / projected / 带 items 的 secret 等未建模类型：整体保留，
+    // 避免保存时被静默改写成空 emptyDir（卷源丢失）
+    type = 'custom'
+    raw = v
   }
-  return { name: v.name || '', type, pvcName, configMapName, secretName, hostPath }
+  return { name: v.name || '', type, pvcName, configMapName, secretName, hostPath, emptyDir, raw }
 }
 
 function buildVolume(v: any): any {
@@ -212,8 +251,16 @@ function buildVolume(v: any): any {
     case 'hostPath':
       if (v.hostPath) out.hostPath = { path: v.hostPath }
       break
+    case 'emptyDir':
+      out.emptyDir = { ...(v.emptyDir || {}) }
+      break
     default:
-      out.emptyDir = {}
+      // custom：原卷源原样写回（跳过 name，已由 out.name 提供）
+      if (v.raw) {
+        for (const [k, val] of Object.entries(v.raw)) {
+          if (k !== 'name') out[k] = clone(val)
+        }
+      }
   }
   return out
 }
@@ -226,6 +273,10 @@ export function parseWorkload(obj: any, kind: string): any {
   const nodeTerm = affinity.nodeAffinity?.requiredDuringSchedulingIgnoredDuringExecution?.nodeSelectorTerms?.[0] || {}
   const antiPreferred = affinity.podAntiAffinity?.preferredDuringSchedulingIgnoredDuringExecution?.[0] || {}
   return {
+    // 原始 affinity / Pod securityContext：build 时作为合并基底，保留表单未建模的内容
+    //（多 term、matchFields、preferred 权重、podAffinity、seccompProfile 等）
+    rawAffinity: tplSpec.affinity || {},
+    podScRaw: tplSpec.securityContext || {},
     name: obj.metadata?.name || '',
     namespace: obj.metadata?.namespace || '',
     labels: obj.metadata?.labels || {},
@@ -300,14 +351,22 @@ export function parseWorkload(obj: any, kind: string): any {
 
 // ---------- 表单数据 -> 对象（基于原对象合并，保留未覆盖字段） ----------
 
+// 数字守卫：非法输入（NaN/空串）回退默认值，避免把 NaN/字符串写进 K8s 对象
+function numOr(v: any, def: number): number {
+  if (v === '' || v == null) return def
+  const n = Number(v)
+  return Number.isFinite(n) ? Math.floor(n) : def
+}
+
 export function buildWorkload(base: any, d: any, kind: string): any {
   const obj = clone(base || {})
+  // labels/annotations 无条件写回：用户清空后旧值必须随之移除（不能静默保留）
   obj.metadata = {
     ...(obj.metadata || {}),
     name: d.name,
     ...(d.namespace ? { namespace: d.namespace } : {}),
-    ...(Object.keys(d.labels || {}).length ? { labels: d.labels } : {}),
-    ...(Object.keys(d.annotations || {}).length ? { annotations: d.annotations } : {}),
+    labels: { ...(d.labels || {}) },
+    annotations: { ...(d.annotations || {}) },
   }
   obj.spec = obj.spec || {}
 
@@ -323,7 +382,7 @@ export function buildWorkload(base: any, d: any, kind: string): any {
   const initContainers = (d.initContainers || []).filter((c: any) => c.name && c.image).map(buildContainer)
   if (initContainers.length) tplSpec.initContainers = initContainers
   else delete tplSpec.initContainers
-  tpl.metadata = { ...(tpl.metadata || {}), ...(Object.keys(d.labels || {}).length ? { labels: d.labels } : {}) }
+  tpl.metadata = { ...(tpl.metadata || {}), labels: { ...(d.labels || {}) } }
   if (d.serviceAccountName) tplSpec.serviceAccountName = d.serviceAccountName
   const volumes = (d.volumes || []).filter((v: any) => v.name).map(buildVolume)
   if (volumes.length) tplSpec.volumes = volumes
@@ -343,17 +402,22 @@ export function buildWorkload(base: any, d: any, kind: string): any {
   else delete tplSpec.hostIPC
   if (d.dnsPolicy) tplSpec.dnsPolicy = d.dnsPolicy
   else delete tplSpec.dnsPolicy
-  tplSpec.terminationGracePeriodSeconds = Number(d.terminationGracePeriodSeconds ?? 30)
+  tplSpec.terminationGracePeriodSeconds = numOr(d.terminationGracePeriodSeconds, 30)
   const aliases = (d.hostAliases || []).filter((a: any) => a.ip).map((a: any) => ({ ip: a.ip, hostnames: (a.hostnamesText || '').split(',').map((s: string) => s.trim()).filter(Boolean) }))
   if (aliases.length) tplSpec.hostAliases = aliases
   else delete tplSpec.hostAliases
 
-  // Pod 级：安全上下文
-  const podSc: any = {}
-  if (d.podSc?.runAsUser !== '' && d.podSc?.runAsUser != null && !isNaN(Number(d.podSc.runAsUser))) podSc.runAsUser = Number(d.podSc.runAsUser)
-  if (d.podSc?.runAsGroup !== '' && d.podSc?.runAsGroup != null && !isNaN(Number(d.podSc.runAsGroup))) podSc.runAsGroup = Number(d.podSc.runAsGroup)
-  if (d.podSc?.fsGroup !== '' && d.podSc?.fsGroup != null && !isNaN(Number(d.podSc.fsGroup))) podSc.fsGroup = Number(d.podSc.fsGroup)
+  // Pod 级：安全上下文（与原始值合并，保留 sysctls/seLinuxOptions/fsGroupChangePolicy 等未建模字段）
+  const podSc: any = { ...(d.podScRaw || {}) }
+  const setPodScNum = (key: string, v: any) => {
+    if (v !== '' && v != null && String(v).trim() !== '' && Number.isFinite(Number(v))) podSc[key] = Number(v)
+    else delete podSc[key]
+  }
+  setPodScNum('runAsUser', d.podSc?.runAsUser)
+  setPodScNum('runAsGroup', d.podSc?.runAsGroup)
+  setPodScNum('fsGroup', d.podSc?.fsGroup)
   if (d.podSc?.runAsNonRoot) podSc.runAsNonRoot = true
+  else delete podSc.runAsNonRoot
   if (Object.keys(podSc).length) tplSpec.securityContext = podSc
   else delete tplSpec.securityContext
 
@@ -365,36 +429,63 @@ export function buildWorkload(base: any, d: any, kind: string): any {
   else delete tplSpec.nodeSelector
   const expressions = (d.nodeAffinityRows || [])
     .filter((r: any) => r.key)
-    .map((r: any) => ({ key: r.key, operator: r.operator || 'In', values: (r.valuesText || '').split(',').map((s: string) => s.trim()).filter(Boolean) }))
+    .map((r: any) => ({ key: r.key, operator: r.operator || 'In', values: (r.valuesText || '').split(',').map((x: string) => x.trim()).filter(Boolean) }))
   const antiLabels: any = {}
   for (const [k, v] of Object.entries(d.antiMatchLabels || {})) {
     if (k) antiLabels[k] = v
   }
-  if (expressions.length || d.antiTopologyKey) {
-    const affinity: any = {}
-    if (expressions.length) {
-      affinity.nodeAffinity = {
-        requiredDuringSchedulingIgnoredDuringExecution: { nodeSelectorTerms: [{ matchExpressions: expressions }] },
-      }
-    }
-    if (d.antiTopologyKey) {
-      affinity.podAntiAffinity = {
-        preferredDuringSchedulingIgnoredDuringExecution: [
-          { weight: 100, podAffinityTerm: { topologyKey: d.antiTopologyKey, ...(Object.keys(antiLabels).length ? { labelSelector: { matchLabels: antiLabels } } : {}) } },
-        ],
-      }
-    }
-    tplSpec.affinity = affinity
-  } else {
-    delete tplSpec.affinity
+  // 以原始 affinity 为基底（保留多 term / matchFields / preferred 权重 / podAffinity），
+  // 只覆盖表单建模的部分：nodeAffinity required 的首个 term 与反亲和 preferred 的首条
+  const stripEmpty = (o: any, key: string) => {
+    if (o && typeof o[key] === 'object' && o[key] !== null && !Array.isArray(o[key]) && Object.keys(o[key]).length === 0) delete o[key]
   }
+  const affinity: any = clone(d.rawAffinity || {})
+  if (expressions.length) {
+    const na: any = affinity.nodeAffinity || (affinity.nodeAffinity = {})
+    const req: any = na.requiredDuringSchedulingIgnoredDuringExecution || (na.requiredDuringSchedulingIgnoredDuringExecution = {})
+    const terms: any[] = req.nodeSelectorTerms?.length ? req.nodeSelectorTerms : []
+    terms[0] = { ...(terms[0] || {}), matchExpressions: expressions }
+    req.nodeSelectorTerms = terms
+  } else {
+    const req: any = affinity.nodeAffinity?.requiredDuringSchedulingIgnoredDuringExecution
+    if (req?.nodeSelectorTerms?.length) {
+      req.nodeSelectorTerms[0] = { ...req.nodeSelectorTerms[0] }
+      delete req.nodeSelectorTerms[0].matchExpressions
+      if (Object.keys(req.nodeSelectorTerms[0]).length === 0) req.nodeSelectorTerms.shift()
+      if (!req.nodeSelectorTerms.length) delete req.nodeSelectorTerms
+      stripEmpty(affinity.nodeAffinity, 'requiredDuringSchedulingIgnoredDuringExecution')
+      stripEmpty(affinity, 'nodeAffinity')
+    }
+  }
+  if (d.antiTopologyKey) {
+    const pa: any = affinity.podAntiAffinity || (affinity.podAntiAffinity = {})
+    const arr: any[] = pa.preferredDuringSchedulingIgnoredDuringExecution || []
+    const first: any = arr[0] || {}
+    const term0: any = { ...(first.podAffinityTerm || {}) }
+    term0.topologyKey = d.antiTopologyKey
+    if (Object.keys(antiLabels).length) term0.labelSelector = { ...(term0.labelSelector || {}), matchLabels: antiLabels }
+    else if (term0.labelSelector && !term0.labelSelector.matchExpressions) delete term0.labelSelector
+    const w = Number(first.weight)
+    arr[0] = { ...first, weight: Number.isFinite(w) && w > 0 ? w : 100, podAffinityTerm: term0 }
+    pa.preferredDuringSchedulingIgnoredDuringExecution = arr
+  } else {
+    const arr: any[] = affinity.podAntiAffinity?.preferredDuringSchedulingIgnoredDuringExecution
+    if (arr?.length) {
+      arr.shift()
+      if (!arr.length) delete affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution
+      stripEmpty(affinity, 'podAntiAffinity')
+    }
+  }
+  if (Object.keys(affinity).length) tplSpec.affinity = affinity
+  else delete tplSpec.affinity
   const tolerations = (d.tolerations || []).filter((t: any) => t.key && t.operator).map((t: any) => ({ key: t.key, operator: t.operator, ...(t.value ? { value: t.value } : {}), effect: t.effect }))
   if (tolerations.length) tplSpec.tolerations = tolerations
 
-  if (kind !== 'daemonsets' && kind !== 'cronjobs') {
-    obj.spec.replicas = d.replicas
+  // Job 没有 replicas / selector 字段（batch/v1 严格 schema，写入会被 API 拒绝）
+  if (kind !== 'daemonsets' && kind !== 'cronjobs' && kind !== 'jobs') {
+    obj.spec.replicas = numOr(d.replicas, 1)
   }
-  if (['deployments', 'statefulsets', 'daemonsets', 'jobs', 'replicasets', 'replicationcontrollers'].includes(kind)) {
+  if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'replicationcontrollers'].includes(kind)) {
     if (Object.keys(d.selector || {}).length) {
       obj.spec.selector = { matchLabels: d.selector }
     }
@@ -410,16 +501,16 @@ export function buildWorkload(base: any, d: any, kind: string): any {
     } else {
       delete obj.spec.strategy.rollingUpdate
     }
-    obj.spec.minReadySeconds = Number(d.minReadySeconds ?? 0)
-    obj.spec.revisionHistoryLimit = Number(d.revisionHistoryLimit ?? 10)
-    obj.spec.progressDeadlineSeconds = Number(d.progressDeadlineSeconds ?? 600)
+    obj.spec.minReadySeconds = numOr(d.minReadySeconds, 0)
+    obj.spec.revisionHistoryLimit = numOr(d.revisionHistoryLimit, 10)
+    obj.spec.progressDeadlineSeconds = numOr(d.progressDeadlineSeconds, 600)
   }
   if (kind === 'statefulsets') {
     if (d.serviceName) obj.spec.serviceName = d.serviceName
     obj.spec.podManagementPolicy = d.podManagementPolicy
     obj.spec.updateStrategy = { type: d.updateStrategyType }
     if (d.updateStrategyType === 'RollingUpdate') {
-      obj.spec.updateStrategy.rollingUpdate = { partition: Number(d.updatePartition ?? 0) }
+      obj.spec.updateStrategy.rollingUpdate = { partition: numOr(d.updatePartition, 0) }
     }
     const vcts = (d.volumeClaimTemplates || []).filter((v: any) => v.name).map((v: any) => ({
       apiVersion: 'v1',
@@ -435,7 +526,14 @@ export function buildWorkload(base: any, d: any, kind: string): any {
     else delete obj.spec.volumeClaimTemplates
   }
   if (kind === 'daemonsets') {
-    obj.spec.updateStrategy = { type: d.updateStrategyType || 'RollingUpdate' }
+    // 保留原 rollingUpdate 的 maxUnavailable/maxSurge（表单未建模，但为合法字段）
+    obj.spec.updateStrategy = { ...(obj.spec.updateStrategy || {}) }
+    obj.spec.updateStrategy.type = d.updateStrategyType || 'RollingUpdate'
+    if (obj.spec.updateStrategy.type === 'RollingUpdate') {
+      obj.spec.updateStrategy.rollingUpdate = obj.spec.updateStrategy.rollingUpdate || {}
+    } else {
+      delete obj.spec.updateStrategy.rollingUpdate
+    }
   }
   if (kind === 'cronjobs') {
     obj.spec.schedule = d.schedule
@@ -445,13 +543,13 @@ export function buildWorkload(base: any, d: any, kind: string): any {
     else delete obj.spec.startingDeadlineSeconds
     if (d.timeZone) obj.spec.timeZone = d.timeZone
     else delete obj.spec.timeZone
-    obj.spec.successfulJobsHistoryLimit = d.successfulJobsHistoryLimit
-    obj.spec.failedJobsHistoryLimit = d.failedJobsHistoryLimit
+    obj.spec.successfulJobsHistoryLimit = numOr(d.successfulJobsHistoryLimit, 3)
+    obj.spec.failedJobsHistoryLimit = numOr(d.failedJobsHistoryLimit, 1)
   }
   if (kind === 'jobs') {
-    obj.spec.parallelism = d.parallelism
-    obj.spec.completions = d.completions
-    obj.spec.backoffLimit = d.backoffLimit
+    obj.spec.parallelism = numOr(d.parallelism, 1)
+    obj.spec.completions = numOr(d.completions, 1)
+    obj.spec.backoffLimit = numOr(d.backoffLimit, 6)
     if (d.ttlSecondsAfterFinished !== '' && d.ttlSecondsAfterFinished != null && !isNaN(Number(d.ttlSecondsAfterFinished))) obj.spec.ttlSecondsAfterFinished = Number(d.ttlSecondsAfterFinished)
     else delete obj.spec.ttlSecondsAfterFinished
     if (d.activeDeadlineSeconds !== '' && d.activeDeadlineSeconds != null && !isNaN(Number(d.activeDeadlineSeconds))) obj.spec.activeDeadlineSeconds = Number(d.activeDeadlineSeconds)

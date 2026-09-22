@@ -5,6 +5,7 @@ package handler
 
 import (
 	"context"
+	"crypto/sha1"
 	"fmt"
 	"regexp"
 	"sort"
@@ -39,10 +40,28 @@ const (
 // AuthzHandler 授权管理
 type AuthzHandler struct {
 	clusters *service.ClusterManager
+	// perm 控制台自身的写权限判定（与本页写入的 K8s RBAC 同源）：
+	// 授权变更后要失效其缓存，否则最长 TTL 内新人拿不到/旧人有残留权限
+	perm *service.PermissionService
 }
 
-func NewAuthzHandler(clusters *service.ClusterManager) *AuthzHandler {
-	return &AuthzHandler{clusters: clusters}
+func NewAuthzHandler(clusters *service.ClusterManager, perm *service.PermissionService) *AuthzHandler {
+	return &AuthzHandler{clusters: clusters, perm: perm}
+}
+
+// MyPermissions GET /authz/my-permissions —— 当前用户在当前集群（X-Cluster）的写权限快照，
+// 前端据此隐藏/禁用写按钮（后端仍逐个接口强制判定，UI 只是提示）
+func (h *AuthzHandler) MyPermissions(c *gin.Context) {
+	cluster := middleware.ClusterName(c)
+	if cluster == "" {
+		response.Fail(c, 400, 400, "缺少 X-Cluster 请求头")
+		return
+	}
+	if h.perm == nil {
+		response.OK(c, &service.Access{NS: map[string]bool{}})
+		return
+	}
+	response.OK(c, h.perm.Access(c.Request.Context(), cluster, middleware.CurrentUser(c)))
 }
 
 func (h *AuthzHandler) client(c *gin.Context) *kube.Client {
@@ -61,7 +80,7 @@ func (h *AuthzHandler) client(c *gin.Context) *kube.Client {
 
 type grantReq struct {
 	Username   string   `json:"username" binding:"required"`
-	Role       string   `json:"role" binding:"required"` // view | edit | admin | 自定义 ClusterRole 名
+	Role       string   `json:"role" binding:"required"`       // view | edit | admin | 自定义 ClusterRole 名
 	Namespaces []string `json:"namespaces" binding:"required"` // 含 "*" 表示全集群
 }
 
@@ -71,9 +90,12 @@ func bindingName(user, role string) string {
 		s = strings.ToLower(s)
 		return re.ReplaceAllString(s, "-")
 	}
-	return fmt.Sprintf(bindingNameFmt, safe(user), safe(role))
+	// 净化会吞掉非 [a-z0-9.-] 字符：zhang.san 与 zhang-san 得到同名绑定，
+	// 第二人授权时 Create 报 already exists 但 Subjects 仍是第一人（静默丢授权）。
+	// 追加 user+role 的短哈希消歧（kc-grant- 前缀保留，isManagedGrant 仍识别）
+	sum := sha1.Sum([]byte(user + "\x00" + role))
+	return fmt.Sprintf("kc-grant-%s-%s-%x", safe(user), safe(role), sum[:4])
 }
-
 
 // ageOfMeta 资源创建至今的可读时长（与前端 parseDuration 兼容的简写格式）
 func ageOfMeta(t metav1.Time) string {
@@ -145,6 +167,10 @@ func (h *AuthzHandler) Grant(c *gin.Context) {
 		}
 	}
 	response.OK(c, gin.H{"created": created, "binding": bindingName(req.Username, req.Role)})
+	if h.perm != nil {
+		// 立即生效：下次请求就按新绑定判定
+		h.perm.Invalidate(middleware.ClusterName(c), req.Username)
+	}
 }
 
 func (h *AuthzHandler) upsertCRB(ctx context.Context, client *kube.Client, crb *rbacv1.ClusterRoleBinding) error {
@@ -240,8 +266,29 @@ func (h *AuthzHandler) Revoke(c *gin.Context) {
 	}
 	kind, name := c.Param("kind"), c.Param("name")
 	ns := c.Query("namespace")
+	// 回收后要失效这些主体在控制台的权限缓存
+	var affected []string
+	collect := func(subjects []rbacv1.Subject) {
+		for _, s := range subjects {
+			if s.Kind == "User" && s.Name != "" {
+				affected = append(affected, s.Name)
+			}
+		}
+	}
+	// 只允许回收本工具创建的绑定（managed 注解 / kc-grant- 前缀）：
+	// 按名直接 Delete 会删掉运维手工创建的任意同名 RBAC 对象（包注释的声明）
 	switch kind {
 	case "ClusterRoleBinding":
+		b, err := client.Clientset.RbacV1().ClusterRoleBindings().Get(c.Request.Context(), name, metav1.GetOptions{})
+		if err != nil {
+			response.Fail(c, 404, 404, "绑定不存在: "+err.Error())
+			return
+		}
+		if !isManagedGrant(&b.ObjectMeta) {
+			response.Fail(c, 400, 400, "仅可回收本页创建的授权（kc-grant- 前缀或 managed 注解），该绑定请通过资源管理删除")
+			return
+		}
+		collect(b.Subjects)
 		if err := client.Clientset.RbacV1().ClusterRoleBindings().Delete(c.Request.Context(), name, metav1.DeleteOptions{}); err != nil {
 			response.Fail(c, 400, 400, "删除失败: "+err.Error())
 			return
@@ -251,6 +298,16 @@ func (h *AuthzHandler) Revoke(c *gin.Context) {
 			response.Fail(c, 400, 400, "缺少 namespace 参数")
 			return
 		}
+		b, err := client.Clientset.RbacV1().RoleBindings(ns).Get(c.Request.Context(), name, metav1.GetOptions{})
+		if err != nil {
+			response.Fail(c, 404, 404, "绑定不存在: "+err.Error())
+			return
+		}
+		if !isManagedGrant(&b.ObjectMeta) {
+			response.Fail(c, 400, 400, "仅可回收本页创建的授权（kc-grant- 前缀或 managed 注解），该绑定请通过资源管理删除")
+			return
+		}
+		collect(b.Subjects)
 		if err := client.Clientset.RbacV1().RoleBindings(ns).Delete(c.Request.Context(), name, metav1.DeleteOptions{}); err != nil {
 			response.Fail(c, 400, 400, "删除失败: "+err.Error())
 			return
@@ -258,6 +315,11 @@ func (h *AuthzHandler) Revoke(c *gin.Context) {
 	default:
 		response.Fail(c, 400, 400, "kind 只能是 RoleBinding 或 ClusterRoleBinding")
 		return
+	}
+	if h.perm != nil {
+		for _, u := range affected {
+			h.perm.Invalidate(middleware.ClusterName(c), u)
+		}
 	}
 	response.OK(c, nil)
 }

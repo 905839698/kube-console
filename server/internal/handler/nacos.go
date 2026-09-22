@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"gorm.io/gorm"
 
+	"kube-console/server/internal/ci/errcode"
 	"kube-console/server/internal/model"
 	"kube-console/server/internal/service"
 	"kube-console/server/pkg/response"
@@ -88,9 +89,21 @@ func (h *NacosHandler) SaveNacosConfig(c *gin.Context) {
 		if cfg.AdminPassword == "" {
 			cfg.AdminPassword = existing.AdminPassword
 		}
-		h.db.Save(&cfg)
+		if err := h.db.Save(&cfg).Error; err != nil {
+			response.Fail(c, 500, 500, err.Error())
+			return
+		}
 	} else {
-		h.db.Create(&cfg)
+		if err := h.db.Create(&cfg).Error; err != nil && errcode.IsUniqueViolation(err) {
+			// 并发首建：对方已建，重读转更新
+			if h.db.Where("cluster_name = ?", cfg.ClusterName).First(&existing).Error == nil {
+				cfg.ID = existing.ID
+				_ = h.db.Save(&cfg).Error
+			}
+		} else if err != nil {
+			response.Fail(c, 500, 500, err.Error())
+			return
+		}
 	}
 	response.OK(c, cfg)
 }
@@ -98,8 +111,14 @@ func (h *NacosHandler) SaveNacosConfig(c *gin.Context) {
 // DeleteNacosConfig DELETE /nacos/config/:cluster（清理映射表并移除集群的 MWC）
 func (h *NacosHandler) DeleteNacosConfig(c *gin.Context) {
 	cluster := c.Param("cluster")
-	h.db.Where("cluster_name = ?", cluster).Delete(&model.NacosConfig{})
-	h.db.Where("cluster_name = ?", cluster).Delete(&model.NacosNamespace{})
+	if err := h.db.Where("cluster_name = ?", cluster).Delete(&model.NacosConfig{}).Error; err != nil {
+		response.Fail(c, 500, 500, err.Error())
+		return
+	}
+	if err := h.db.Where("cluster_name = ?", cluster).Delete(&model.NacosNamespace{}).Error; err != nil {
+		response.Fail(c, 500, 500, err.Error())
+		return
+	}
 	h.nacos.RemoveWebhookConfig(cluster)
 	response.OK(c, nil)
 }

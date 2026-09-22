@@ -55,7 +55,9 @@ type NacosClient struct {
 	username string
 	password string
 	http     *http.Client
-	token    string
+
+	mu           sync.Mutex // token/v3/styleChecked 并发保护（sync 循环与手动同步共享客户端）
+	token        string
 	v3           bool // API 风格：false=v1（1.x/2.x），true=v3（3.x 移除了 v1 console/admin API）
 	styleChecked bool // API 风格是否已探测
 }
@@ -89,12 +91,15 @@ func (c *NacosClient) do(ctx context.Context, method, path string, form url.Valu
 // httpDo 发送带凭证的请求：token 以 accessToken 参数 + Authorization 头双带（v1/v3 均识别），
 // GET/DELETE 参数走 query，其余 form 提交；返回响应体与状态码（传输错误才返回 err）
 func (c *NacosClient) httpDo(ctx context.Context, method, u string, form url.Values) ([]byte, int, error) {
-	if c.token != "" {
+	c.mu.Lock()
+	token := c.token
+	c.mu.Unlock()
+	if token != "" {
 		if form == nil {
 			form = url.Values{}
 		}
 		form = cloneForm(form)
-		form.Set("accessToken", c.token)
+		form.Set("accessToken", token)
 	}
 	var rdr io.Reader
 	if form != nil && method != http.MethodGet && method != http.MethodDelete {
@@ -156,9 +161,14 @@ func (c *NacosClient) login(ctx context.Context) error {
 		path = "/nacos/v3/auth/user/login"
 	}
 	raw, status, err := c.httpDo(ctx, http.MethodPost, c.addr+path, form)
-	if status == http.StatusNotFound && !c.v3 {
+	c.mu.Lock()
+	isV3 := c.v3
+	c.mu.Unlock()
+	if status == http.StatusNotFound && !isV3 {
 		// v1 登录不存在（v3-only 部署），切换 v3 重试
+		c.mu.Lock()
 		c.v3, c.styleChecked = true, true
+		c.mu.Unlock()
 		raw, status, err = c.httpDo(ctx, http.MethodPost, c.addr+"/nacos/v3/auth/user/login", form)
 	}
 	if err != nil {
@@ -173,12 +183,17 @@ func (c *NacosClient) login(ctx context.Context) error {
 	if json.Unmarshal(raw, &lr) != nil || lr.AccessToken == "" {
 		return fmt.Errorf("Nacos 登录响应无 accessToken: %s", truncateStr(string(raw), 200))
 	}
+	c.mu.Lock()
 	c.token = lr.AccessToken
+	c.mu.Unlock()
 	return nil
 }
 
 func (c *NacosClient) ensureLogin(ctx context.Context) error {
-	if c.username != "" && c.token == "" {
+	c.mu.Lock()
+	needLogin := c.username != "" && c.token == ""
+	c.mu.Unlock()
+	if needLogin {
 		if err := c.login(ctx); err != nil {
 			return err
 		}
@@ -190,18 +205,26 @@ func (c *NacosClient) ensureLogin(ctx context.Context) error {
 // detectStyle 探测 Nacos 版本风格（每客户端一次）：3.x 移除了 v1 console API，
 // v1 命名空间列表返回 404 即判定 v3；探测异常时保持 v1，由真实调用暴露错误。
 func (c *NacosClient) detectStyle(ctx context.Context) {
+	c.mu.Lock()
 	if c.styleChecked {
+		c.mu.Unlock()
 		return
 	}
 	c.styleChecked = true
+	c.mu.Unlock()
 	if _, status, err := c.httpDo(ctx, http.MethodGet, c.addr+"/nacos/v1/console/namespaces", nil); err == nil && status == http.StatusNotFound {
+		c.mu.Lock()
 		c.v3 = true
+		c.mu.Unlock()
 	}
 }
 
 // nsParam v3 风格下空命名空间归一为 public（v3 默认命名空间 ID；v1 空串即 public）
 func (c *NacosClient) nsParam(ns string) string {
-	if c.v3 && ns == "" {
+	c.mu.Lock()
+	v3 := c.v3
+	c.mu.Unlock()
+	if v3 && ns == "" {
 		return "public"
 	}
 	return ns
@@ -263,19 +286,52 @@ func (c *NacosClient) ListNamespaces(ctx context.Context) ([]NacosNsInfo, error)
 	if err := checkNacosResult(raw); err != nil {
 		return nil, err
 	}
-	var r struct {
-		Data []NacosNsInfo `json:"data"`
+	// v1/2.x console API 直接返回顶层数组（List<Namespace>），
+	// v3 admin API 是 {"code":0,"data":[...]} 包裹——两种都认。
+	// 旧实现只按 data 包裹解析，1.x/2.x 集群这里必然失败，
+	// 连带命名空间同步/注入整体不可用
+	var arr []NacosNsInfo
+	if json.Unmarshal(raw, &arr) != nil {
+		var r struct {
+			Data []NacosNsInfo `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return nil, fmt.Errorf("解析 Nacos 命名空间失败: %w", err)
+		}
+		arr = r.Data
 	}
-	if err := json.Unmarshal(raw, &r); err != nil {
-		return nil, fmt.Errorf("解析 Nacos 命名空间失败: %w", err)
+	// v3 admin API 用蛇形字段（namespace_show_name/namespace_desc），
+	// 驼形解析为空时按蛇形键回填展示名/描述
+	type rawNs struct {
+		ShowName string `json:"namespace_show_name"`
+		Desc     string `json:"namespace_desc"`
 	}
-	// 前端展示与存在性匹配统一走 namespaceId 字段，回填
-	for i := range r.Data {
-		if r.Data[i].NamespaceId == "" {
-			r.Data[i].NamespaceId = r.Data[i].Namespace
+	rawTarget := (*[]rawNs)(nil)
+	if err := json.Unmarshal(raw, &rawTarget); err == nil {
+		// no-op：顶层数组形态
+	} else {
+		var r struct {
+			Data []rawNs `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &r); err == nil {
+			rawTarget = &r.Data
 		}
 	}
-	return r.Data, nil
+	// 前端展示与存在性匹配统一走 namespaceId 字段，回填
+	for i := range arr {
+		if arr[i].NamespaceId == "" {
+			arr[i].NamespaceId = arr[i].Namespace
+		}
+		if rawTarget != nil && i < len(*rawTarget) {
+			if arr[i].NamespaceShowName == "" {
+				arr[i].NamespaceShowName = (*rawTarget)[i].ShowName
+			}
+			if arr[i].NamespaceDesc == "" {
+				arr[i].NamespaceDesc = (*rawTarget)[i].Desc
+			}
+		}
+	}
+	return arr, nil
 }
 
 func (c *NacosClient) CreateNamespace(ctx context.Context, id, name, desc string) error {
@@ -926,7 +982,10 @@ func (s *NacosService) syncOneNamespace(ctx context.Context, client *kube.Client
 	if err := nc.CreateRole(ctx, role, username); err != nil {
 		return fmt.Errorf("创建角色失败: %w", err)
 	}
-	if err := nc.GrantPermission(ctx, role, ns, "rw"); err != nil {
+	// Nacos 权限 resource 是 namespace#group#dataId 三段式（支持 * 通配）：
+	// 裸 ns 在鉴权匹配时永不命中（请求按 ns#group#dataId 组装 resource），
+	// 注入的用户实际拿不到任何配置权限，应用 403
+	if err := nc.GrantPermission(ctx, role, ns+"#*#*", "rw"); err != nil {
 		return fmt.Errorf("授权失败: %w", err)
 	}
 	// 4. K8s 侧 ConfigMap / Secret（Pod 注入的数据源）
@@ -951,10 +1010,14 @@ func (s *NacosService) syncOneNamespace(ctx context.Context, client *kube.Client
 		mapping.SyncedAt = time.Now()
 		s.db.Save(mapping)
 	} else {
-		s.db.Create(&model.NacosNamespace{
+		// 错误必须上抛：吞掉后下一轮同步仍走「用户已存在但 mapping==nil」分支
+		// 重置密码——Nacos 侧密码每轮轮换，持有旧密码的客户端被持续踢掉
+		if err := s.db.Create(&model.NacosNamespace{
 			ClusterName: cfg.ClusterName, K8sNamespace: ns, NacosNamespaceId: ns,
 			Username: username, Password: password, Status: "synced", SyncedAt: time.Now(),
-		})
+		}).Error; err != nil {
+			return fmt.Errorf("Nacos 命名空间映射落库失败（Nacos 侧用户已就绪，修复后下轮自动对齐）: %w", err)
+		}
 	}
 	return nil
 }

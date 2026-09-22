@@ -52,6 +52,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, FolderOpened, Document } from '@element-plus/icons-vue'
 import { filesApi, type FileEntryItem } from '../api'
 import { confirmDelete } from '../utils/confirm'
+import { useUserStore } from '../store/user'
+import { activeCluster } from '../store/clusterRef'
 
 const props = defineProps<{ namespace: string; pod: string; containers: { name: string }[] }>()
 
@@ -70,23 +72,43 @@ function joinPath(dir: string, name: string) {
   return (dir === '/' ? '' : dir) + '/' + name
 }
 
+let cdSeq = 0
 async function cd(path: string) {
+  // 请求序号：快速切换目录/容器时慢的旧响应后到会打回旧目录（列表与路径不一致）
+  const seq = ++cdSeq
   loading.value = true
   try {
     const res = await filesApi.list(props.namespace, props.pod, container.value, path)
+    if (seq !== cdSeq) return
     currentPath.value = res.path || path
     entries.value = (res.entries || []).filter((e) => e.name !== '.')
   } finally {
-    loading.value = false
+    if (seq === cdSeq) loading.value = false
   }
 }
 
 async function download(row: FileEntryItem) {
+  // <a> 导航不带 Authorization 头（下载路由在 authed 组）→ 旧实现必然 401。
+  // 改 fetch + Blob，带 JWT 与集群头（与 axios 实例同源）
   const url = filesApi.downloadUrl(props.namespace, props.pod, container.value, joinPath(currentPath.value, row.name))
+  const user = useUserStore()
+  const cluster = activeCluster.value || localStorage.getItem('kc-cluster') || ''
+  const resp = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${user.token}`,
+      'X-Cluster': encodeURIComponent(cluster),
+    },
+  })
+  if (!resp.ok) {
+    ElMessage.error(`下载失败（HTTP ${resp.status}）`)
+    return
+  }
+  const blob = await resp.blob()
   const a = document.createElement('a')
-  a.href = url
+  a.href = URL.createObjectURL(blob)
   a.download = row.name
   a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
 }
 
 async function remove(row: FileEntryItem) {

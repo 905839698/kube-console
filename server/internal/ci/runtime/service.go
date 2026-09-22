@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"kube-console/server/internal/ci/artifact"
 	"kube-console/server/internal/ci/credential"
@@ -219,7 +220,7 @@ func replaceGlobalVars(sv string, m map[string]string) string {
 	})
 }
 
-func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint, username, triggerType, branchOverride string) (*model.CIRun, error) {
+func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint, username, triggerType, branchOverride, commitOverride string) (*model.CIRun, error) {
 	p, err := s.store.Get(ctx, pipelineID)
 	if err != nil {
 		return nil, err
@@ -289,7 +290,7 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 	}
 	// 全局变量注入（${global.KEY} → 集群级变量值；未定义 key 保留）
 	s.injectGlobalVars(ctx, p.ClusterName, graph)
-	s.enrichGraph(graph, branchOverride) // 注入存储/构建端点伪参数 + 分支覆盖
+	s.enrichGraph(graph, branchOverride, commitOverride) // 注入存储/构建端点伪参数 + 分支/commit 覆盖
 	spec, err := s.pipe.Compiler.Compile(graph, ns)
 	if err != nil {
 		return nil, err
@@ -305,12 +306,30 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 	runName := fmt.Sprintf("run-%d-%d-%s", p.ID, runNo, suffix)
 	pvcName := fmt.Sprintf("ci-ws-%d-%d-%s", p.ID, runNo, suffix)
 
-	pipelineCRName := fmt.Sprintf("pl-%d-v%d", p.ID, version.Version)
+	// Pipeline CR 按 run 唯一：branchOverride/shallow 这类 run 级差异会被烤进 taskSpec，
+	// 若多个 run 共享 pl-<id>-v<version>（apply 整体覆盖），并发触发时先建的 run 生成
+	// TaskRun 会读到后一个 run 的 CR（跨 run 串分支，审批自发现修复后此路径漏网）。
+	// 每 run 独立 CR 后覆盖不存在；终态时 finishRun/Cancel/cleanupRun 删 CR，
+	// 孤儿 CR 由 reconcile 按「活跃 run 的 CR 集合」兜底清理。
+	pipelineCRName := fmt.Sprintf("pl-%d-v%d-r%d-%s", p.ID, version.Version, runNo, suffix)
 
-	// 4) ensure 项目 ns + apply Pipeline CR（幂等覆盖，失败无需回滚）。
+	// 4) ensure 项目 ns + 项目 CI 基础设施 + apply Pipeline CR（幂等覆盖，失败无需回滚）。
 	//    ns 必须先于凭证注入创建：凭据 Secret 按需拉齐到 run ns 需要 ns 已存在。
+	//    基础设施（运行 SA + RBAC）随项目创建时已写入，这里兜底是为了平台早期版本
+	//    建的老项目 / 人工准备的 ns：缺 SA 时 TaskRun 会 PodCreationFailed，那时既没
+	//    Pod 也没日志，所以能在提交前把原因说清楚就不要留给 Tekton。
 	if err := k8s.EnsureNamespace(ctx, ns); err != nil {
 		return nil, errcode.Newf(errcode.DepUnavailable, "确保项目 ns 失败: %v", err)
+	}
+	if added, err := k8s.EnsureCIInfra(ctx, ns, s.cfg.ServiceAccount); err != nil {
+		if errors.Is(err, tekton.ErrInfraSAUnavailable) {
+			return nil, errcode.Newf(errcode.DepUnavailable, "CI 基础设施不可用: %v", err)
+		}
+		// 其余写入失败不阻断：基础设施可能已由人工备好（例如平台账号只有读权限），
+		// 真有问题时 Tekton 会在 TaskRun 上明确报出来，此处留日志便于对照
+		log.Printf("runtime: 补齐 CI 基础设施 %s 失败（继续执行）: %v", ns, err)
+	} else if len(added) > 0 {
+		log.Printf("runtime: 为项目 ns %s 补写 CI 基础设施: %v", ns, added)
 	}
 	pullSecrets, err := s.injectCredentials(ctx, spec, graph, p.ProjectID, p.ClusterName, ns) // 凭证注入 + Secret 拉齐到 run ns
 	if err != nil {
@@ -319,8 +338,6 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 	if s.cfg.ImagePullSecret != "" {
 		pullSecrets = appendUniqueString(pullSecrets, s.cfg.ImagePullSecret)
 	}
-	s.injectTaskRunEnv(spec, runName) // 注入 CI_TASK_RUN（审批节点自发现用）
-
 	specMap, err := specToMap(spec)
 	if err != nil {
 		return nil, err
@@ -335,21 +352,26 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 	if branchOverride != "" {
 		branch = branchOverride
 	}
+	commit := gitParam(graph, "commit")
+	if commitOverride != "" {
+		commit = commitOverride
+	}
 	now := time.Now()
 	run := &model.CIRun{
-		ClusterName:   p.ClusterName,
-		PipelineID:    p.ID,
-		VersionID:     version.ID,
-		RunNo:         runNo,
-		Status:        model.CIRunStatusPending,
-		TriggerType:   triggerType,
-		GitCommit:     gitParam(graph, "commit"),
-		GitBranch:     branch,
-		GitRepo:       gitParam(graph, "url"),
-		StartedBy:     username,
-		TektonRunName: runName,
-		PVCName:       pvcName,
-		StartedAt:     &now,
+		ClusterName:      p.ClusterName,
+		PipelineID:       p.ID,
+		VersionID:        version.ID,
+		RunNo:            runNo,
+		Status:           model.CIRunStatusPending,
+		TriggerType:      triggerType,
+		GitCommit:        commit,
+		GitBranch:        branch,
+		GitRepo:          gitParam(graph, "url"),
+		StartedBy:        username,
+		TektonRunName:    runName,
+		TektonPipelineCR: pipelineCRName,
+		PVCName:          pvcName,
+		StartedAt:        &now,
 	}
 	if err := s.db.WithContext(ctx).Create(run).Error; err != nil {
 		return nil, err
@@ -376,7 +398,7 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 	}
 	// 项目级依赖缓存：任一节点勾选 cache 且平台开关开启时，确保缓存 PVC 并绑定
 	cacheClaim := s.ensureCachePVC(ctx, k8s, ns, p, graph)
-	params := gitParams(graph, branchOverride)
+	params := gitParams(graph, branchOverride, commitOverride)
 	if err := k8s.CreatePipelineRun(ctx, ns, runName, pipelineCRName, s.cfg.ServiceAccount, pvcName, cacheClaim, params, pullSecrets); err != nil {
 		s.cleanupRun(ctx, run, k8s, ns)
 		return nil, errcode.Newf(errcode.DepUnavailable, "创建 PipelineRun 失败: %v", err)
@@ -411,6 +433,9 @@ func (s *Service) Cancel(ctx context.Context, runID uint) (*model.CIRun, error) 
 			return nil, errcode.Newf(errcode.DepUnavailable, "取消 PipelineRun 失败: %v", err)
 		}
 	}
+	if run.TektonPipelineCR != "" {
+		_ = k8s.DeletePipeline(ctx, meta.NS, run.TektonPipelineCR) // best-effort：reconcile 兜底
+	}
 	now := time.Now()
 	// run 置终态 + 未终态的 task 一并置 cancelled
 	if err := s.db.WithContext(ctx).Model(&run).Updates(map[string]interface{}{
@@ -442,6 +467,9 @@ func (s *Service) cleanupRun(ctx context.Context, run *model.CIRun, k8s *tekton.
 		if err := k8s.DeletePVC(ctx, ns, run.PVCName); err != nil {
 			log.Printf("runtime: 补偿删 PVC %s 失败: %v（reconcile 会兜底）", run.PVCName, err)
 		}
+	}
+	if run.TektonPipelineCR != "" {
+		_ = k8s.DeletePipeline(ctx, ns, run.TektonPipelineCR)
 	}
 	_ = s.db.WithContext(ctx).Unscoped().Where("run_id = ?", run.ID).Delete(&model.CITaskRun{}).Error
 	if err := s.db.WithContext(ctx).Unscoped().Delete(&model.CIRun{}, run.ID).Error; nil == err {
@@ -547,10 +575,14 @@ func (s *Service) syncOnce(ctx context.Context) {
 	for i := range runs {
 		p, ok := pipesByID[runs[i].PipelineID]
 		if !ok {
+			// 流水线已删除：不能再跟踪状态，收敛为 cancelled（并尽力取消集群资源），
+			// 否则该 run 永远停在 pending/running，reconcile 每轮空刷日志
+			s.finalizeLostRun(ctx, &runs[i])
 			continue
 		}
 		proj, ok := projByID[p.ProjectID]
 		if !ok {
+			s.finalizeLostRun(ctx, &runs[i])
 			continue
 		}
 		key := groupKey{p.ClusterName, proj.Namespace}
@@ -592,6 +624,31 @@ func (s *Service) syncOnce(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// finalizeLostRun 流水线/项目行已删除的活跃 run：尽力解析落点取消集群侧
+// PipelineRun，DB 侧收敛为 cancelled。ns 无法解析时只做 DB 收敛（集群资源交
+// reconcile 按孤儿清理；项目 ns 若已随项目删除，PVC/CR 也随之消失）。
+func (s *Service) finalizeLostRun(ctx context.Context, run *model.CIRun) {
+	var meta runMeta
+	var k8s *tekton.Client
+	var p model.CIPipeline
+	if err := s.db.WithContext(ctx).First(&p, run.PipelineID).Error; err == nil {
+		var proj model.CIProject
+		if err := s.db.WithContext(ctx).First(&proj, p.ProjectID).Error; err == nil {
+			meta = runMeta{Cluster: p.ClusterName, NS: proj.Namespace}
+			if k, err := s.k8sFor(p.ClusterName); err == nil {
+				k8s = k
+			}
+		}
+	}
+	if k8s != nil {
+		if run.TektonRunName != "" {
+			_ = k8s.CancelPipelineRun(ctx, meta.NS, run.TektonRunName)
+		}
+	}
+	log.Printf("syncer: run %d 的流水线/项目已删除，收敛为 cancelled", run.ID)
+	s.finishRun(ctx, k8s, meta, run, model.CIRunStatusCancelled, "流水线或项目已被删除")
 }
 
 func (s *Service) syncRun(ctx context.Context, k8s *tekton.Client, meta runMeta, run *model.CIRun, st tekton.RunStatus, found bool, taskRuns []tekton.TaskRunInfo) error {
@@ -729,6 +786,8 @@ func (s *Service) syncRun(ctx context.Context, k8s *tekton.Client, meta runMeta,
 	return nil
 }
 
+// finishRun 收敛一次 run 到终态：DB 状态 + 未终态 task 置终态 + 清理 PVC/Pipeline CR。
+// k8s 允许为 nil（流水线/项目已删除、ns 无法解析时只做 DB 收敛，集群资源交 reconcile）。
 func (s *Service) finishRun(ctx context.Context, k8s *tekton.Client, meta runMeta, run *model.CIRun, status, reason string) {
 	now := time.Now()
 	res := s.db.WithContext(ctx).Model(&model.CIRun{}).
@@ -749,9 +808,14 @@ func (s *Service) finishRun(ctx context.Context, k8s *tekton.Client, meta runMet
 	_ = s.db.WithContext(ctx).
 		Where("run_id = ? AND status IN ?", run.ID,
 			[]string{model.CIRunStatusPending, model.CIRunStatusRunning}).
-		Updates(map[string]interface{}{"status": model.CIRunStatusFailed, "finished_at": now}).Error
-	if run.PVCName != "" {
-		_ = k8s.DeletePVC(ctx, meta.NS, run.PVCName)
+		Updates(map[string]interface{}{"status": status, "finished_at": now}).Error
+	if k8s != nil {
+		if run.PVCName != "" {
+			_ = k8s.DeletePVC(ctx, meta.NS, run.PVCName)
+		}
+		if run.TektonPipelineCR != "" {
+			_ = k8s.DeletePipeline(ctx, meta.NS, run.TektonPipelineCR)
+		}
 	}
 	run.Status = status
 	run.FinishedAt = &now
@@ -780,7 +844,7 @@ func (s *Service) notify(ctx context.Context, event string, run *model.CIRun, ms
 // mapTaskStatus 把 Tekton 状态映射为平台状态。
 func mapTaskStatus(s string) string {
 	switch s {
-	case "success", "failed", "cancelled":
+	case "success", "failed", "cancelled", "skipped":
 		return s
 	case "running":
 		return model.CIRunStatusRunning
@@ -851,7 +915,8 @@ func (s *Service) nodeParamsByRun(ctx context.Context, run *model.CIRun) map[str
 }
 
 // gitParams 从 DSL 的 git-clone 节点推导 GIT_* 参数（供条件分支 when 引用）。
-func gitParams(g *dsl.Graph, branchOverride string) []tekton.RunParam {
+// branchOverride/commitOverride 非空时覆盖（webhook 按实际推送的分支/commit 触发）。
+func gitParams(g *dsl.Graph, branchOverride, commitOverride string) []tekton.RunParam {
 	branch, repo, commit := "", "", ""
 	for _, n := range g.Nodes {
 		if n.Type != "git-clone" || n.Params == nil {
@@ -871,6 +936,9 @@ func gitParams(g *dsl.Graph, branchOverride string) []tekton.RunParam {
 	if branchOverride != "" {
 		branch = branchOverride
 	}
+	if commitOverride != "" {
+		commit = commitOverride
+	}
 	ref := compiler.ConditionVarNames(g)
 	vals := map[string]string{"GIT_BRANCH": branch, "GIT_COMMIT": commit, "GIT_REPO": repo}
 	var out []tekton.RunParam
@@ -884,6 +952,9 @@ func gitParams(g *dsl.Graph, branchOverride string) []tekton.RunParam {
 
 // nextRunNo 从计数器表原子分配 runNo（事务内读改写，跨驱动兼容；
 // 首建时以该流水线已有 MAX(run_no)+1 初始化，兼容存量数据）。
+// 计数器行用 SELECT ... FOR UPDATE 行锁串行化并发触发——普通 First 在 MySQL
+// REPEATABLE READ 下是快照读，两个事务会读到同一个 LastRunNo，后写的 Save 直接
+// 覆盖前者 → 重复 runNo → ci_runs 复合唯一键冲突，其中一个触发报裸错误。
 func (s *Service) nextRunNo(ctx context.Context, pipelineID uint) (int, error) {
 	var runNo int
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -891,14 +962,21 @@ func (s *Service) nextRunNo(ctx context.Context, pipelineID uint) (int, error) {
 		_ = tx.Model(&model.CIRun{}).Where("pipeline_id = ?", pipelineID).
 			Select("COALESCE(MAX(run_no), 0)").Scan(&maxNo).Error
 		var c model.CIRunCounter
-		if err := tx.Where("pipeline_id = ?", pipelineID).First(&c).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				c = model.CIRunCounter{PipelineID: pipelineID, LastRunNo: 0}
-				if err := tx.Create(&c).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("pipeline_id = ?", pipelineID).First(&c).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			c = model.CIRunCounter{PipelineID: pipelineID, LastRunNo: 0}
+			if cerr := tx.Create(&c).Error; cerr != nil {
+				if !isDuplicateKeyError(cerr) {
+					return cerr
+				}
+				// 并发首建：对方已建好这行，重新加锁读取（此刻行已存在，FOR UPDATE 生效）
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("pipeline_id = ?", pipelineID).First(&c).Error; err != nil {
 					return err
 				}
-			} else {
-				return err
 			}
 		}
 		// 取 DB 计数器与已有最大值中的较大者（防计数器落后）
@@ -917,6 +995,18 @@ func (s *Service) nextRunNo(ctx context.Context, pipelineID uint) (int, error) {
 		return 0, err
 	}
 	return runNo, nil
+}
+
+// isDuplicateKeyError 各驱动的「唯一键冲突」判错（MySQL 1062 / SQLite UNIQUE 约束）
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "1062") ||
+		strings.Contains(msg, "Duplicate entry") ||
+		strings.Contains(msg, "duplicate key") ||
+		strings.Contains(msg, "UNIQUE constraint failed")
 }
 
 // gitParam 从 DSL 里取第一个 git-clone 节点的参数（commit/branch/url）。

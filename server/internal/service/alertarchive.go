@@ -135,7 +135,9 @@ func syncAlertEvents(db *gorm.DB, cluster string, alerts []AMAlert, now time.Tim
 		}
 		seen[a.Fingerprint] = true
 		if ev, ok := openByFp[a.Fingerprint]; ok {
-			db.Model(&ev).Update("last_seen_at", now)
+			if err := db.Model(&ev).Update("last_seen_at", now).Error; err != nil {
+				return fmt.Errorf("更新告警 last_seen_at 失败: %w", err)
+			}
 			continue
 		}
 		started := now
@@ -158,9 +160,15 @@ func syncAlertEvents(db *gorm.DB, cluster string, alerts []AMAlert, now time.Tim
 			return fmt.Errorf("写入告警事件失败: %w", err)
 		}
 	}
-	// 不在 AM 列表中的开放记录 → 恢复
+	// 不在 AM 列表中的开放记录 → 恢复（带宽限：AM 重启/查询异常的单次空列表
+	// 不能立即批量误判——否则全量开放告警被误标 resolved，告警再现时又新开记录，
+	// 历史里留下大量误恢复 + 重复行）
+	const resolveGrace = 10 * time.Minute
 	for fp, ev := range openByFp {
 		if seen[fp] {
+			continue
+		}
+		if now.Sub(ev.LastSeenAt) < resolveGrace {
 			continue
 		}
 		if err := db.Model(&ev).Updates(map[string]interface{}{

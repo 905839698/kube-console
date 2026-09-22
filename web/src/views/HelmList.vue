@@ -6,7 +6,7 @@
         <div class="header-right">
           <el-input v-model="search" placeholder="搜索应用 / chart..." :prefix-icon="Search" clearable style="width: 200px" @input="load" />
           <el-button @click="load"><el-icon><Refresh /></el-icon></el-button>
-          <el-button type="primary" @click="openInstall"><el-icon><Plus /></el-icon>&nbsp;安装应用</el-button>
+          <el-button type="primary" :disabled="!canInstall" @click="openInstall"><el-icon><Plus /></el-icon>&nbsp;安装应用</el-button>
         </div>
       </div>
     </template>
@@ -40,9 +40,9 @@
       <el-table-column prop="age" label="更新时间" width="110" align="center" :sort-by="(row: any) => parseDuration(row.age)" />
       <el-table-column label="操作" width="280" fixed="right">
         <template #default="{ row }">
-          <el-button size="small" type="primary" plain @click="openUpgrade(row)">升级</el-button>
+          <el-button size="small" type="primary" plain :disabled="!perm.canWriteNS(row.namespace)" @click="openUpgrade(row)">升级</el-button>
           <el-button size="small" plain @click="openHistory(row)">历史</el-button>
-          <el-button size="small" type="danger" plain @click="uninstall(row)">卸载</el-button>
+          <el-button size="small" type="danger" plain :disabled="!perm.canWriteNS(row.namespace)" @click="uninstall(row)">卸载</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -88,7 +88,7 @@
       </el-form>
       <template #footer>
         <el-button @click="installVisible = false">取消</el-button>
-        <el-button type="primary" :loading="installing" @click="doInstall">安装</el-button>
+        <el-button type="primary" :loading="installing" :disabled="!perm.canWriteNS(install.namespace)" @click="doInstall">安装</el-button>
       </template>
     </el-dialog>
 
@@ -155,12 +155,17 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Search } from '@element-plus/icons-vue'
 import { helmApi, nsParam, type HelmReleaseItem, type HelmRepoItem, type RepoChartItem } from '../api'
 import { useNamespaceStore } from '../store/namespace'
+import { usePerm } from '../store/perm'
 import { parseDuration } from '../utils/sort'
 import YamlEditor from '../components/YamlEditor.vue'
 import { confirmDelete } from '../utils/confirm'
 
 const router = useRouter()
 const nsStore = useNamespaceStore()
+
+// 写权限：Helm release 是命名空间级资源（后端按该 ns 判定）
+const perm = usePerm()
+const canInstall = computed(() => perm.canWriteNS(nsStore.selected?.[0]))
 
 const items = ref<HelmReleaseItem[]>([])
 const search = ref('')
@@ -257,7 +262,7 @@ function openInstall() {
     chart: '',
     version: '',
     releaseName: '',
-    namespace: nsParam(nsStore.selected).split(',')[0] || 'default',
+    namespace: (nsParam(nsStore.selected).split(',')[0] || 'default') === '*' ? 'default' : nsParam(nsStore.selected).split(',')[0] || 'default',
     createNamespace: false,
     values: '',
     wait: false,
@@ -460,11 +465,11 @@ async function rollback(row: { version: number }) {
 
 async function uninstall(row: HelmReleaseItem) {
   try {
-    await confirmDelete(row.name, { title: '卸载应用', warning: '卸载不可恢复。' })
+    await confirmDelete(row.name, { title: '卸载应用', warning: '卸载后删除 release 及其全部记录，不可恢复。' })
   } catch {
     return
   }
-  await helmApi.uninstall(row.namespace, row.name, true)
+  await helmApi.uninstall(row.namespace, row.name, false)
   ElMessage.success('已卸载')
   load()
 }

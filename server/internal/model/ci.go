@@ -31,6 +31,7 @@ const (
 	CIRunStatusSuccess   = "success"
 	CIRunStatusFailed    = "failed"
 	CIRunStatusCancelled = "cancelled"
+	CIRunStatusSkipped   = "skipped" // 条件分支未命中的任务（Tekton when 表达式为假）
 )
 
 // 凭证 form（密钥形态），驱动 K8s Secret 的数据结构与运行时注入策略。
@@ -111,6 +112,7 @@ type CIRun struct {
 	GitRepo       string     `gorm:"size:256" json:"gitRepo"`
 	StartedBy     string     `gorm:"size:64" json:"startedBy"`
 	TektonRunName string     `gorm:"size:128" json:"tektonRunName"` // 对应 k8s PipelineRun 名
+	TektonPipelineCR string  `gorm:"size:128" json:"-"`             // 本 run 的 Pipeline CR 名（按 run 唯一，终态清理）
 	PVCName       string     `gorm:"size:128" json:"pvcName"`       // 本 run 的共享 workspace PVC
 	StartedAt     *time.Time `json:"startedAt"`
 	FinishedAt    *time.Time `json:"finishedAt"`
@@ -219,7 +221,7 @@ type CIWebhookDelivery struct {
 	EventHash string    `gorm:"size:64;uniqueIndex" json:"-"` // 事件指纹去重（webhook|分支|commit）
 	Branch    string    `gorm:"size:128" json:"branch"`
 	Commit    string    `gorm:"size:64" json:"commit"`
-	Status    string    `gorm:"size:32" json:"status"` // accepted / failed
+	Status    string    `gorm:"size:32" json:"status"` // pending / accepted / failed
 	Error     string    `gorm:"size:512" json:"error,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }

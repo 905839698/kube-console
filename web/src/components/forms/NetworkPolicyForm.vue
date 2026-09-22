@@ -24,7 +24,7 @@
             <div class="rule-section">
               <div class="rule-label">允许来源 (from)</div>
               <div v-for="(f, fi) in rule.from || []" :key="fi" class="kv-row">
-                <el-select v-model="f.kind" size="small" style="width: 30%">
+                <el-select v-model="f.kind" size="small" style="width: 30%" @change="onKindChange(f)">
                   <el-option v-for="t in ['PodSelector', 'NamespaceSelector', 'IPBlock']" :key="t" :label="t" :value="t" />
                 </el-select>
                 <el-input v-if="f.kind === 'IPBlock'" v-model="f.ipBlock.cidr" placeholder="如 10.0.0.0/8" size="small" style="width: 35%" />
@@ -60,7 +60,7 @@
             <div class="rule-section">
               <div class="rule-label">目标 (to)</div>
               <div v-for="(f, fi) in rule.to || []" :key="fi" class="kv-row">
-                <el-select v-model="f.kind" size="small" style="width: 30%">
+                <el-select v-model="f.kind" size="small" style="width: 30%" @change="onKindChange(f)">
                   <el-option v-for="t in ['PodSelector', 'NamespaceSelector', 'IPBlock']" :key="t" :label="t" :value="t" />
                 </el-select>
                 <el-input v-if="f.kind === 'IPBlock'" v-model="f.ipBlock.cidr" placeholder="如 0.0.0.0/0" size="small" style="width: 35%" />
@@ -117,6 +117,15 @@ function addTo(rule: any) {
 function addPort(rule: any) {
   rule.ports = rule.ports || []
   rule.ports.push({ port: 80, protocol: 'TCP' })
+}
+
+// Peer 只允许 podSelector / namespaceSelector / ipBlock 三选一：
+// 切到 IPBlock 要先建 ipBlock（否则 v-model 写 undefined.cidr 直接报错），
+// 切到 selector 要清掉残留的 ipBlock（否则 YAML 里混着两种字段，API 拒绝整个策略）
+function onKindChange(f: any) {
+  for (const k of ['podSelector', 'namespaceSelector', 'ipBlock']) delete f[k]
+  if (f.kind === 'IPBlock') f.ipBlock = { cidr: '' }
+  else if (f.kind) f[f.kind.toLowerCase()] = { matchLabels: {} }
 }
 </script>
 

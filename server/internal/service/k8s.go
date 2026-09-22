@@ -92,14 +92,16 @@ func splitNamespaces(ns string) []string {
 // ------------------- 集群总览 -------------------
 
 type NodeSummary struct {
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	Roles      string `json:"roles"`
-	InternalIP string `json:"internalIP"`
-	Version    string `json:"version"`
-	CPUCores   string `json:"cpuCores"`
-	MemGi      string `json:"memGi"`
-	Age        string `json:"age"`
+	Name             string `json:"name"`
+	Status           string `json:"status"`
+	Roles            string `json:"roles"`
+	InternalIP       string `json:"internalIP"`
+	Version          string `json:"version"`
+	KernelVersion    string `json:"kernelVersion"`
+	ContainerRuntime string `json:"containerRuntime"`
+	CPUCores         string `json:"cpuCores"`
+	MemGi            string `json:"memGi"`
+	Age              string `json:"age"`
 }
 
 type OverviewStats struct {
@@ -162,10 +164,17 @@ func (s *K8sService) Overview(ctx context.Context, c *kube.Client) (*OverviewSta
 		Services:     len(svcs.Items),
 		Ingresses:    len(ings.Items),
 	}
+	// 控制面静态 Pod 所在节点（角色 label 缺失时的兜底推断依据）
+	cpNode := make(map[string]bool)
+	for i := range pods.Items {
+		if pp := pods.Items[i]; pp.Spec.NodeName != "" && isControlPlanePod(pp.Namespace, pp.Name) {
+			cpNode[pp.Spec.NodeName] = true
+		}
+	}
 	var cpuMilli, memMi int64
 	for _, n := range nodes.Items {
 		stats.Nodes++
-		ns := nodeSummary(&n)
+		ns := nodeSummary(&n, cpNode[n.Name])
 		if ns.Status == "Ready" {
 			stats.NodesReady++
 		}
@@ -187,7 +196,32 @@ func (s *K8sService) Overview(ctx context.Context, c *kube.Client) (*OverviewSta
 	return stats, nil
 }
 
-func nodeSummary(n *corev1.Node) NodeSummary {
+// isControlPlanePod kube-system 下的控制面静态 Pod（手工安装集群可能没有任何角色 label，
+// 但 apiserver 等静态 Pod 一定跑在控制面节点上，这是最可靠的运行时信号）
+func isControlPlanePod(namespace, name string) bool {
+	if namespace != "kube-system" {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(name, "kube-apiserver"),
+		strings.HasPrefix(name, "kube-scheduler"),
+		strings.HasPrefix(name, "kube-controller-manager"),
+		strings.HasPrefix(name, "etcd"):
+		return true
+	}
+	return false
+}
+
+func nodeRunsControlPlanePods(pods []corev1.Pod) bool {
+	for i := range pods {
+		if isControlPlanePod(pods[i].Namespace, pods[i].Name) {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeSummary(n *corev1.Node, runsCPPods bool) NodeSummary {
 	ready := "NotReady"
 	for _, cond := range n.Status.Conditions {
 		if cond.Type == corev1.NodeReady {
@@ -201,6 +235,35 @@ func nodeSummary(n *corev1.Node) NodeSummary {
 	for k := range n.Labels {
 		if v, ok := strings.CutPrefix(k, "node-role.kubernetes.io/"); ok && v != "" {
 			roles = append(roles, v)
+		}
+	}
+	if len(roles) == 0 {
+		// 旧版角色 label（1.19 前 kubeadm / 旧发行版）：kubernetes.io/role=master|node|control-plane
+		// 键值形式，与上面的空值键形式并存时以新版为准（新 label 优先）
+		if v, ok := n.Labels["kubernetes.io/role"]; ok && v != "" {
+			switch v {
+			case "master", "control-plane":
+				roles = append(roles, v)
+			case "node":
+				roles = append(roles, "worker")
+			default:
+				roles = append(roles, v)
+			}
+		}
+	}
+	if len(roles) == 0 {
+		// 无任何角色 label（手工搭建/部分云厂商集群常见）：
+		// 先按控制面 taint 推断，再看该节点是否真的跑着控制面静态 Pod，都推不出才落 worker
+		for _, t := range n.Spec.Taints {
+			switch t.Key {
+			case "node-role.kubernetes.io/master":
+				roles = append(roles, "master")
+			case "node-role.kubernetes.io/control-plane":
+				roles = append(roles, "control-plane")
+			}
+		}
+		if len(roles) == 0 && runsCPPods {
+			roles = append(roles, "control-plane")
 		}
 	}
 	if len(roles) == 0 {
@@ -224,7 +287,10 @@ func nodeSummary(n *corev1.Node) NodeSummary {
 	}
 	return NodeSummary{
 		Name: n.Name, Status: ready, Roles: strings.Join(roles, ","), InternalIP: ip,
-		Version: n.Status.NodeInfo.KubeletVersion, CPUCores: cpu, MemGi: mem,
+		Version: n.Status.NodeInfo.KubeletVersion,
+		KernelVersion: n.Status.NodeInfo.KernelVersion,
+		ContainerRuntime: n.Status.NodeInfo.ContainerRuntimeVersion,
+		CPUCores: cpu, MemGi: mem,
 		Age: ageOf(n.CreationTimestamp),
 	}
 }
@@ -274,12 +340,11 @@ type NodeDetail struct {
 	Allocatable   map[string]string `json:"allocatable"`
 	Conditions    []CondItem        `json:"conditions"`
 	Taints        []string          `json:"taints"`
-	TaintItems    []TaintItem       `json:"taintItems"`
-	Schedulable   bool              `json:"schedulable"`
-	Pods          []PodItem         `json:"pods"`
-	ContainerRuntime string         `json:"containerRuntime"`
-	OSImage       string            `json:"osImage"`
-	KernelVersion string            `json:"kernelVersion"`
+	TaintItems []TaintItem `json:"taintItems"`
+	Schedulable bool       `json:"schedulable"`
+	Pods        []PodItem  `json:"pods"`
+	// KernelVersion / ContainerRuntime 由内嵌 NodeSummary 提供
+	OSImage string `json:"osImage"`
 }
 
 // TaintItem 结构化污点（供可视化编辑）
@@ -323,13 +388,10 @@ func (s *K8sService) GetNodeDetail(ctx context.Context, c *kube.Client, name str
 
 func (s *K8sService) buildNodeDetail(ctx context.Context, c *kube.Client, n *corev1.Node) (*NodeDetail, error) {
 	d := &NodeDetail{
-		NodeSummary: nodeSummary(n),
 		Labels:      n.Labels,
 		Capacity:    formatResourceMap(n.Status.Capacity),
 		Allocatable: formatResourceMap(n.Status.Allocatable),
-		ContainerRuntime: n.Status.NodeInfo.ContainerRuntimeVersion,
-		OSImage: n.Status.NodeInfo.OSImage,
-		KernelVersion: n.Status.NodeInfo.KernelVersion,
+		OSImage:     n.Status.NodeInfo.OSImage,
 		Schedulable: !n.Spec.Unschedulable,
 	}
 	for _, cond := range n.Status.Conditions {
@@ -347,6 +409,9 @@ func (s *K8sService) buildNodeDetail(ctx context.Context, c *kube.Client, n *cor
 	pods, err := c.Clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		FieldSelector: fields.OneTermEqualSelector("spec.nodeName", n.Name).String(),
 	})
+	// summary 依赖 Pod 列表做角色兜底推断，必须在列完 Pod 之后计算
+	runsCP := err == nil && nodeRunsControlPlanePods(pods.Items)
+	d.NodeSummary = nodeSummary(n, runsCP)
 	if err == nil {
 		for i := range pods.Items {
 			d.Pods = append(d.Pods, s.podItem(&pods.Items[i]))
@@ -1375,30 +1440,56 @@ func (s *K8sService) DeleteGeneric(ctx context.Context, c *kube.Client, kind, na
 
 // ------------------- YAML 应用 -------------------
 
-// ApplyYAML 应用 YAML（create-or-update），返回是否新建
+// ApplyYAML 应用 YAML（create-or-update，支持 --- 分隔的多文档），返回是否含新建。
+// 多文档逐个应用：某文档失败不中断其余文档，错误按「第 N 文档 (kind/name)」聚合返回
+// （旧实现只解析第一个文档，其余静默丢弃却返回成功）。
 func (s *K8sService) ApplyYAML(ctx context.Context, c *kube.Client, yamlStr string) (bool, error) {
-	// Gateway API 资源：版本随渠道变化（v1/v1beta1/v1alphaN），需通过 discovery
-	// 解析集群实际提供的版本，避免硬编码 apiVersion 导致 404。
-	var m map[string]interface{}
-	if err := yaml.Unmarshal([]byte(yamlStr), &m); err == nil {
-		yamlKind, _ := m["kind"].(string)
-		if resource, isGW := kube.IsGatewayKindFromYAML(yamlKind); isGW {
-			gvr, ok, err := kube.ResolveGVR(ctx, c, resource)
-			if !ok {
-				return false, err
-			}
-			expected := gvr.Group + "/" + gvr.Version
-			if apiVersion, _ := m["apiVersion"].(string); apiVersion != expected {
-				m["apiVersion"] = expected
-				data, err := yaml.Marshal(m)
-				if err != nil {
-					return false, err
+	docs, err := kube.ParseYAMLDocs(yamlStr)
+	if err != nil {
+		return false, apierrors.NewBadRequest("YAML 解析失败: " + err.Error())
+	}
+	if len(docs) == 0 {
+		return false, apierrors.NewBadRequest("YAML 为空或无有效文档")
+	}
+	createdAny := false
+	var errs []string
+	for i, obj := range docs {
+		m := obj.Object
+		// 剥离 status：状态归控制器所有（服务端按子资源忽略），从集群读回的 YAML
+		// 原样提交回来只会触发 CRD 对 status 的必填校验噪音——如 ArgoCD Application
+		// 的 status.operationState.syncResult.resources[].group 在 core 组为空却被判缺失
+		delete(m, "status")
+		// Gateway API 资源：版本随渠道变化（v1/v1beta1/v1alphaN），需通过 discovery
+		// 解析集群实际提供的版本，避免硬编码 apiVersion 导致 404。
+		if kind, _ := m["kind"].(string); kind != "" {
+			if resource, isGW := kube.IsGatewayKindFromYAML(kind); isGW {
+				gvr, ok, rerr := kube.ResolveGVR(ctx, c, resource)
+				if !ok {
+					errs = append(errs, fmt.Sprintf("第 %d 文档 (%s/%s): %v", i+1, kind, obj.GetName(), rerr))
+					continue
 				}
-				yamlStr = string(data)
+				expected := gvr.Group + "/" + gvr.Version
+				if apiVersion, _ := m["apiVersion"].(string); apiVersion != expected {
+					m["apiVersion"] = expected
+				}
 			}
 		}
+		data, merr := yaml.Marshal(m)
+		if merr != nil {
+			errs = append(errs, fmt.Sprintf("第 %d 文档 (%s/%s): 序列化失败 %v", i+1, obj.GetKind(), obj.GetName(), merr))
+			continue
+		}
+		cr, aerr := kube.ApplyYAML(ctx, c.Dynamic, string(data))
+		if aerr != nil {
+			errs = append(errs, fmt.Sprintf("第 %d 文档 (%s/%s): %v", i+1, obj.GetKind(), obj.GetName(), aerr))
+			continue
+		}
+		createdAny = createdAny || cr
 	}
-	return kube.ApplyYAML(ctx, c.Dynamic, yamlStr)
+	if len(errs) > 0 {
+		return createdAny, fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return createdAny, nil
 }
 
 // routeKinds 属于 Gateway API 的路由资源（支持 parentRefs 跨命名空间引用）
@@ -1409,11 +1500,20 @@ var routeKinds = map[string]bool{
 // SyncReferenceGrant 当 Route 的 parentRefs 引用了其他命名空间的 Gateway 时，
 // 自动在 Gateway 所在命名空间创建 ReferenceGrant 授权（静默失败，不影响主流程）。
 func (s *K8sService) SyncReferenceGrant(ctx context.Context, c *kube.Client, yamlStr string) error {
-	var m map[string]interface{}
-	if err := yaml.Unmarshal([]byte(yamlStr), &m); err != nil {
+	objs, err := kube.ParseYAMLDocs(yamlStr)
+	if err != nil {
 		return nil
 	}
-	obj := &unstructured.Unstructured{Object: m}
+	var lastErr error
+	for _, obj := range objs {
+		if e := s.syncReferenceGrantOne(ctx, c, obj); e != nil {
+			lastErr = e
+		}
+	}
+	return lastErr
+}
+
+func (s *K8sService) syncReferenceGrantOne(ctx context.Context, c *kube.Client, obj *unstructured.Unstructured) error {
 	kind := obj.GetKind()
 	if !routeKinds[kind] {
 		return nil
@@ -1479,11 +1579,20 @@ func (s *K8sService) SyncReferenceGrant(ctx context.Context, c *kube.Client, yam
 // SyncServiceMonitor 根据 Service 的监控 annotation 自动创建/更新/删除 ServiceMonitor
 // annotation: monitoring.coreos.com/servicemonitor=true 启用；port/interval 可选
 func (s *K8sService) SyncServiceMonitor(ctx context.Context, c *kube.Client, yamlStr string) error {
-	var m map[string]interface{}
-	if err := yaml.Unmarshal([]byte(yamlStr), &m); err != nil {
+	objs, err := kube.ParseYAMLDocs(yamlStr)
+	if err != nil {
 		return nil // 非 YAML 场景静默
 	}
-	obj := &unstructured.Unstructured{Object: m}
+	var lastErr error
+	for _, obj := range objs {
+		if e := s.syncServiceMonitorOne(ctx, c, obj); e != nil {
+			lastErr = e
+		}
+	}
+	return lastErr
+}
+
+func (s *K8sService) syncServiceMonitorOne(ctx context.Context, c *kube.Client, obj *unstructured.Unstructured) error {
 	if obj.GetKind() != "Service" {
 		return nil
 	}
@@ -1570,11 +1679,20 @@ func (s *K8sService) SyncServiceMonitor(ctx context.Context, c *kube.Client, yam
 // annotation: monitoring.coreos.com/podmonitor=true 启用；port/interval/path 可选
 // PodMonitor 直接采集 Pod 的 /metrics（无需 Service），适用于 headless/无 Service 工作负载
 func (s *K8sService) SyncPodMonitor(ctx context.Context, c *kube.Client, yamlStr string) error {
-	var m map[string]interface{}
-	if err := yaml.Unmarshal([]byte(yamlStr), &m); err != nil {
+	objs, err := kube.ParseYAMLDocs(yamlStr)
+	if err != nil {
 		return nil
 	}
-	obj := &unstructured.Unstructured{Object: m}
+	var lastErr error
+	for _, obj := range objs {
+		if e := s.syncPodMonitorOne(ctx, c, obj); e != nil {
+			lastErr = e
+		}
+	}
+	return lastErr
+}
+
+func (s *K8sService) syncPodMonitorOne(ctx context.Context, c *kube.Client, obj *unstructured.Unstructured) error {
 	kind := obj.GetKind()
 	// 支持的工作负载 kind
 	switch kind {
@@ -1794,6 +1912,13 @@ func (s *K8sService) Search(ctx context.Context, c *kube.Client, q string, limit
 		items = append(items, SearchItem{Type: typ, Namespace: ns, Name: name})
 		mu.Unlock()
 	}
+	// 读 items 长度同样要持锁（slice header 在 append 时并发写，
+	// 裸读 len(items) 是 data race）
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(items)
+	}
 
 	wg.Add(1)
 	go func() {
@@ -1802,7 +1927,7 @@ func (s *K8sService) Search(ctx context.Context, c *kube.Client, q string, limit
 			for i := range list.Items {
 				if strings.Contains(strings.ToLower(list.Items[i].Name), search) {
 					add("namespaces", "", list.Items[i].Name)
-					if len(items) >= limit { // 粗粒度限流
+					if count() >= limit { // 粗粒度限流
 						break
 					}
 				}

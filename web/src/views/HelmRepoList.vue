@@ -266,7 +266,7 @@ function openInstall(row: RepoChartItem) {
     versions: row.versions,
     version: row.latestVersion,
     releaseName: '',
-    namespace: nsParam(nsStore.selected).split(',')[0] || 'default',
+    namespace: (nsParam(nsStore.selected).split(',')[0] || 'default') === '*' ? 'default' : nsParam(nsStore.selected).split(',')[0] || 'default',
     createNamespace: false,
     values: '',
     wait: false,

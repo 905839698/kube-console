@@ -146,10 +146,15 @@ func (w *Webhook) HandleGitLab(ctx context.Context, body []byte, token string) (
 		return 0, "", errcode.Newf(errcode.InvalidParam, "分支 %s 不在过滤范围内（%s）", filterBranch, wh.Branch)
 	}
 
-	// 去重：GitLab 对同一事件会重试，相同指纹（webhook|分支|commit）只触发一次
+	// 去重：GitLab 对同一事件会重试，相同指纹（webhook|分支|commit）只触发一次。
+	// 只对 accepted 去重——failed 投递（如集群瞬时不可用）不占指纹，
+	// GitLab 重试同一事件还能再触发一次，避免一次瞬时失败永久丢失该次 push。
 	eventHash := eventHashFingerprint(wh.ID, trig.Branch, trig.Commit)
 	var cnt int64
-	_ = w.db.Model(&model.CIWebhookDelivery{}).Where("event_hash = ?", eventHash).Count(&cnt).Error
+	if err := w.db.Model(&model.CIWebhookDelivery{}).
+		Where("event_hash = ? AND status = ?", eventHash, "accepted").Count(&cnt).Error; err != nil {
+		log.Printf("webhook: 去重查询失败，按新事件处理: %v", err)
+	}
 	if cnt > 0 {
 		log.Printf("webhook: 重复投递已忽略 pipeline=%d branch=%s commit=%s", wh.PipelineID, trig.Branch, trig.Commit)
 		return wh.PipelineID, "duplicate delivery ignored", nil
@@ -157,23 +162,35 @@ func (w *Webhook) HandleGitLab(ctx context.Context, body []byte, token string) (
 
 	delivery := &model.CIWebhookDelivery{
 		WebhookID: wh.ID, EventHash: eventHash,
-		Branch: trig.Branch, Commit: trig.Commit, Status: "accepted",
+		Branch: trig.Branch, Commit: trig.Commit, Status: "pending",
+	}
+	// 先落 delivery 行再异步触发：event_hash 唯一索引是并发去重的原子闸门
+	// （旧实现 Count→StartRun→Create，同事件两个并发投递都能通过 Count 检查）。
+	// 唯一键冲突 = 并发重投，按重复忽略；落库失败不阻塞触发（只记日志）。
+	if err := w.db.Create(delivery).Error; err != nil {
+		if isDuplicateKeyError(err) {
+			log.Printf("webhook: 重复投递已忽略 pipeline=%d branch=%s commit=%s", wh.PipelineID, trig.Branch, trig.Commit)
+			return wh.PipelineID, "duplicate delivery ignored", nil
+		}
+		log.Printf("webhook: delivery 落库失败（继续触发）: %v", err)
 	}
 
 	// 异步触发：独立 Background ctx + 超时（GitLab 已 200 返回）
 	go func() {
 		runCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
-		// tag_push 以 tag 名覆盖 git-clone 的 branch（git --branch 接受 tag）
-		run, err := w.rt.StartRun(runCtx, wh.PipelineID, 0, 0, trig.User, "webhook", trig.Branch)
+		// tag_push 以 tag 名覆盖 git-clone 的 branch（git --branch 接受 tag）；
+		// commit 一并覆盖，GIT_COMMIT 条件参数与 run 记录才能拿到真实 SHA
+		run, err := w.rt.StartRun(runCtx, wh.PipelineID, 0, 0, trig.User, "webhook", trig.Branch, trig.Commit)
 		if err != nil {
 			delivery.Status = "failed"
 			delivery.Error = truncateStr(err.Error(), 500)
 			log.Printf("webhook: 触发 pipeline %d 失败: %v", wh.PipelineID, err)
 		} else {
-			log.Printf("webhook: 触发 pipeline %d → run #%d (branch=%s)", wh.PipelineID, run.RunNo, trig.Branch)
+			delivery.Status = "accepted"
+			log.Printf("webhook: 触发 pipeline %d → run #%d (branch=%s commit=%s)", wh.PipelineID, run.RunNo, trig.Branch, trig.Commit)
 		}
-		_ = w.db.Create(delivery).Error
+		_ = w.db.Save(delivery).Error
 		// 只保留最近 200 条
 		var recent []model.CIWebhookDelivery
 		_ = w.db.Where("webhook_id = ?", wh.ID).Order("id desc").Offset(200).Find(&recent).Error

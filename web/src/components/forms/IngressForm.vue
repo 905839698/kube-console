@@ -59,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, watch } from 'vue'
 import { Delete, Plus } from '@element-plus/icons-vue'
 
 const props = defineProps<{ modelValue: any }>()
@@ -99,8 +99,10 @@ function switchBackend(path: any, type: string) {
   }
 }
 
-// 挂载时归一化数据结构，避免渲染崩溃（backend 缺失等）
-onMounted(() => {
+// 归一化数据结构，避免渲染崩溃（backend 缺失等）。
+// 必须在 setup 阶段（首帧渲染前）执行：onMounted 晚于首次渲染，
+// 模板里的 path.backend.service.port.number 会先按旧结构访问一次直接白屏
+function normalize() {
   const obj = props.modelValue
   if (obj?.spec?.rules) {
     for (const rule of obj.spec.rules) {
@@ -115,7 +117,10 @@ onMounted(() => {
       }
     }
   }
-})
+}
+normalize()
+// YAML tab 重新解析后 modelValue 会被整体替换：新对象同样需要归一化
+watch(() => props.modelValue, (nv) => { if (nv) normalize() })
 
 // TLS hosts 为数组，用逗号分隔字符串编辑
 function hostsStr(tls: any): string {

@@ -39,6 +39,8 @@ steps:
       NS="${NS:-argocd}"
       TIMEOUT="$(params.timeoutSeconds)"
       TIMEOUT="${TIMEOUT:-600}"
+      # schema 是 number 类型，小数（如 600.5）会让 $(( )) 算术报 syntax error，取整
+      case "$TIMEOUT" in *.*) TIMEOUT="${TIMEOUT%.*}" ;; esac
       RES="applications.argoproj.io"
 
       # 应用必须已存在（GitOps：Application 由 Git 声明，不在 CI 里创建）

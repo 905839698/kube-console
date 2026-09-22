@@ -75,8 +75,12 @@ const props = defineProps<{
 const emit = defineEmits(['saved', 'cancel'])
 
 const module = computed(() => formRegistry[props.kind])
+// 初始 YAML 解析失败时为 true：表单数据没法构建，若仍渲染表单 tab，组件读
+// o.metadata.name 之类的字段会在 {} 上抛 TypeError 直接白屏——此时只给 YAML tab
+const formBroken = ref(false)
 // 是否有真实表单（组件或非空字段定义）；否则该资源视为无表单，直接展示原始 YAML
 const hasForm = computed(() => {
+  if (formBroken.value) return false
   const m = module.value
   return !!m && (!!m.component || (m.fields?.length ?? 0) > 0)
 })
@@ -118,10 +122,14 @@ function init() {
     } else {
       formData.value = objRef.value
     }
-    yamlText.value = dumpYaml(objRef.value)
+    // 用 parse 之前的干净快照生成 YAML：部分模块的 parse 会原地给表单态加
+    // 展示字段（如 RBAC 规则的 *Text 文本框），objRef 已被污染不能直接 dump
+    yamlText.value = dumpYaml(baseObj.value)
   } catch (e) {
     yamlError.value = (e as Error).message
-    // YAML 解析失败时退化为纯 YAML 编辑
+    // YAML 解析失败时退化为纯 YAML 编辑：隐藏表单 tab（formData 未构建，
+    // 渲染表单组件会在 {} 上读字段抛 TypeError 白屏）
+    formBroken.value = true
     activeTab.value = 'yaml'
     yamlText.value = props.yaml || ''
   }
@@ -138,15 +146,21 @@ function minimalTemplate(): Record<string, any> {
 /** 表单变更 -> 重新生成 YAML（防抖） */
 function syncFromForm() {
   clearTimeout(syncTimer)
-  syncTimer = setTimeout(() => {
-    try {
-      const obj = module.value?.build ? module.value.build(baseObj.value, formData.value) : (formData.value as Record<string, any>)
-      yamlText.value = dumpYaml(obj)
-      yamlError.value = ''
-    } catch (e) {
-      yamlError.value = (e as Error).message
-    }
-  }, 400)
+  syncTimer = setTimeout(flushSyncFromForm, 400)
+}
+
+/** 立即执行表单 -> YAML 同步（保存前调用：400ms 防抖窗口内点保存，
+    不刷新的话 diff 与提交的都是旧 YAML，最后一次编辑被丢掉） */
+function flushSyncFromForm() {
+  clearTimeout(syncTimer)
+  syncTimer = undefined
+  try {
+    const obj = module.value?.build ? module.value.build(baseObj.value, formData.value) : (formData.value as Record<string, any>)
+    yamlText.value = dumpYaml(obj)
+    yamlError.value = ''
+  } catch (e) {
+    yamlError.value = (e as Error).message
+  }
 }
 
 // 组件型表单直接编辑对象：深度监听 formData 自动同步 YAML
@@ -177,6 +191,11 @@ watch(yamlText, (v) => {
 })
 
 async function save() {
+  // 表单 tab 下若有未落地的防抖同步（400ms 窗口内点保存），先刷新，
+  // 否则 diff/提交的是旧 YAML，最后一次编辑被静默丢掉
+  if (activeTab.value === 'form' && syncTimer !== undefined) {
+    flushSyncFromForm()
+  }
   if (!yamlText.value.trim()) {
     ElMessage.warning('内容不能为空')
     return

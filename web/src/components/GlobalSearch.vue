@@ -51,6 +51,7 @@ const results = ref<SearchItem[]>([])
 const wrapEl = ref<HTMLElement>()
 
 let timer: ReturnType<typeof setTimeout> | undefined
+let searchSeq = 0
 
 const groupMeta: Record<string, { label: string; icon: any }> = {
   namespaces: { label: '命名空间', icon: FolderOpened },
@@ -80,14 +81,17 @@ function onInput() {
     results.value = []
     return
   }
+  // 请求序号：快速改词时慢的旧响应后到会覆盖新结果（面板与输入框不一致）
+  const seq = ++searchSeq
   timer = setTimeout(async () => {
     loading.value = true
     try {
-      results.value = await k8sApi.search(value)
+      const res = await k8sApi.search(value)
+      if (seq === searchSeq) results.value = res
     } catch {
-      results.value = []
+      if (seq === searchSeq) results.value = []
     } finally {
-      loading.value = false
+      if (seq === searchSeq) loading.value = false
     }
   }, 300)
 }

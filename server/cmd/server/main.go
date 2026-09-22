@@ -47,6 +47,9 @@ func main() {
 	if err := seedAdmin(db, &cfg.Admin); err != nil {
 		log.Fatalf("初始化管理员失败: %v", err)
 	}
+	if err := service.SeedBuiltinRoles(db); err != nil {
+		log.Fatalf("初始化内置角色失败: %v", err)
+	}
 
 	clusters := service.NewClusterManager(db)
 
@@ -142,7 +145,8 @@ func initDB(c *config.DatabaseConfig) (*gorm.DB, error) {
 		&model.CIProject{}, &model.CIPipeline{}, &model.CIPipelineVersion{}, &model.CIRunCounter{},
 		&model.CIRun{}, &model.CITaskRun{}, &model.CICredential{}, &model.CIGlobalVar{},
 		&model.CISchedule{}, &model.CIWebhook{}, &model.CIWebhookDelivery{},
-		&model.CIArtifact{}, &model.CIDeployment{}); err != nil {
+		&model.CIArtifact{}, &model.CIDeployment{},
+		&model.Role{}, &model.RbacBinding{}); err != nil {
 		return nil, fmt.Errorf("数据库迁移失败: %w", err)
 	}
 	return db, nil

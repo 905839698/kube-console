@@ -19,8 +19,10 @@ function makeInstance(silent: boolean) {
       config.headers.Authorization = `Bearer ${user.token}`
     }
     // 与页面守卫同源：读 activeCluster（select() 唯一写入），localStorage 兜底
+    // 允许调用方按请求覆盖集群（如集群列表里对其它集群行做探测）；
+    // 未覆盖时注入当前集群
     const cluster = activeCluster.value || localStorage.getItem('kc-cluster')
-    if (cluster) {
+    if (!config.headers['X-Cluster'] && cluster) {
       // 集群名可能含非 ASCII（如中文“浪潮”）。浏览器会把非 ISO-8859-1 头值剥离为空，
       // 导致后端收到空头报“缺少 X-Cluster 请求头”；故编码后传输，后端再解码还原。
       config.headers['X-Cluster'] = encodeURIComponent(cluster)

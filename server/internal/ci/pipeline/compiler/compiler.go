@@ -152,6 +152,12 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 		switch source {
 		case "param":
 			p := strParam(n.Params, "param", "GIT_BRANCH")
+			// 参数值由运行时从 git-clone 节点推导注入（gitParams 只产出 GIT_BRANCH/GIT_COMMIT/GIT_REPO）。
+			// 其它名字会在 Pipeline 上声明为必填参数却永远收不到值 → Tekton webhook 拒绝整个
+			// PipelineRun，编译期直接拦下
+			if p != "GIT_BRANCH" && p != "GIT_COMMIT" && p != "GIT_REPO" {
+				return nil, fmt.Errorf("条件节点 %s 引用参数 %q：运行时只注入 GIT_BRANCH/GIT_COMMIT/GIT_REPO（由 git-clone 节点推导），其它参数收不到值会导致 PipelineRun 被拒绝", n.ID, p)
+			}
 			varKey = p
 			input = "$(params." + p + ")"
 			celRef = `params["` + p + `"]`
@@ -180,6 +186,9 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 
 	// 约束归纳：constraints[node] = var -> {literal}，literal ∈ {"true","false"}
 	// 空集合 = 无约束。
+	// bypass 语义：存在「不经过任何条件节点」的入边时，该入边代表一条无条件路径——
+	// 任务可能经它到达，此时按变量加 when 会错误跳过任务（画布上它看起来是无条件依赖）。
+	// 因此变量必须被【全部】入边路径携带（条件边自带其字面量）才保留约束。
 	constraints := map[string]map[string]map[string]bool{}
 	for _, id := range order {
 		in := predEdges[id]
@@ -188,21 +197,36 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 			constraints[id] = cset
 			continue
 		}
+		carried := map[string]int{} // var -> 携带该变量约束的入边数（按边去重：一条边携带某变量记 1）
 		for _, e := range in {
 			up := constraints[e.Source]
-			for varKey, lits := range up {
-				mergeLit(cset, varKey, lits)
+			edgeCarries := map[string]bool{}
+			for varKey := range up {
+				edgeCarries[varKey] = true
 			}
 			if isCond[e.Source] {
 				expr, ok := condOf[e.Source]
 				if !ok {
 					continue
 				}
+				edgeCarries[expr.varKey] = true // 条件边自带该变量的字面量
 				lit := "true"
 				if e.Branch == model.BranchNo {
 					lit = "false"
 				}
 				mergeLit(cset, expr.varKey, map[string]bool{lit: true})
+			}
+			for varKey := range edgeCarries {
+				carried[varKey]++
+			}
+			for varKey, lits := range up {
+				mergeLit(cset, varKey, lits)
+			}
+		}
+		for varKey := range cset {
+			if carried[varKey] < len(in) {
+				// 至少一条入边路径不带该变量的约束 → 无条件可达 → 清掉
+				delete(cset, varKey)
 			}
 		}
 		constraints[id] = cset
@@ -293,7 +317,7 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 		if err != nil {
 			return nil, fmt.Errorf("渲染节点 %s: %w", id, err)
 		}
-		injectPreShell(&taskSpec, n.Params)
+		injectPreShell(&taskSpec, n.Params, plugin.Meta())
 		rewriteGitCloneRefs(&taskSpec, id, gitCloneID)
 
 		pt := TektonPTask{Name: id, TaskSpec: &taskSpec}
@@ -389,6 +413,9 @@ func rewriteGitCloneRefs(spec *nodetype.TaskSpec, taskID, gitCloneID string) {
 // 与节点模板把值 {{x}} 内联进脚本（steps 路径）的写法等价。
 //
 // 只提升真正含 $(tasks. 的参数：其余参数继续用 taskSpec 默认值，编译产物最小改动。
+// 注意：提升后值落在 PipelineTask 级，其中的 $(params.X) 由 Tekton 按 Pipeline 参数
+// 解析（不再是任务自身参数）——混合引用（$(tasks. + $(params.）的合法性由
+// validateTaskRefs 按 Pipeline 参数集合校验，编译期给出明确错误。
 func liftResultRefParams(spec *nodetype.TaskSpec) []TektonParam {
 	var out []TektonParam
 	for _, p := range spec.Params {
@@ -429,6 +456,53 @@ func validateTaskRefs(spec *PipelineSpec, ancestors map[string]map[string]bool) 
 		taskParams[t.Name] = params
 		taskResults[t.Name] = results
 	}
+	// Pipeline 级参数集合（条件参数 GIT_* 等）：PipelineTask 级 params 值里的
+	// $(params.X) 由 Tekton 按 Pipeline 参数解析（流水线级替换覆盖整个 spec），
+	// 与 taskSpec 内按任务自身参数解析的上下文不同，须分开校验
+	pipelineParams := map[string]bool{}
+	for _, pp := range spec.Spec.Params {
+		pipelineParams[pp.Name] = true
+	}
+
+	// checkTasksRef 校验 $(tasks.T.results.R)：T 存在、声明 R、是上游，
+	// 且在到引用方的全部路径上都会执行（保证运行期结果一定存在）
+	checkTasksRef := func(t *TektonPTask, text string) error {
+		for _, m := range tektonRefRe.FindAllStringSubmatch(text, -1) {
+			if m[1] != "tasks" {
+				continue
+			}
+			rest := m[2]
+			dot := strings.Index(rest, ".results.")
+			if dot < 0 {
+				return fmt.Errorf("任务 %s 的引用 $(tasks.%s) 格式非法（应为 $(tasks.<任务名>.results.<结果名>)）", t.Name, rest)
+			}
+			tname, rname := rest[:dot], rest[dot+len(".results."):]
+			if tname == t.Name {
+				return fmt.Errorf("任务 %s 引用了自身的结果 $(tasks.%s.results.%s)：结果只能被下游任务引用", t.Name, tname, rname)
+			}
+			if _, ok := taskResults[tname]; !ok {
+				return fmt.Errorf("任务 %s 引用了不存在的任务结果 $(tasks.%s.results.%s)：流水线中没有名为 %s 的任务节点（可能是节点被改名/删除，请重新在参数里选择上游结果）", t.Name, tname, rname, tname)
+			}
+			// 被引用任务必须是引用方的上游（存在依赖路径）：缺连线时 Tekton 并行
+			// 执行两任务，结果引用运行期解析不出，占位符原样留在脚本里被 shell
+			// 当命令执行（"tasks.xxx.results.yyy: not found"）
+			if !ancestors[t.Name][tname] {
+				return fmt.Errorf("任务 %s 引用了任务 %s 的结果，但画布上 %s 到 %s 没有依赖路径（缺少连线）：运行时两任务并行，%s 的结果尚不存在、引用无法解析。请在设计器中连接 %s → %s 后重新保存", t.Name, tname, tname, t.Name, tname, tname, t.Name)
+			}
+			// 「存在一条路径」不够：条件分支汇合时，某条入边路径不经过 R，运行期走
+			// 该分支时 R 被跳过（skipped），T 照常启动，结果引用解析不出才失败。
+			// 要求 R 在全部到达路径上都是祖先（runAfter 依赖 DAG 上去掉 R 后，
+			// 引用方不可从任何源任务到达）
+			if !allPathsContain(spec.Spec.Tasks, tname, t.Name) {
+				return fmt.Errorf("任务 %s 引用了任务 %s 的结果，但并非所有到达 %s 的路径都经过 %s（存在绕过 %s 的分支）：运行期走该分支时 %s 被跳过、没有结果，引用无法解析。请调整连线，让所有会执行 %s 的路径都先经过 %s", t.Name, tname, t.Name, tname, tname, tname, t.Name, tname)
+			}
+			if !taskResults[tname][rname] {
+				return fmt.Errorf("任务 %s 引用的结果 $(tasks.%s.results.%s) 不存在：%s 未声明该结果", t.Name, tname, rname, tname)
+			}
+		}
+		return nil
+	}
+
 	for i := range spec.Spec.Tasks {
 		t := &spec.Spec.Tasks[i]
 		if t.TaskSpec == nil {
@@ -438,47 +512,81 @@ func validateTaskRefs(spec *PipelineSpec, ancestors map[string]map[string]bool) 
 		if err != nil {
 			continue
 		}
-		// PipelineTask 级 params 值同样是引用的落脚点（参数默认值里的结果引用被
-		// liftResultRefParams 提升到这里），必须一并校验，否则提升会把引用搬出
-		// 校验范围、让缺连线/悬空引用漏到运行期
-		texts := []string{string(raw)}
-		for _, p := range t.Params {
-			texts = append(texts, p.Value)
+		// taskSpec 内文本：$(params.X) 按任务自身参数校验
+		for _, m := range tektonRefRe.FindAllStringSubmatch(string(raw), -1) {
+			if m[1] == "params" && !taskParams[t.Name][m[2]] {
+				return fmt.Errorf("任务 %s 引用了未声明的参数 $(params.%s)：嵌入 taskSpec 内 $(params.X) 只能引用该任务自身的参数；引用上游任务结果请写 $(tasks.<任务名>.results.<结果名>)", t.Name, m[2])
+			}
 		}
-		for _, text := range texts {
-			for _, m := range tektonRefRe.FindAllStringSubmatch(text, -1) {
-				switch m[1] {
-				case "params":
-					if !taskParams[t.Name][m[2]] {
-						return fmt.Errorf("任务 %s 引用了未声明的参数 $(params.%s)：嵌入 taskSpec 内 $(params.X) 只能引用该任务自身的参数；引用上游任务结果请写 $(tasks.<任务名>.results.<结果名>)", t.Name, m[2])
-					}
-				case "tasks":
-					rest := m[2]
-					dot := strings.Index(rest, ".results.")
-					if dot < 0 {
-						return fmt.Errorf("任务 %s 的引用 $(tasks.%s) 格式非法（应为 $(tasks.<任务名>.results.<结果名>)）", t.Name, rest)
-					}
-					tname, rname := rest[:dot], rest[dot+len(".results."):]
-					if tname == t.Name {
-						return fmt.Errorf("任务 %s 引用了自身的结果 $(tasks.%s.results.%s)：结果只能被下游任务引用", t.Name, tname, rname)
-					}
-					if _, ok := taskResults[tname]; !ok {
-						return fmt.Errorf("任务 %s 引用了不存在的任务结果 $(tasks.%s.results.%s)：流水线中没有名为 %s 的任务节点（可能是节点被改名/删除，请重新在参数里选择上游结果）", t.Name, tname, rname, tname)
-					}
-					// 被引用任务必须是引用方的上游（存在依赖路径）：缺连线时 Tekton 并行
-					// 执行两任务，结果引用运行期解析不出，占位符原样留在脚本里被 shell
-					// 当命令执行（"tasks.xxx.results.yyy: not found"）
-					if !ancestors[t.Name][tname] {
-						return fmt.Errorf("任务 %s 引用了任务 %s 的结果，但画布上 %s 到 %s 没有依赖路径（缺少连线）：运行时两任务并行，%s 的结果尚不存在、引用无法解析。请在设计器中连接 %s → %s 后重新保存", t.Name, tname, tname, t.Name, tname, tname, t.Name)
-					}
-					if !taskResults[tname][rname] {
-						return fmt.Errorf("任务 %s 引用的结果 $(tasks.%s.results.%s) 不存在：%s 未声明该结果", t.Name, tname, rname, tname)
-					}
+		if err := checkTasksRef(t, string(raw)); err != nil {
+			return err
+		}
+		// PipelineTask 级 params 值（liftResultRefParams 提升的落脚点）：
+		// $(params.X) 按 Pipeline 参数校验
+		for _, p := range t.Params {
+			for _, m := range tektonRefRe.FindAllStringSubmatch(p.Value, -1) {
+				if m[1] == "params" && !pipelineParams[m[2]] {
+					return fmt.Errorf("任务 %s 的参数 %s 值里的 $(params.%s) 不是流水线级参数：提升为 PipelineTask 参数后 $(params.X) 按 Pipeline 参数解析（现有: %s），任务自身参数请留在脚本里引用", t.Name, p.Name, m[2], strings.Join(sortedKeys(pipelineParams), ", "))
 				}
+			}
+			if err := checkTasksRef(t, p.Value); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
+}
+
+// sortedKeys 稳定排序键（错误信息用）。
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// allPathsContain 在 runAfter 依赖 DAG 上判断：从任意源任务（无 runAfter）到 to 的
+// 全部路径是否都经过 via（via==to 视为成立）。
+// runAfter 已做条件穿透（condition 前驱替代 condition），与运行期依赖等价。
+func allPathsContain(tasks []TektonPTask, via, to string) bool {
+	if via == to {
+		return true
+	}
+	succ := map[string][]string{}
+	hasPred := map[string]bool{}
+	for _, t := range tasks {
+		for _, ra := range t.RunAfter {
+			succ[ra] = append(succ[ra], t.Name)
+			hasPred[t.Name] = true
+		}
+	}
+	// 起点排除 via：从 via 出发的路径本身就是「经过 via」，不算绕过
+	visited := map[string]bool{}
+	queue := make([]string, 0, len(tasks))
+	for _, t := range tasks {
+		if !hasPred[t.Name] && t.Name != via {
+			queue = append(queue, t.Name)
+		}
+	}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		if n == to {
+			return false // 存在不经过 via 的到达路径
+		}
+		if visited[n] {
+			continue
+		}
+		visited[n] = true
+		for _, m := range succ[n] {
+			if m != via {
+				queue = append(queue, m)
+			}
+		}
+	}
+	return true
 }
 
 // condExpr 一个条件节点对某个变量的比较表达式。
@@ -517,9 +625,11 @@ func buildWhenExpr(e condExpr, op string) WhenExpr {
 	case "!=":
 		return WhenExpr{Input: e.input, Operator: "notin", Values: []string{e.value}}
 	case "contains":
-		return WhenExpr{CEL: e.celRef + " contains " + celString(e.value)}
+		// CEL 的会员类中缀运算符只有 in；contains 是字符串方法（a.contains(b)），
+		// 「a contains b」不是合法 CEL，Tekton 解析 when.cel 时会拒绝整个 Pipeline
+		return WhenExpr{CEL: e.celRef + ".contains(" + celString(e.value) + ")"}
 	case "notcontains":
-		return WhenExpr{CEL: e.celRef + " !contains " + celString(e.value)}
+		return WhenExpr{CEL: "!" + e.celRef + ".contains(" + celString(e.value) + ")"}
 	default:
 		// 兜底按相等处理（validator 已限制 op ∈ {==,!=,contains,notcontains}）
 		return WhenExpr{Input: e.input, Operator: "in", Values: []string{e.value}}
@@ -578,8 +688,16 @@ func negateOp(op string) string {
 // injectPreShell 依据节点通用参数 preShell 在 Task 首部注入 pre-shell step
 // （所有节点的"执行 shell"统一入口）：与首个主 step 同镜像，cd 到首个 task 级
 // workspace（Tekton 把 task 级 workspace 默认挂进全部 step），set -e 下执行
-// 用户命令。preShell 为空或模板无 step 时不注入。
-func injectPreShell(spec *nodetype.TaskSpec, params map[string]interface{}) {
+// 用户命令。preShell 为空、模板无 step 时不注入。
+//
+// 仅当节点类型在 schema 里声明了 preShell 属性才注入：面板里能填的才生效。
+// 否则节点类型改用单一 script 入口（如 npm-build）后，历史图里残留的 preShell
+// 还会跑出一个多余容器——pre-shell 是独立容器，写进去的 registry/HOME 对主步骤
+// 并不生效，留着只会误导。
+func injectPreShell(spec *nodetype.TaskSpec, params map[string]interface{}, meta nodetype.Meta) {
+	if !declaresProperty(meta, "preShell") {
+		return
+	}
 	pre := strings.TrimSpace(strParam(params, "preShell", ""))
 	if pre == "" || len(spec.Steps) == 0 {
 		return
@@ -587,6 +705,11 @@ func injectPreShell(spec *nodetype.TaskSpec, params map[string]interface{}) {
 	for _, s := range spec.Steps {
 		if s.Name == "pre-shell" {
 			return // 模板已含同名 step，避免重名
+		}
+		// 模板把 {{preShell}} 内联进主 step（build-image，在构建上下文目录内执行）：
+		// 渲染后脚本已含 preShell 文本，再注入 pre-shell step 会执行两遍
+		if strings.Contains(s.Script, pre) {
+			return
 		}
 	}
 	script := "#!/bin/sh\nset -e\n"
@@ -599,6 +722,16 @@ func injectPreShell(spec *nodetype.TaskSpec, params map[string]interface{}) {
 		Image:  spec.Steps[0].Image,
 		Script: script,
 	}}, spec.Steps...)
+}
+
+// declaresProperty 判断节点类型的属性面板是否声明了某个参数。
+func declaresProperty(meta nodetype.Meta, name string) bool {
+	for _, p := range meta.Properties {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // runAfterThrough 计算 task 的 runAfter：前驱是 condition 时穿透到其前驱 task。

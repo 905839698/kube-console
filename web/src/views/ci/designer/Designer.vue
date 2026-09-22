@@ -3,6 +3,8 @@
      未保存修改：路由离开确认 + beforeunload。 -->
 <template>
   <div class="designer" v-loading="!loaded">
+    <el-alert v-if="clusterMismatch" type="warning" :closable="false" style="margin-bottom: 8px"
+      title="已切换集群：当前画布仍属于旧集群。切回原集群或丢弃修改重新加载前，校验/编译/保存/运行已禁用。" />
     <el-alert v-if="loadError" type="error" :closable="false" style="margin-bottom: 8px"
       :title="loadError">
       <el-button size="small" @click="reload(pid)">重试</el-button>
@@ -13,10 +15,10 @@
       <span class="t-title">流水线设计</span>
       <el-tag v-if="latestVersion != null" type="primary" size="small">v{{ latestVersion }}</el-tag>
       <el-tag v-if="dirty" type="warning" size="small">未保存</el-tag>
-      <el-button size="small" :loading="busy === 'validate'" :disabled="!!busy || !!loadError" @click="doValidate">校验</el-button>
-      <el-button size="small" :loading="busy === 'compile'" :disabled="!!busy || !!loadError" @click="doCompile">生成 YAML</el-button>
-      <el-button size="small" type="primary" :loading="busy === 'save'" :disabled="!!busy || !!loadError" @click="doSave">保存</el-button>
-      <el-button size="small" type="success" plain :loading="busy === 'run'" :disabled="!!busy || !!loadError" @click="doRun">运行</el-button>
+      <el-button size="small" :loading="busy === 'validate'" :disabled="!!busy || !!loadError || clusterMismatch" @click="doValidate">校验</el-button>
+      <el-button size="small" :loading="busy === 'compile'" :disabled="!!busy || !!loadError || clusterMismatch" @click="doCompile">生成 YAML</el-button>
+      <el-button size="small" type="primary" :loading="busy === 'save'" :disabled="!!busy || !!loadError || clusterMismatch" @click="doSave">保存</el-button>
+      <el-button size="small" type="success" plain :loading="busy === 'run'" :disabled="!!busy || !!loadError || clusterMismatch" @click="doRun">运行</el-button>
       <el-dropdown size="small" @command="onMore">
         <el-button size="small">更多<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
         <template #dropdown>
@@ -167,6 +169,7 @@ import {
   ciApi, type CIGraph, type CIPNode, type CIProject, type CISchedule, type CIWebhook,
 } from '../../../api/ci'
 import { useUserStore } from '../../../store/user'
+import { useClusterStore } from '../../../store/cluster'
 import CiCanvas from './CiCanvas.vue'
 import NodePanel from './NodePanel.vue'
 import PropertyPanel from './PropertyPanel.vue'
@@ -179,6 +182,7 @@ const EMPTY_GRAPH: CIGraph = { name: 'unnamed', version: 1, nodes: [], edges: []
 const route = useRoute()
 const router = useRouter()
 const pid = computed(() => Number(route.params.id))
+const clusterStore = useClusterStore()
 
 // ---- 画布状态（原 zustand store 的职责） ----
 const graph = ref<CIGraph>(EMPTY_GRAPH)
@@ -192,6 +196,10 @@ const errors = ref<string[]>([])
 const busy = ref<'' | 'validate' | 'compile' | 'save' | 'run'>('')
 const meta = ref<{ projectId: number; name: string; description?: string } | null>(null)
 let loadSeq = 0
+// 当前图所属集群：切换集群后若用户取消「丢弃修改」，图与集群不再匹配，
+// 期间禁用一切写操作（保存/运行/校验都按 X-Cluster 发到新集群，等于把旧集群的图写过去）
+let designCluster = clusterStore.current || ''
+const clusterMismatch = ref(false)
 
 const dirty = computed(() => loaded.value && !loadError.value && JSON.stringify(graph.value) !== snapshot.value)
 ciDesignDirty.value = dirty.value
@@ -246,6 +254,8 @@ async function reload(id: number) {
     graph.value = g
     latestVersion.value = d.latestVersion?.version ?? null
     snapshot.value = JSON.stringify(g)
+    designCluster = clusterStore.current || ''
+    clusterMismatch.value = false
     loaded.value = true
   } catch (e: any) {
     if (seq !== loadSeq) return
@@ -257,6 +267,32 @@ async function reload(id: number) {
 }
 onMounted(() => { if (pid.value) void reload(pid.value) })
 watch(pid, (v) => { if (v) void reload(v) })
+
+// 顶部切换集群：设计器内容属于具体集群，必须重载（流水线 id 在不同集群可能指向完全不同的对象）
+watch(() => clusterStore.current, async (cl, oldCl) => {
+  const cur = cl || ''
+  if (!cur || cur === oldCl) return
+  if (cur === designCluster) {
+    clusterMismatch.value = false
+    return
+  }
+  if (dirty.value) {
+    try {
+      await ElMessageBox.confirm(
+        '已切换集群，本页有未保存的修改。继续将丢弃修改，并按新集群重新加载该流水线。',
+        '集群已切换',
+        { confirmButtonText: '丢弃修改并重新加载', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      // 用户保留修改：图仍属于旧集群，禁止向新集群写入
+      clusterMismatch.value = true
+      return
+    }
+  }
+  designCluster = cur
+  clusterMismatch.value = false
+  if (pid.value) void reload(pid.value)
+})
 
 // ---- 校验 / 编译 / 保存 / 运行（互斥防重复提交） ----
 async function doValidate() {
@@ -376,6 +412,7 @@ function onImportFile(e: Event) {
       }).then(() => {
         const fix = normalizeDuplicateIds(g)
         graph.value = { name: g.name || graph.value.name, version: g.version || 1, nodes: fix.nodes, edges: fix.edges }
+        selectedNode.value = null // 导入后旧选择大概率已不存在，清掉避免属性面板显示幽灵节点
         if (fix.changed) ElMessage.warning('导入内容存在重复的节点 id，已自动修复')
         ElMessage.success('已导入，点击「保存」生效')
       }).catch(() => undefined)

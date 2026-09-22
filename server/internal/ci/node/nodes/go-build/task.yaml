@@ -27,6 +27,8 @@ steps:
         mkdir -p "$GOMODCACHE" "$GOCACHE"
       fi
       [ "{{runTest}}" = "true" ] && go test ./...
+      # go 不会创建 -o 的父目录，缺 out/ 时带 -o 的首次构建必败（错误还被 2>/dev/null 吞掉）
+      mkdir -p out
       go {{command}} -o out/{{binaryName}} 2>/dev/null || go {{command}}
       ls -lh out/ 2>/dev/null || true
       printf '%s' "out/{{binaryName}}" > $(results.build_output.path)

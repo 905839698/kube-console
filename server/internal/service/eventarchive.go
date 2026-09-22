@@ -189,7 +189,8 @@ func buildEventBulk(cluster, prefix string, events []corev1.Event, seen map[stri
 		if err != nil {
 			continue
 		}
-		index := prefix + lastTs.Format("2006.01.02")
+		// 索引日期与 @timestamp 一致用 UTC：本地时区会让跨零点事件落错天分区
+		index := prefix + lastTs.UTC().Format("2006.01.02")
 		bulk.WriteString(fmt.Sprintf(`{"index":{"_index":%q,"_id":%q}}`+"\n", index, cluster+"-"+string(ev.UID)))
 		bulk.Write(body)
 		bulk.WriteString("\n")
@@ -211,16 +212,18 @@ func (s *EventArchiveService) archiveEvents(ctx context.Context, c *kube.Client,
 
 	body, changed, next := buildEventBulk(cluster, eventIndexPrefix(src), events, seen)
 
-	s.mu.Lock()
-	s.seen[cluster] = next
-	s.mu.Unlock()
-
 	if changed == 0 {
 		return nil
 	}
+	// seen 指纹在 ES 写成功之后才提交：先提交会让 ES 短暂故障期间的变更
+	// 被标记「已见」，后续轮次判「未变化」跳过——该窗口的事件变更永不落 ES
+	// （_id=cluster-uid 幂等 upsert，重试无副作用）
 	if _, err := esRequest(ctx, c, src, http.MethodPost, "/_bulk", []byte(body)); err != nil {
 		return fmt.Errorf("事件写入 ES 失败: %w", err)
 	}
+	s.mu.Lock()
+	s.seen[cluster] = next
+	s.mu.Unlock()
 	return nil
 }
 

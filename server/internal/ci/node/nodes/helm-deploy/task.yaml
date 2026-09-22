@@ -35,9 +35,17 @@ steps:
         IFS=',' read -r -a VF <<< "{{values}}"
         for f in "${VF[@]}"; do VFILE="$VFILE -f $f"; done
       fi
-      # set 参数（每行 key=value）
+      # set 参数（每行一个 key=value；多行时逐行追加 --set，
+      # 旧实现单行拼接会让第二个 key 成为 helm 位置参数）
       SETARG=""
-      # 逐行传入（此处用单行简化，MVP）
-      if [ -n "{{set}}" ]; then SETARG="--set {{set}}"; fi
+      if [ -n "{{set}}" ]; then
+        while IFS= read -r kv; do
+          kv="${kv%$'\r'}"
+          [ -n "$kv" ] || continue
+          SETARG="$SETARG --set $kv"
+        done <<SETEOF
+{{set}}
+SETEOF
+      fi
       helm upgrade --install {{release}} {{chart}} $FLAGS $VFILE $SETARG
       printf '%s' "deployed" > $(results.release_status.path)

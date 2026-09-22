@@ -34,8 +34,9 @@ steps:
       # 私有 registry 登录：生成 docker config 供 cosign 拉取签名附件
       if [ -n "{{registry}}" ] && [ -n "$username" ] && [ -n "$password" ]; then
         mkdir -p "$HOME/.docker"
+        # base64 默认 76 列换行，长凭证的换行会写进 JSON 使其非法
         printf '{"auths":{"%s":{"auth":"%s"}}}' "{{registry}}" \
-          "$(printf '%s:%s' "$username" "$password" | base64)" > "$HOME/.docker/config.json"
+          "$(printf '%s:%s' "$username" "$password" | base64 | tr -d '\n')" > "$HOME/.docker/config.json"
         export DOCKER_CONFIG="$HOME/.docker"
       fi
       if [ "{{checkProvenance}}" = "true" ]; then

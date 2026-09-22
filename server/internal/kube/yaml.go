@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"io"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -9,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	yv3 "gopkg.in/yaml.v3"
 	"sigs.k8s.io/yaml"
 )
 
@@ -39,12 +41,20 @@ func ApplyYAML(ctx context.Context, dyn dynamic.Interface, yamlStr string) (crea
 	if obj.GetName() == "" {
 		return false, errors.NewBadRequest("YAML 缺少 metadata.name")
 	}
-	ns := obj.GetNamespace()
-	if ns == "" {
-		ns = "default"
-		obj.SetNamespace(ns)
+	// 集群级资源（ClusterRole/Namespace/PV 等）本身没有 namespace，强塞 default
+	// 会打到 /namespaces/default/clusterroles/... 这类不存在的路径 → 404
+	var ri dynamic.ResourceInterface
+	if IsClusterScoped(gvr.Resource) {
+		obj.SetNamespace("") // 即使 YAML 误带 metadata.namespace 也忽略
+		ri = dyn.Resource(gvr)
+	} else {
+		ns := obj.GetNamespace()
+		if ns == "" {
+			ns = "default"
+			obj.SetNamespace(ns)
+		}
+		ri = dyn.Resource(gvr).Namespace(ns)
 	}
-	ri := dyn.Resource(gvr).Namespace(ns)
 
 	// 已存在 → 直接更新：取现有对象最新 resourceVersion 做乐观锁
 	existing, gerr := ri.Get(ctx, obj.GetName(), metav1.GetOptions{})
@@ -77,6 +87,29 @@ func ApplyYAML(ctx context.Context, dyn dynamic.Interface, yamlStr string) (crea
 	return false, err
 }
 
+// ParseYAMLDocs 解析多文档 YAML（--- 分隔），返回全部非空文档。
+// 单文档 yaml.Unmarshal 只解码第一个文档——「导出→重新导入」的产物、
+// Deployment+Service 组合粘贴都会被静默丢弃后半段。
+func ParseYAMLDocs(yamlStr string) ([]*unstructured.Unstructured, error) {
+	dec := yv3.NewDecoder(strings.NewReader(yamlStr))
+	var out []*unstructured.Unstructured
+	for {
+		var m map[string]interface{}
+		err := dec.Decode(&m)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(m) == 0 {
+			continue // 空文档（连续 ---）
+		}
+		out = append(out, &unstructured.Unstructured{Object: m})
+	}
+	return out, nil
+}
+
 // parseYAML 将 YAML 字符串解析为 unstructured 对象，并根据 kind 推导 GVR
 func parseYAML(yamlStr string) (*unstructured.Unstructured, schema.GroupVersionResource, error) {
 	var m map[string]interface{}
@@ -103,6 +136,11 @@ func plural(kind string) string {
 		return gvr.Resource
 	}
 	k := strings.ToLower(kind)
+	// 小写后本身就是资源名的 kind（endpoints/ingresses 等复数型资源，
+	// 如 kind: Endpoints）：直接命中，不能再走加 s 的复数规则（→ "endpointses"）
+	if _, ok := KindMap[k]; ok {
+		return k
+	}
 	// 优先尝试直接加 s（如 "Gateway" → "gateways"），命中 KindMap 即返回
 	if _, ok := KindMap[k+"s"]; ok {
 		return k + "s"

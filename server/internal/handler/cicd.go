@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +62,13 @@ func NewCICDHandler(deps *ci.Deps, db *gorm.DB, jwtSecret, adminUser string) *CI
 		refsCache: map[string]refsCacheEntry{},
 	}
 }
+
+// rfc1123NameRe DNS-1123 子域（项目命名空间名校验用）。
+var rfc1123NameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+// reservedNS 系统保留命名空间：项目 ns 是 run 资源（PVC/TaskRun/凭证 Secret）的
+// 落点，绑到系统 ns 会污染系统资源。
+var reservedNS = map[string]bool{"kube-system": true, "kube-public": true, "kube-node-lease": true}
 
 // ============ 通用助手 ============
 
@@ -219,19 +227,38 @@ func (h *CICDHandler) ProjectCreate(c *gin.Context) {
 		response.Fail(c, http.StatusBadRequest, 400, "参数错误: name/namespace 必填")
 		return
 	}
+	// ns 格式 + 保留 ns 黑名单：项目 ns 会成为 run 的 PVC/TaskRun/凭证 Secret 落点，
+	// 绑到 kube-system 等系统 ns 会污染系统资源（EnsureNamespace 对任意已存在 ns 放行）
+	if !rfc1123NameRe.MatchString(req.Namespace) {
+		response.Fail(c, http.StatusBadRequest, 400, "项目命名空间名非法（须为 RFC 1123 小写字母/数字/中划线）: "+req.Namespace)
+		return
+	}
+	if reservedNS[req.Namespace] {
+		response.Fail(c, http.StatusBadRequest, 400, "项目命名空间不能使用系统保留命名空间: "+req.Namespace)
+		return
+	}
+	var count int64
+	if err := h.db.Model(&model.CIProject{}).Where("cluster_name = ? AND name = ?", cl, req.Name).Count(&count).Error; err != nil {
+		h.errResp(c, err)
+		return
+	}
+	if count > 0 {
+		response.Fail(c, http.StatusConflict, 409, "项目名已存在")
+		return
+	}
 	k8s, ok := h.k8s(c, cl)
 	if !ok {
 		return
 	}
-	// ns 隔离基础：先确保命名空间存在
+	// ns 隔离基础：确保命名空间存在（放在重名检查之后，避免 409 时留下孤儿 ns）
 	if err := k8s.EnsureNamespace(c.Request.Context(), req.Namespace); err != nil {
 		response.Fail(c, http.StatusServiceUnavailable, 503, fmt.Sprintf("创建/校验命名空间 %s 失败: %v", req.Namespace, err))
 		return
 	}
-	var count int64
-	h.db.Model(&model.CIProject{}).Where("cluster_name = ? AND name = ?", cl, req.Name).Count(&count)
-	if count > 0 {
-		response.Fail(c, http.StatusConflict, 409, "项目名已存在")
+	// CI 基础设施随项目一起写入：运行 SA + 运行/部署 RBAC。缺 SA 时 TaskRun 会以
+	// PodCreationFailed 收场（没有 Pod 也就没有日志），故在建项目时就补齐并失败即报。
+	if _, err := k8s.EnsureCIInfra(c.Request.Context(), req.Namespace, h.deps.Cfg.ServiceAccount); err != nil {
+		response.Fail(c, http.StatusServiceUnavailable, 503, fmt.Sprintf("写入 CI 基础设施失败: %v", err))
 		return
 	}
 	p := model.CIProject{
@@ -270,7 +297,10 @@ func (h *CICDHandler) ProjectUpdate(c *gin.Context) {
 		Description *string `json:"description"`
 		Namespace   *string `json:"namespace"`
 	}
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, http.StatusBadRequest, 400, "参数错误: "+err.Error())
+		return
+	}
 	if req.Namespace != nil && *req.Namespace != p.Namespace {
 		response.Fail(c, http.StatusBadRequest, 400, "不支持变更项目命名空间（凭证与历史运行已落在原 ns）")
 		return
@@ -283,7 +313,15 @@ func (h *CICDHandler) ProjectUpdate(c *gin.Context) {
 		updates["description"] = *req.Description
 	}
 	if len(updates) > 0 {
-		h.db.Model(&p).Updates(updates)
+		if err := h.db.Model(&p).Updates(updates).Error; err != nil {
+			h.errResp(c, err)
+			return
+		}
+		// 回显更新后的值（p 是更新前加载的对象）
+		if err := h.db.First(&p, id).Error; err != nil {
+			h.errResp(c, err)
+			return
+		}
 	}
 	response.OK(c, p)
 }
@@ -592,7 +630,7 @@ func (h *CICDHandler) PipelineRun(c *gin.Context) {
 		versionID = *req.VersionID
 	}
 	run, err := h.deps.RT.StartRun(c.Request.Context(), id, versionID,
-		middleware.CurrentUserID(c), middleware.CurrentUser(c), "manual", revision)
+		middleware.CurrentUserID(c), middleware.CurrentUser(c), "manual", revision, "")
 	if err != nil {
 		h.errResp(c, err)
 		return
@@ -708,9 +746,16 @@ func (h *CICDHandler) RunDetail(c *gin.Context) {
 		return
 	}
 	var tasks []model.CITaskRun
-	_ = h.db.Where("run_id = ?", run.ID).Order("id asc").Find(&tasks).Error
+	if err := h.db.Where("run_id = ?", run.ID).Order("id asc").Find(&tasks).Error; err != nil {
+		h.errResp(c, err)
+		return
+	}
 	var pipe model.CIPipeline
-	_ = h.db.First(&pipe, run.PipelineID).Error
+	if err := h.db.First(&pipe, run.PipelineID).Error; err != nil {
+		// 流水线已删时仍返回 run+tasks（血缘字段留空）
+		response.OK(c, gin.H{"run": run, "tasks": tasks})
+		return
+	}
 	response.OK(c, gin.H{
 		"run":     run,
 		"tasks":   tasks,
@@ -729,7 +774,10 @@ func (h *CICDHandler) RunTasks(c *gin.Context) {
 		return
 	}
 	var tasks []model.CITaskRun
-	_ = h.db.Where("run_id = ?", id).Order("id asc").Find(&tasks).Error
+	if err := h.db.Where("run_id = ?", id).Order("id asc").Find(&tasks).Error; err != nil {
+		h.errResp(c, err)
+		return
+	}
 	response.OK(c, tasks)
 }
 
@@ -747,8 +795,9 @@ func (h *CICDHandler) RunRerun(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 重跑按原 run 的 revision 复现（tag/commit 触发时 GitBranch 存 tag 名或为空）
 	newRun, err := h.deps.RT.StartRun(c.Request.Context(), run.PipelineID, run.VersionID,
-		middleware.CurrentUserID(c), middleware.CurrentUser(c), "manual", "")
+		middleware.CurrentUserID(c), middleware.CurrentUser(c), "manual", run.GitBranch, run.GitCommit)
 	if err != nil {
 		h.errResp(c, err)
 		return
@@ -843,6 +892,11 @@ func (h *CICDHandler) RunLogsSSE(c *gin.Context) {
 	var run model.CIRun
 	if err := h.db.First(&run, runID).Error; err != nil {
 		response.Fail(c, http.StatusNotFound, 404, "执行记录不存在")
+		return
+	}
+	// 集群维度校验（与同文件其它 run 端点一致）：SSE URL 带 ?cluster=，缺失时不拦
+	if cl := c.Query("cluster"); cl != "" && run.ClusterName != cl {
+		response.Fail(c, http.StatusNotFound, 404, "执行记录不存在（不属于当前集群）")
 		return
 	}
 	follow := c.Query("follow") == "1" ||
@@ -1293,10 +1347,26 @@ func (h *CICDHandler) WebhookList(c *gin.Context) {
 		return
 	}
 	base := reqScheme(c) + "://" + c.Request.Host
+	// token 是 URL 触发凭据（POST /ci/webhook/:token 为公开端点），列表对非 admin
+	// 脱敏——否则任何登录用户拿到全部流水线 token 即可触发任意流水线
+	mask := !h.isAdmin(c)
 	for i := range out {
-		out[i].URL = webhookURL(base, out[i].Token)
+		tok := out[i].Token
+		if mask {
+			tok = maskToken(tok)
+		}
+		out[i].Token = tok
+		out[i].URL = webhookURL(base, tok)
 	}
 	response.OK(c, out)
+}
+
+// maskToken 只回显前 4 位（列表展示用；admin 看原文）。
+func maskToken(t string) string {
+	if len(t) <= 4 {
+		return "****"
+	}
+	return t[:4] + "****"
 }
 
 // WebhookCreate POST /ci/webhooks
@@ -1400,7 +1470,13 @@ func (h *CICDHandler) WebhookDelete(c *gin.Context) {
 
 // GitLabWebhook POST /ci/webhook/:token —— GitLab 回调公开端点（token 走路径）。
 func (h *CICDHandler) GitLabWebhook(c *gin.Context) {
-	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
+	// 上限 8MB：GitLab push 事件含完整 commits 数组，大 push 可超 1MB；
+	// 超限直接 413（截断的 JSON 解析必败，GitLab 重试也只会同样失败）
+	if c.Request.ContentLength > 8<<20 {
+		response.Fail(c, http.StatusRequestEntityTooLarge, 413, "请求体超过 8MB 上限")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 8<<20))
 	if err != nil {
 		response.Fail(c, http.StatusBadRequest, 400, "读取请求体失败")
 		return
@@ -1552,23 +1628,22 @@ func (h *CICDHandler) RepoRefs(c *gin.Context) {
 		return
 	}
 	url := c.Query("url")
-	username, password, token := c.Query("username"), c.Query("password"), c.Query("token")
 	if url == "" {
 		response.Fail(c, http.StatusBadRequest, 400, "url 必填")
 		return
 	}
-	// 设计器按凭证名调用（前端不持有明文）：查库取凭证 → 读 K8s Secret 补齐鉴权参数
-	if username == "" && password == "" && token == "" {
-		if credName := c.Query("credential"); credName != "" {
-			k8s, ok := h.k8s(c, cl)
-			if ok {
-				var cred model.CICredential
-				if err := h.db.Where("cluster_name = ? AND name = ?", cl, credName).First(&cred).Error; err == nil {
-					if data, err := k8s.SecretData(c.Request.Context(), cred.SecretNS, cred.SecretName); err == nil {
-						username = string(data[tekton.SecretKeyUsername])
-						password = string(data[tekton.SecretKeyPassword])
-						token = string(data[tekton.SecretKeyToken])
-					}
+	// 鉴权只走 credential 名（查库取凭证 → 读 K8s Secret）：
+	// query 传明文 username/password/token 会落在反向代理 access log 的请求行里，已下线
+	username, password, token := "", "", ""
+	if credName := c.Query("credential"); credName != "" {
+		k8s, ok := h.k8s(c, cl)
+		if ok {
+			var cred model.CICredential
+			if err := h.db.Where("cluster_name = ? AND name = ?", cl, credName).First(&cred).Error; err == nil {
+				if data, err := k8s.SecretData(c.Request.Context(), cred.SecretNS, cred.SecretName); err == nil {
+					username = string(data[tekton.SecretKeyUsername])
+					password = string(data[tekton.SecretKeyPassword])
+					token = string(data[tekton.SecretKeyToken])
 				}
 			}
 		}
@@ -1631,6 +1706,16 @@ func (h *CICDHandler) RunWS(c *gin.Context) {
 	if runID == "" {
 		c.String(http.StatusBadRequest, "runId required")
 		return
+	}
+	// 集群维度校验（前端 runWsUrl 带 ?cluster=）：Upgrade 前挡住跨集群偷听
+	if cl := c.Query("cluster"); cl != "" {
+		if uid, perr := strconv.ParseUint(runID, 10, 64); perr == nil {
+			var run model.CIRun
+			if gerr := h.db.First(&run, uid).Error; gerr != nil || run.ClusterName != cl {
+				c.String(http.StatusNotFound, "run not found in cluster")
+				return
+			}
+		}
 	}
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,

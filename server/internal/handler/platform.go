@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"net/http"
 	"gorm.io/gorm"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"net/http"
 
+	"kube-console/server/internal/ci/errcode"
 	"kube-console/server/internal/kube"
 	"kube-console/server/internal/middleware"
 	"kube-console/server/internal/model"
@@ -28,11 +29,12 @@ type PlatformHandler struct {
 	clusters   *service.ClusterManager
 	monitor    *service.MonitorService
 	debugImage string
+	adminUser  string
 }
 
 // NewPlatformHandler 创建
-func NewPlatformHandler(db *gorm.DB, clusters *service.ClusterManager, debugImage string) *PlatformHandler {
-	return &PlatformHandler{db: db, clusters: clusters, monitor: service.NewMonitorService(clusters), debugImage: debugImage}
+func NewPlatformHandler(db *gorm.DB, clusters *service.ClusterManager, debugImage, adminUser string) *PlatformHandler {
+	return &PlatformHandler{db: db, clusters: clusters, monitor: service.NewMonitorService(clusters), debugImage: debugImage, adminUser: adminUser}
 }
 
 // kubeClient 当前集群的 kube.Client（X-Cluster 头）
@@ -100,6 +102,7 @@ type logSourceInput struct {
 	Port             int    `json:"port"`
 	DirectURL        string `json:"directURL"`
 	IndexPrefix      string `json:"indexPrefix"`
+	JsonIndexPrefix  string `json:"jsonIndexPrefix"`
 	Username         string `json:"username"`
 	Password         string `json:"password"`
 	Enabled          bool   `json:"enabled"`
@@ -115,6 +118,7 @@ func (in logSourceInput) toModel() model.LogSource {
 		Port:             in.Port,
 		DirectURL:        in.DirectURL,
 		IndexPrefix:      in.IndexPrefix,
+		JsonIndexPrefix:  in.JsonIndexPrefix,
 		Username:         in.Username,
 		Password:         in.Password,
 		Enabled:          in.Enabled,
@@ -143,16 +147,31 @@ func (h *PlatformHandler) SaveLogSource(c *gin.Context) {
 		if src.Password == "" {
 			src.Password = existing.Password
 		}
-		h.db.Save(&src)
+		if err := h.db.Save(&src).Error; err != nil {
+			response.Fail(c, 500, 500, err.Error())
+			return
+		}
 	} else {
-		h.db.Create(&src)
+		if err := h.db.Create(&src).Error; err != nil && errcode.IsUniqueViolation(err) {
+			// 并发首建：对方已建，重读转更新
+			if err2 := h.db.Where("cluster_name = ?", src.ClusterName).First(&existing).Error; err2 == nil {
+				src.ID = existing.ID
+				_ = h.db.Save(&src).Error
+			}
+		} else if err != nil {
+			response.Fail(c, 500, 500, err.Error())
+			return
+		}
 	}
 	response.OK(c, src)
 }
 
 // DeleteLogSource DELETE /logsources/:cluster
 func (h *PlatformHandler) DeleteLogSource(c *gin.Context) {
-	h.db.Where("cluster_name = ?", c.Param("cluster")).Delete(&model.LogSource{})
+	if err := h.db.Where("cluster_name = ?", c.Param("cluster")).Delete(&model.LogSource{}).Error; err != nil {
+		response.Fail(c, 500, 500, err.Error())
+		return
+	}
 	response.OK(c, nil)
 }
 
@@ -230,16 +249,30 @@ func (h *PlatformHandler) SaveChannel(c *gin.Context) {
 		if ch.Secret == "" {
 			ch.Secret = existing.Secret
 		}
-		h.db.Save(&ch)
+		if err := h.db.Save(&ch).Error; err != nil {
+			response.Fail(c, 500, 500, err.Error())
+			return
+		}
 	} else {
-		h.db.Create(&ch)
+		if err := h.db.Create(&ch).Error; err != nil && errcode.IsUniqueViolation(err) {
+			if err2 := h.db.Where("name = ?", ch.Name).First(&existing).Error; err2 == nil {
+				ch.ID = existing.ID
+				_ = h.db.Save(&ch).Error
+			}
+		} else if err != nil {
+			response.Fail(c, 500, 500, err.Error())
+			return
+		}
 	}
 	response.OK(c, ch)
 }
 
 // DeleteChannel DELETE /notify/channels/:id
 func (h *PlatformHandler) DeleteChannel(c *gin.Context) {
-	h.db.Delete(&model.NotifyChannel{}, c.Param("id"))
+	if err := h.db.Delete(&model.NotifyChannel{}, c.Param("id")).Error; err != nil {
+		response.Fail(c, 500, 500, err.Error())
+		return
+	}
 	response.OK(c, nil)
 }
 
@@ -304,7 +337,12 @@ func (h *PlatformHandler) SaveRegistryConfig(c *gin.Context) {
 	err := h.db.First(&cfg).Error
 	isNew := err != nil
 	if isNew {
-		cfg = model.RegistryConfig{URL: in.URL, Username: in.Username, Insecure: true}
+		// 新建也按请求的 insecure 取值（旧实现强制 true：insecure:false 的首次保存被覆盖）
+		insecure := true
+		if in.Insecure != nil {
+			insecure = *in.Insecure
+		}
+		cfg = model.RegistryConfig{URL: in.URL, Username: in.Username, Insecure: insecure}
 	} else {
 		cfg.URL = in.URL
 		cfg.Username = in.Username
@@ -319,9 +357,13 @@ func (h *PlatformHandler) SaveRegistryConfig(c *gin.Context) {
 		cfg.Password = in.Password
 	}
 	if isNew {
-		h.db.Create(&cfg)
-	} else {
-		h.db.Save(&cfg)
+		if err := h.db.Create(&cfg).Error; err != nil {
+			response.Fail(c, 500, 500, err.Error())
+			return
+		}
+	} else if err := h.db.Save(&cfg).Error; err != nil {
+		response.Fail(c, 500, 500, err.Error())
+		return
 	}
 	response.OK(c, gin.H{"ok": true})
 }
@@ -510,9 +552,20 @@ func (h *PlatformHandler) SaveGroup(c *gin.Context) {
 	if err := h.db.Where("name = ?", g.Name).First(&existing).Error; err == nil {
 		g.ID = existing.ID
 		g.CreatedAt = existing.CreatedAt
-		h.db.Save(&g)
+		if err := h.db.Save(&g).Error; err != nil {
+			response.Fail(c, 500, 500, err.Error())
+			return
+		}
 	} else {
-		h.db.Create(&g)
+		if err := h.db.Create(&g).Error; err != nil && errcode.IsUniqueViolation(err) {
+			if err2 := h.db.Where("name = ?", g.Name).First(&existing).Error; err2 == nil {
+				g.ID = existing.ID
+				_ = h.db.Save(&g).Error
+			}
+		} else if err != nil {
+			response.Fail(c, 500, 500, err.Error())
+			return
+		}
 	}
 	response.OK(c, g)
 }
@@ -520,8 +573,14 @@ func (h *PlatformHandler) SaveGroup(c *gin.Context) {
 // DeleteGroup DELETE /groups/:id
 func (h *PlatformHandler) DeleteGroup(c *gin.Context) {
 	id := c.Param("id")
-	h.db.Model(&model.User{}).Where("group_id = ?", id).Update("group_id", 0)
-	h.db.Delete(&model.UserGroup{}, id)
+	if err := h.db.Model(&model.User{}).Where("group_id = ?", id).Update("group_id", 0).Error; err != nil {
+		response.Fail(c, 500, 500, err.Error())
+		return
+	}
+	if err := h.db.Delete(&model.UserGroup{}, id).Error; err != nil {
+		response.Fail(c, 500, 500, err.Error())
+		return
+	}
 	response.OK(c, nil)
 }
 
@@ -586,14 +645,22 @@ func (h *PlatformHandler) CreateToken(c *gin.Context) {
 	response.OK(c, gin.H{"id": t.ID, "name": t.Name, "token": plain, "expiresAt": t.ExpiresAt})
 }
 
-// RevokeToken DELETE /tokens/:id
+// RevokeToken DELETE /tokens/:id —— 只能撤自己的 token，管理员可撤任意。
+// token 不存在/无权限明确报 404/403（旧实现两种情况都返回 OK，调用方无法区分）
 func (h *PlatformHandler) RevokeToken(c *gin.Context) {
 	uid := middleware.CurrentUserID(c)
 	var t model.ApiToken
-	if err := h.db.First(&t, c.Param("id")).Error; err == nil {
-		if t.UserID == uid || middleware.CurrentUser(c) == "admin" || middleware.IsAdmin(h.db, "admin", uid, middleware.CurrentUser(c)) {
-			h.db.Model(&t).Update("revoked", true)
-		}
+	if err := h.db.First(&t, c.Param("id")).Error; err != nil {
+		response.Fail(c, 404, 404, "token 不存在")
+		return
+	}
+	if t.UserID != uid && !middleware.IsAdmin(h.db, h.adminUser, uid, middleware.CurrentUser(c)) {
+		response.Fail(c, 403, 403, "只能撤销自己的 token（管理员可撤销任意）")
+		return
+	}
+	if err := h.db.Model(&t).Update("revoked", true).Error; err != nil {
+		response.Fail(c, 500, 500, err.Error())
+		return
 	}
 	response.OK(c, nil)
 }
