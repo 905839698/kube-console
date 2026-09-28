@@ -134,6 +134,7 @@ import { useNamespaceStore } from '../store/namespace'
 import { usePerm } from '../store/perm'
 import { parseDuration } from '../utils/sort'
 import { confirmDelete } from '../utils/confirm'
+import { textSelected } from '../utils/selection'
 
 // Gateway API 资源：版本随渠道变化，需 discovery 确认当前集群是否提供
 const GATEWAY_KINDS = new Set(['gatewayclasses', 'gateways', 'httproutes', 'grpcroutes', 'tlsroutes', 'tcproutes', 'udproutes', 'referencegrants'])
@@ -291,6 +292,7 @@ async function fetchYaml(name: string, ns: string): Promise<string> {
 
 function onRowClick(row: GenericItem, _col: unknown, event: Event) {
   if ((event.target as HTMLElement).closest('.el-button')) return
+  if (textSelected()) return // 选中文本（复制）不跳详情
   onNameClick(row)
 }
 

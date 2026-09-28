@@ -349,10 +349,11 @@ func (h *K8sHandler) ExecPod(c *gin.Context) {
 
 	container := c.Query("container")
 	shell := c.Query("shell")
+	cmd := c.Query("cmd") // 非空=直接执行这段脚本（数据库页的自动登录 CLI），权限口径与 shell 相同
 	debug := c.Query("debug") == "1"
 	// ExecPod 内部已负责发送 exit 消息并关闭 WS（含错误分支），
 	// 这里不再重复写——连接已关，且错误串拼接进 JSON 含引号/换行时是非法 JSON
-	_ = h.k8s.ExecPod(c.Request.Context(), client, ws, queryNamespace(c), c.Param("name"), container, shell, debug)
+	_ = h.k8s.ExecPod(c.Request.Context(), client, ws, queryNamespace(c), c.Param("name"), container, shell, cmd, debug)
 }
 
 // ------------------- 工作负载 -------------------

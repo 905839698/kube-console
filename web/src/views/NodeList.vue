@@ -81,6 +81,7 @@ import WebTerminal from '../components/WebTerminal.vue'
 import { useClusterStore } from '../store/cluster'
 import { usePerm } from '../store/perm'
 import { parseDuration } from '../utils/sort'
+import { textSelected } from '../utils/selection'
 
 const router = useRouter()
 const clusterStore = useClusterStore()
@@ -150,6 +151,7 @@ async function load() {
 
 function onRowClick(row: NodeDetail, _col: unknown, event: Event) {
   if ((event.target as HTMLElement).closest('.el-button')) return
+  if (textSelected()) return // 选中文本（复制）不跳详情
   goDetail(row)
 }
 

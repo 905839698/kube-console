@@ -176,6 +176,7 @@ import PropertyPanel from './PropertyPanel.vue'
 import { normalizeDuplicateIds } from '../graphUtils'
 import { ciDesignDirty, setCiDesignGuard } from '../dirtyGuard'
 import { confirmDelete } from '../../../utils/confirm'
+import { usePerm } from '../../../store/perm'
 
 const EMPTY_GRAPH: CIGraph = { name: 'unnamed', version: 1, nodes: [], edges: [] }
 
@@ -245,6 +246,7 @@ async function reload(id: number) {
     const d = await ciApi.pipeline(id)
     if (seq !== loadSeq) return
     meta.value = { projectId: d.pipeline.projectId, name: d.pipeline.name, description: d.pipeline.description }
+    projNs.value = await projectNs(meta.value.projectId)
     const raw = d.graph ?? { name: 'unnamed', version: 1, nodes: [], edges: [] }
     const fix = normalizeDuplicateIds(raw)
     if (fix.changed) ElMessage.warning('检测到重复的节点 id（历史数据），已自动修复；点击「保存」后生效')
@@ -265,7 +267,10 @@ async function reload(id: number) {
     loadError.value = e?.message || '流水线加载失败'
   }
 }
-onMounted(() => { if (pid.value) void reload(pid.value) })
+onMounted(() => {
+  perm.load()
+  if (pid.value) void reload(pid.value)
+})
 watch(pid, (v) => { if (v) void reload(v) })
 
 // 顶部切换集群：设计器内容属于具体集群，必须重载（流水线 id 在不同集群可能指向完全不同的对象）
@@ -468,7 +473,17 @@ async function doDuplicate() {
 const schedDlg = ref(false)
 const schedules = ref<CISchedule[]>([])
 const newCron = ref('')
-const canWrite = computed(() => useUserStore().isAdmin)
+// 流水线权限按其所属项目绑定的命名空间判定（项目 1:1 绑 ns）
+const perm = usePerm()
+const projNs = ref('')
+async function projectNs(projectId: number) {
+  try {
+    return (await ciApi.projects()).find((x) => x.id === projectId)?.namespace || ''
+  } catch {
+    return ''
+  }
+}
+const canWrite = computed(() => (projNs.value ? perm.canWriteNS(projNs.value) : useUserStore().isAdmin))
 async function openScheduleDlg() {
   schedDlg.value = true
   try { schedules.value = await ciApi.schedules(pid.value) } catch { schedules.value = [] }

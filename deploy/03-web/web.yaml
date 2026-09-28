@@ -48,6 +48,12 @@ data:
             proxy_send_timeout 3600s;
         }
 
+        # 入口页永不缓存：发版后浏览器普通刷新即可拿到新 bundle（assets 带 hash 可长缓存），
+        # 否则旧 SPA 会话残留会让「已修复」的问题看起来反复出现
+        location = /index.html {
+            add_header Cache-Control "no-cache";
+        }
+
         location / {
             try_files $uri $uri/ /index.html;
         }

@@ -2038,10 +2038,12 @@ type MatrixCell struct {
 	Ready int `json:"ready"`
 }
 
-// WorkloadMatrix 工作负载矩阵（命名空间 × 类型）
+// WorkloadMatrix 工作负载矩阵（命名空间 × 类型）。
+// Kinds 是动态的：三类内置控制器恒在，InstanceSet 只在 KubeBlocks addon 装着
+// （CRD 能列出来）时才给列，否则整列都是 "-"，只是噪音。
 type WorkloadMatrix struct {
-	Namespaces []string                        `json:"namespaces"`
-	Kinds      []string                        `json:"kinds"`
+	Namespaces []string                         `json:"namespaces"`
+	Kinds      []string                         `json:"kinds"`
 	Cells      map[string]map[string]MatrixCell `json:"cells"`
 }
 
@@ -2053,20 +2055,24 @@ func (s *K8sService) WorkloadMatrixData(ctx context.Context, c *kube.Client) (*W
 	}
 	nsSet := map[string]bool{}
 
+	add := func(ns, kind string, ready bool) {
+		nsSet[ns] = true
+		if out.Cells[ns] == nil {
+			out.Cells[ns] = map[string]MatrixCell{}
+		}
+		cell := out.Cells[ns][kind]
+		cell.Total++
+		if ready {
+			cell.Ready++
+		}
+		out.Cells[ns][kind] = cell
+	}
+
 	fill := func(kind string, items []WorkloadItem) {
 		for _, it := range items {
-			nsSet[it.Namespace] = true
-			if out.Cells[it.Namespace] == nil {
-				out.Cells[it.Namespace] = map[string]MatrixCell{}
-			}
-			cell := out.Cells[it.Namespace][kind]
-			cell.Total++
-			if it.Ready >= it.Replicas && it.Replicas > 0 {
-				cell.Ready++
-			} else if kind == "DaemonSet" && it.Ready >= it.Replicas {
-				cell.Ready++
-			}
-			out.Cells[it.Namespace][kind] = cell
+			// DaemonSet 的期望数来自节点选择，desire=0 时也算就绪，其余类型要求显式副本
+			add(it.Namespace, kind,
+				(it.Replicas > 0 && it.Ready >= it.Replicas) || (kind == "DaemonSet" && it.Ready >= it.Replicas))
 		}
 	}
 
@@ -2083,6 +2089,19 @@ func (s *K8sService) WorkloadMatrixData(ctx context.Context, c *kube.Client) (*W
 			ch <- result{kind: k, items: items, err: err}
 		}(kind)
 	}
+	// Pod 与控制器副本数语义不同（没有期望副本，只有容器就绪），单独一轮
+	podsCh := make(chan result, 1)
+	go func() {
+		items, err := s.ListWorkloads(ctx, c, "pods", "", "")
+		podsCh <- result{kind: "Pod", items: items, err: err}
+	}()
+	// KubeBlocks 的 InstanceSet：数据库副本的实际载体
+	setsCh := make(chan result, 1)
+	go func() {
+		items, err := s.listMatrixInstanceSets(ctx, c)
+		setsCh <- result{kind: "InstanceSet", items: items, err: err}
+	}()
+
 	for i := 0; i < 3; i++ {
 		r := <-ch
 		if r.err != nil {
@@ -2091,12 +2110,53 @@ func (s *K8sService) WorkloadMatrixData(ctx context.Context, c *kube.Client) (*W
 		fill(kindTitle(r.kind), r.items)
 	}
 
+	if r := <-setsCh; r.err == nil {
+		out.Kinds = append(out.Kinds, "InstanceSet")
+		for _, it := range r.items {
+			add(it.Namespace, "InstanceSet", it.Ready >= it.Replicas)
+		}
+	}
+	if r := <-podsCh; r.err == nil {
+		out.Kinds = append(out.Kinds, "Pod")
+		for _, it := range r.items {
+			// Completed 是一次性任务跑完，不算坏行
+			add(it.Namespace, "Pod", it.Status == "Running" || it.Status == "Completed")
+		}
+	}
+
 	// 命名空间排序
 	for ns := range nsSet {
 		out.Namespaces = append(out.Namespaces, ns)
 	}
 	sort.Strings(out.Namespaces)
 	return out, nil
+}
+
+// listMatrixInstanceSets 一次列全命名空间的 KubeBlocks InstanceSet，只取副本口径。
+// addon 未安装时 List 报 NoKindMatch，这里把错误原样返回，调用方据此省掉整列。
+func (s *K8sService) listMatrixInstanceSets(ctx context.Context, c *kube.Client) ([]WorkloadItem, error) {
+	if c == nil || c.Dynamic == nil {
+		return nil, fmt.Errorf("动态客户端不可用")
+	}
+	list, err := c.Dynamic.Resource(kbInstanceSetGVR).Namespace("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]WorkloadItem, 0, len(list.Items))
+	for i := range list.Items {
+		it := &list.Items[i]
+		// spec.replicas 可以缺省（KubeBlocks 默认 1）
+		replicas := int32(1)
+		if v, ok, _ := unstructured.NestedInt64(it.Object, "spec", "replicas"); ok {
+			replicas = int32(v)
+		}
+		ready, _, _ := unstructured.NestedInt64(it.Object, "status", "readyReplicas")
+		items = append(items, WorkloadItem{
+			Kind: "InstanceSet", Name: it.GetName(), Namespace: it.GetNamespace(),
+			Replicas: replicas, Ready: int32(ready),
+		})
+	}
+	return items, nil
 }
 
 // ------------------- 配额总览 -------------------

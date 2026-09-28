@@ -17,7 +17,7 @@
       </div>
     </template>
 
-    <el-table border :data="paged" v-loading="loading" stripe @row-click="onRowClick" @selection-change="(rows: WorkloadItem[]) => (selected = rows)">
+    <el-table border :data="paged" v-loading="loading" stripe @selection-change="(rows: WorkloadItem[]) => (selected = rows)">
       <el-table-column type="selection" width="42" />
       <el-table-column label="名称" prop="name" min-width="200" sortable>
         <template #default="{ row }">
@@ -305,11 +305,6 @@ async function load() {
       loading.value = false
     }
   }, 200)
-}
-
-function onRowClick(row: WorkloadItem, _col: unknown, event: Event) {
-  if ((event.target as HTMLElement).closest('.el-button')) return
-  goDetail(row)
 }
 
 function goDetail(row: WorkloadItem) {

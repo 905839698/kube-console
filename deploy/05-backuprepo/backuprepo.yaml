@@ -1,0 +1,50 @@
+# KubeBlocks 备份仓库
+# 主仓库 minio-bak：S3 兼容对象存储（Tool 模式，走网络传输，无节点亲和限制，全引擎可用）
+# 备仓库 qa-local-pvc：PVC 型（local-path 节点本地盘，有跨节点调度限制，仅作本地兜底，不设默认）
+# 说明：
+#   - 默认仓库用 **annotation** 标记（dataprotection.kubeblocks.io/is-default-repo: "true"），
+#     注意 1.0.2 的 operator 只认 annotation，写成 label 不生效（报 no default BackupRepo found）
+#   - 两个仓库同时设默认会报 multiple default BackupRepo found——默认标记只能挂一个
+#   - operator 要求默认仓库 phase=Ready（本 CRD 版本没有 Available）
+# 应用：kubectl apply -f backuprepo.yaml
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-bak-credential
+  namespace: kb-system
+type: Opaque
+stringData:
+  accessKeyId: nZWfBqJG5nKdRg5BYFCd
+  secretAccessKey: ivKrZMbg5zUXzIor6bibfcIYJuDLbbiLef9huVJT
+---
+apiVersion: dataprotection.kubeblocks.io/v1alpha1
+kind: BackupRepo
+metadata:
+  name: minio-bak
+  annotations:
+    dataprotection.kubeblocks.io/is-default-repo: "true"
+spec:
+  storageProviderRef: minio
+  accessMethod: Tool
+  pvReclaimPolicy: Retain
+  config:
+    endpoint: http://10.107.2.128:9000
+    bucket: bak
+  credential:
+    name: minio-bak-credential
+    namespace: kb-system
+---
+apiVersion: dataprotection.kubeblocks.io/v1alpha1
+kind: BackupRepo
+metadata:
+  name: qa-local-pvc
+spec:
+  storageProviderRef: pvc
+  accessMethod: Mount
+  volumeCapacity: 100Gi
+  pvReclaimPolicy: Retain
+  config:
+    storageClassName: local-path
+    accessMode: ReadWriteOnce
+    volumeMode: Filesystem

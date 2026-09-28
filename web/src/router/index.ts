@@ -47,6 +47,9 @@ const router = createRouter({
         // 微服务（Nacos）：跟随顶栏全局命名空间选择
         { path: 'micro/services', name: 'nacosServices', component: () => import('../views/micro/NacosServices.vue'), meta: { title: '服务发现' } },
         { path: 'micro/configs', name: 'nacosConfigs', component: () => import('../views/micro/NacosConfigs.vue'), meta: { title: '配置管理' } },
+        // 数据库（KubeBlocks）：按引擎分子菜单，列表跟随顶栏命名空间
+        { path: 'kb', redirect: '/kb/mysql' },
+        { path: 'kb/:engine', name: 'kbDatabases', component: () => import('../views/KBDatabases.vue'), meta: { title: '数据库集群' } },
         // 平台管理（platform-admin 全量；标了 platformView 的对 platform-viewer 只读开放）
         { path: 'users', name: 'users', component: () => import('../views/UserList.vue'), meta: { title: '用户管理', admin: true } },
         { path: 'authz', name: 'authz', component: () => import('../views/AuthzList.vue'), meta: { title: '授权管理', admin: true, platformView: true } },

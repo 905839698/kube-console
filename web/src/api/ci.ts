@@ -38,6 +38,8 @@ export interface CIGraph { name: string; version: number; nodes: CIPNode[]; edge
 export interface CIProject {
   id: number; name: string; displayName: string; description: string
   namespace: string; createdAt?: string
+  // namespaceMissing：绑定的命名空间已被外部删除（后端标注），此时无法运行，需处理
+  namespaceMissing?: boolean
 }
 export interface CIPipeline {
   id: number; projectId: number; name: string; description: string

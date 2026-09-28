@@ -35,7 +35,7 @@
 | --- | --- | --- |
 | GET | `/overview` | 统计卡片 + 节点摘要 + 资源容量 |
 | GET | `/search?q=&limit=` | 全局搜索（Pod/工作负载/Service/ConfigMap/命名空间/节点） |
-| GET | `/workloads/matrix` | 工作负载矩阵（命名空间 × 类型） |
+| GET | `/workloads/matrix` | 工作负载矩阵（命名空间 × 类型）。`kinds` 动态：Deployment/StatefulSet/DaemonSet/Pod 恒在，InstanceSet（KubeBlocks 副本载体，读 `spec.replicas` 与 `status.readyReplicas`）仅在 CRD 可列时出现；Pod 格子按容器就绪计（`Running`/`Completed` 记就绪） |
 | GET | `/resource-defs?force=1` | 资源定义（discovery 驱动，自定义资源浏览器用） |
 | GET | `/gateway-availability` | Gateway API 资源在当前集群可用性与实际版本 |
 | GET | `/events?namespace=&type=&involved=&limit=` | 事件中心 |
@@ -84,8 +84,8 @@ kind: `deployments | statefulsets | daemonsets | cronjobs | jobs | pods | replic
 | PUT | `/workloads/:kind/:name/scale` | 缩放 `{namespace,replicas}` |
 | PUT | `/workloads/:kind/:name/restart` | 滚动重启（触发滚动更新） |
 | GET | `/workloads/:kind/:name/logcollection?namespace=` | 容器内日志采集状态 `{enabled,config}`（仅 `deployments\|statefulsets\|daemonsets`） |
-| PUT | `/workloads/:kind/:name/logcollection?namespace=` | 开启/更新采集 `{container,logPath,format,image}`：注入 fluent-bit Sidecar + 共享 emptyDir，改 Pod 模板触发滚动更新；`format=text` 写行日志索引、`json` 写 JSON 索引（见「日志源配置」） |
-| DELETE | `/workloads/:kind/:name/logcollection?namespace=` | 关闭采集（摘除 Sidecar、共享卷与 ConfigMap/Secret） |
+| PUT | `/workloads/:kind/:name/logcollection?namespace=` | 开启/更新采集 `{container,logPath,format,image}`：注入 fluent-bit Sidecar + 共享 emptyDir，改 Pod 模板触发滚动更新；`format=text` 写行日志索引、`json` 写 JSON 索引（见「日志源配置」）。ES 凭据写该 ns **共享**的 `kc-es-credentials`（同 ns 多个采集者共用一份），并清理旧版按工作负载建的 `<name>-fluent-bit-es` |
+| DELETE | `/workloads/:kind/:name/logcollection?namespace=` | 关闭采集（摘除 Sidecar、共享卷与 ConfigMap）；该 ns 内已无其它采集者时一并回收共享凭据 Secret |
 | DELETE | `/workloads/:kind/:name?namespace=` | 删除（含 PodMonitor 清理） |
 
 ## 通用资源（kind 模式）
@@ -116,7 +116,7 @@ kind: `services | ingresses | configmaps | secrets | persistentvolumeclaims | pe
 
 ## 监控（Prometheus，经 kube-apiserver proxy）
 
-`?range=1h|6h|24h`
+`?range=1h|6h|24h|7d`（步长分别为 15s/60s/300s/3600s；未知值回落到 `6h`）
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -165,18 +165,70 @@ release 操作需 `X-Cluster`；仓库源为全局配置。
 | PUT | `/helm/repos/:id/refresh` | 刷新 index（内存缓存 TTL 30min） |
 | GET | `/helm/repos/:id/charts?search=` | 浏览 chart（多版本折叠） |
 
+## 数据库（KubeBlocks）
+
+权限按**集群所在命名空间**判定：读=该 ns 有任意角色（view+）；写/运维/删除=该 ns 可写（edit/admin）。未装 KubeBlocks 时列表与引擎目录返回空。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/kb/engines` | 可安装引擎目录（`{installed, engines[]}`，拓扑/组件/副本上下限/存储卷/exporter/可改配置均来自 ClusterDefinition + ComponentDefinition）。组件的 `compDef` 已解析成**具体模板名**，`compDefPattern` 保留 addon 原始写法，`compDefs[]` 给出全部可选模板与版本；`replicasMax=0` 表示该版本模板未声明上限。**分片型拓扑**（redis 的 `cluster`、mongodb 的 `sharding`）不写 `components` 而写 `shardings[{name, shardingDef}]`，目录按 `ShardingDefinition` 解析出模板与 `shardsLimit` 上下限（`shardingDef` 同样可能是前缀，如 `mongo-shard-`） |
+| GET | `/kb/clusters?namespace=` | 集群列表（只含可读 ns；组件就绪数取 InstanceSet status）。除 `clusterDef` 外还给 `engine`：无拓扑（standalone，`spec` 只有 `componentSpecs`）的集群没有 `clusterDef`，按组件模板的 `app.kubernetes.io/name` 标签反推引擎，否则这类集群在引擎页里会整个不可见 |
+| POST | `/kb/clusters?namespace=` | 创建 `{name,clusterDef,topology,terminationPolicy,components[],shardings[]}`（apps.kubeblocks.io/v1 形态）。`components[].compDef` 允许传模式（如 `^mysql-\d+\.\d+.*$`），服务端按 `serviceVersion`（空则取最高版本）解析成真实 ComponentDefinition 后再下发。**分片型拓扑**（redis 的 `cluster`、mongodb 的 `sharding`）不填 `components` 而填 `shardings[{name,shardingDef,shards,replicas,compDef,资源/存储}]` → 下发 `spec.shardings[].template`；`shardingDef` 同样允许前缀/正则（mongodb 写的是 `mongo-shard-`），分片数按 ShardingDefinition 的 `shardsLimit` 校验（实测 apiserver 与 webhook 都不拦越界值，只能服务端拦） |
+| GET/DELETE | `/kb/clusters/:namespace/:name` | 详情（含组件 headless service 与实例标签、集群 conditions、分片拓扑及其成员组件）/ 删除 |
+| GET/POST | `/kb/clusters/:namespace/:name/ops` | 运维工单列表（分页拉全后按 `spec.clusterName` 过滤，kubectl 手建的无标签工单不丢）/ 下发，下发后**回读工单状态**再回执 `{name, phase, message}`（apiserver 会静默收下形状不对的工单，只回 200 就等于"点了没反应"）；type 全集（1.0.2 CRD 枚举）：Restart\|Stop\|Start\|HorizontalScaling\|VerticalScaling\|Reconfiguring\|VolumeExpansion\|Upgrade\|Switchover\|Expose\|RebuildInstance。VolumeExpansion 传 `volumes[{name,storage}]`（卷名须来自组件 volumeClaimTemplates，只许扩）；Upgrade 传 `serviceVersion`（须在 ComponentVersion 升级链内，链外报可选项）；Switchover 可传 `instance`；Expose 传 `serviceType/exposeName/enable`；RebuildInstance 传 `backupName/inPlace` |
+| GET | `/kb/clusters/:namespace/:name/ops/:ops` | 工单详情：`status.conditions` 时间线、progress、变更前旧值（`lastConfiguration`）、`cancelable` 标记 |
+| POST | `/kb/clusters/:namespace/:name/ops/:ops/cancel` | 取消进行中的工单（patch `spec.cancel=true`；终态工单直接拒绝） |
+| GET | `/kb/clusters/:namespace/:name/versions` | 各组件可升级版本链（ComponentVersion.compatibilityRules，`compDefs` 精确/前缀两种规则，可选版本取**每条规则自己的 releases 名单**），候选降序含当前版本 |
+| GET | `/kb/clusters/:namespace/:name/connection` | 连接信息：组件 Service（排除 headless 与发布期临时 Service）、内网 DNS、NodePort、账号用户名与密码所在 Secret（密码一律不回显） |
+| GET | `/kb/clusters/:namespace/:name/events` | 该集群资源的 Warning 事件（按 `<cluster>-` 前缀过滤，倒序最多 50 条） |
+| POST | `/kb/clusters/:namespace/:name/monitor-access` | 一键创建 ServiceMonitor 接入 exporter 抓取（返回创建的名称） |
+| GET | `/kb/clusters/:namespace/:name/config-schema/:component` | 参数表单数据源（1.0 的 `parameters.kubeblocks.io` 契约：ParamConfigRenderer 按 compDef 精确匹配 → ParametersDefinition 的 JSON Schema + 动/静/不可变清单 + 生效方式，当前值取 ComponentParameter `<cluster>-<component>`；`schemaInJSON` 兼容内嵌对象与 JSON 字符串两种实测形态，schema 外的手工键保留为 `inSchema=false`）。无 ParametersDefinition 的组件返回空表单 + 说明，降级走原始文件 |
+| POST | `/kb/clusters/:namespace/:name/config-schema/:component` | 表单化改参 `{parameters:{k:v}}`：本地先校验（不可变参数 / 未知键 / 枚举 / 布尔），通过后下发 Reconfiguring 工单 |
+| GET | `/kb/clusters/:namespace/:name/configmaps` | 该集群的配置载体列表（排除 scripts/env 类） |
+| GET/PUT | `/kb/clusters/:namespace/:name/configmaps/:cm` | 读取 / 覆盖配置内容（改完需重启组件生效；参数修改优先走 config-schema 表单） |
+| GET | `/kb/repos` | 备份仓库列表（BackupRepo，集群级；空 = 未配置备份目的地，创建备份会在本地直接报错） |
+| GET | `/kb/clusters/:namespace/:name/backup/policies` | 各组件备份策略（BackupPolicy，标签+命名双口径归属；方法清单、凭据 Secret 名、仓库状态） |
+| GET/PUT | `/kb/clusters/:namespace/:name/backup/schedule` | 备份计划读取 / 更新 `{component, items[{method,enabled,cronExpression,retention}]}`（按项名对位，只改这三个字段，operator 填的 parameters 原样保留；cron 5/6 段本地校验） |
+| GET/POST | `/kb/clusters/:namespace/:name/backups` | 备份记录（按 `spec.backupPolicyName → 集群策略` 归属过滤）/ 手动备份 `{component, method?, retention?}`（缺省方法取策略第一个；generateName 防重名；无可用 BackupRepo 时本地报错） |
+| GET/DELETE | `/kb/clusters/:namespace/:name/backups/:backup` | 备份详情（各 action 执行明细、卷快照数、失败原因）/ 删除 |
+| POST | `/kb/clusters/:namespace/:name/backup/restore` | 用备份恢复出新集群：复制源集群 spec（组件结构/资源/存储类），清身份元数据，按 1.0 注解协议 `kubeblocks.io/restore-from-backup` 声明恢复来源 `{name, component, backupName, backupNamespace?, volumeRestorePolicy?, terminationPolicy?}`；备份与组件前置校验 |
+| POST | `/kb/clusters/:namespace/:name/backup/rebuild` | 用备份重建组件实例（RebuildInstance 工单）`{component, backupName, inPlace}` |
+| GET | `/kb/clusters/:namespace/:name/backup/restores` | 恢复任务记录（Restore CR，按备份归属过滤） |
+| GET | `/kb/clusters/:namespace/:name/accounts` | 系统账号 Secret 的键名（不回显明文） |
+| GET | `/kb/clusters/:namespace/:name/pods` | 该集群实例 Pod（按 `app.kubernetes.io/instance` 选择，含角色/容器就绪/重启/节点/IP） |
+| GET | `/kb/clusters/:namespace/:name/cli` | 镜像 CLI 自动登录入口 `{engine, entries[{component,pod,container,command}]}`；命令只引用容器内 `$ENV`，配 `GET /pods/:name/exec?cmd=` 使用（查看=ns 可读，exec 本身按 KubeSphere 口径要 ns 可写） |
+| GET/POST | `/kb/clusters/:namespace/:name/kafka/topics` | topic 列表（`kafka-topics.sh --describe` 解析）/ 创建 `{name,partitions,replicationFactor,configs}` |
+| PUT/DELETE | `/kb/clusters/:namespace/:name/kafka/topics/:topic` | 改配置 `{set,unset}`（`kafka-configs.sh --alter`）/ 删除 topic |
+| GET | `/kb/clusters/:namespace/:name/kafka/groups` | 消费组概览与分区 Lag |
+| POST | `/kb/clusters/:namespace/:name/kafka/consume` | 消息预览 `{topic,count,fromBeginning,partition,atOffset}`，服务端收口 ≤200 条 / 8s |
+| GET | `/kb/clusters/:namespace/:name/es/health`、`/es/indices`、`/es/indices/:index` | 集群健康、索引列表、索引定义（分片/别名/字段映射） |
+| DELETE/POST | `/kb/clusters/:namespace/:name/es/indices/:index`、`/es/search` | 删除索引（禁通配）/ DSL 查询 `{index,size,body}`（size 服务端收口 200） |
+
+运维工单的下发响应除 `name` 外还带 `phase`/`message`（建单后立即回读一次）：KubeBlocks 对同一集群串行处理运维，新工单常停在 `Pending` 排队——不回传状态时前端只能提示"已下发"，用户看到的就是"点了没反应"。水平扩缩容按当前副本算差值走 `scaleOut/scaleIn.replicaChanges`：CRD 里没有 `replicas` 字段，传了会被 apiserver **静默丢弃**并生成一张什么都不做的空工单；前端在目标副本数与当前一致时直接拒绝下发并说明当前值。
+
+Kafka 与 ES 的管理接口都在 **Pod 内执行官方 CLI**（控制台不通集群内网络）：脚本名走正则白名单，topic / 索引名 / 路径做字符校验后作为**独立 argv** 或 stdin 传给 `sh`，不拼进 shell 字符串；查看类接口要 ns 可读，变更类要 ns 可写。Kafka 侧假定 PLAINTEXT 监听（KB addon 默认），启用 SASL 时命令失败并回显原因；执行客户端脚本前会先清掉容器里一切 `*JMX*` 环境变量（bitnami broker 导出的 JMX 参数会被 `kafka-run-class.sh` 带给客户端 JVM，导致它去 bind 已被 broker 占用的 5555 端口而报 `AgentConfigurationError / BindException`），并把这类无关噪音从报错文案里剔除。
+
 ## CI（内置 Tekton）与 CD（ArgoCD）
 
-CI 接口全部经 **X-Cluster** 选择集群（集群隔离）；项目级资源落在项目命名空间（命名空间隔离）。
-写操作限 **admin**；SSE/WS 端点为公开路由，用 `GET /ci/stream-token` 签发的 60s 短 token 走查询参数鉴权。
+CI 接口全部经 **X-Cluster** 选择集群（集群隔离）；**项目 1:1 绑定一个已存在的命名空间**，流水线与凭据都归属某个项目，
+因此权限全部按「资源所属 ns」复用三层角色判定（无独立 CI 成员表）：
+
+| 档位 | 能力 | 判定 |
+| --- | --- | --- |
+| 读 | 项目/流水线/运行/日志/制品/发布记录列表与详情 | 该 ns 有任意角色（`view` 及以上）；不可见的 ns 其资源在列表与下拉中直接不出现 |
+| 触发 | 运行 / 重跑 / 停止 / 审批 | 同上（`view` 也能跑） |
+| 写 | 建改删流水线与版本、项目凭据、定时与 Webhook、回滚、编辑/删除项目 | 该 ns 可写（`edit`/`admin` 或集群/平台写角色） |
+| 平台级 | 平台级凭据（`projectId=null`）、全局变量 | 平台管理员 |
+
+SSE/WS 为公开路由，用 `GET /ci/stream-token` 签发的 60s 短 token 走查询参数鉴权，**同样按 run 所属 ns 收口**（构建日志不外泄）。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/ci/ready` | 就绪探测：`{tektonInstalled, platformNS, serviceAccount, cacheEnabled}`（未装 Tekton 前端降级提示） |
 | GET | `/ci/node-types` | 节点插件元数据（19 类，schema 驱动设计器/校验/编译） |
 | GET | `/ci/stream-token` | 签发 60s 流 token（SSE/WS 用） |
-| GET/POST | `/ci/projects` | 项目列表 / 新建 `{name,displayName,description,namespace}`（namespace 必填，自动创建） |
-| PUT/DELETE | `/ci/projects/:id` | 更新（name/namespace 不可改）/ 删除（有流水线或进行中执行拒绝） |
+| GET/POST | `/ci/projects` | 项目列表（只含可读 ns，附 `namespaceMissing` 标注绑定 ns 是否已被外部删除）/ 新建 `{name,displayName,description,namespace}`：namespace 必须是集群里**已存在**且未被其他项目占用的 ns（不再自动建 ns） |
+| PUT/DELETE | `/ci/projects/:id` | 更新（name/namespace 不可改，改绑一律拒绝）/ 删除：**级联删除**流水线、版本、运行与任务、计数器、制品、发布记录、定时、webhook 及交付、项目凭据（含已下发 Secret）；K8s ns 与业务资源不动。有进行中的执行时拒绝 |
 | GET/POST | `/ci/pipelines?projectId=` | 流水线列表（含 latestVersion）/ 新建 |
 | GET/PUT/DELETE | `/ci/pipelines/:id` | 详情（+最新 graph）/ 更新 / 删除（级联版本，进行中执行拒绝） |
 | POST | `/ci/pipelines/:id/versions` | 保存版本 `{graphJson}`（校验→编译→落库，版本号自增） |
@@ -185,7 +237,7 @@ CI 接口全部经 **X-Cluster** 选择集群（集群隔离）；项目级资�
 | POST | `/ci/pipelines/:id/compile` | 编译预览（Tekton YAML 文本） |
 | POST | `/ci/pipelines/:id/run` | 触发执行 `{versionId?,branch?,tag?}`（tag 优先；git 分支/Tag 覆盖强制全量克隆） |
 | POST | `/ci/pipelines/:id/duplicate` | 复制到目标项目 `{targetProjectId, name?}` |
-| GET | `/ci/runs?pipelineId=&status=&page=&size=` | 执行历史 `{total, items}` |
+| GET | `/ci/runs?pipelineId=&status=&page=&size=` | 执行历史 `{total, items}`（只列可读 ns 的流水线；传不可读的 pipelineId 返回 404） |
 | GET | `/ci/runs/:id` | 执行详情 `{run, tasks, pipeline}` |
 | GET | `/ci/runs/:id/tasks` | 任务列表（含 results 快照） |
 | POST | `/ci/runs/:id/rerun` | 重跑（复用原版本与分支） |
@@ -194,8 +246,8 @@ CI 接口全部经 **X-Cluster** 选择集群（集群隔离）；项目级资�
 | POST | `/ci/runs/:id/approvals` | 审批决定 `{nodeId, decision: approved\|rejected}`（驳回终止流水线） |
 | GET | `/ci/runs/:id/tasks/:taskID/logs?token=` | **SSE** 任务日志（`start` 事件 → `data:` 行帧 → `end` 事件；公开路由） |
 | GET | `/ci/ws?token=&runId=&cluster=` | **WebSocket** 执行状态推送（`{type:"run", data}`；公开路由） |
-| GET/POST | `/ci/credentials?projectId=` | 凭据列表（含被引用流水线）/ 新建（六类 form；明文即写 K8s Secret 后丢弃） |
-| PUT/DELETE | `/ci/credentials/:id` | 轮换（留空字段保持原值）/ 删除（被引用拒绝；Secret 全 ns 删除） |
+| GET/POST | `/ci/credentials?projectId=` | 凭据列表（平台级仅平台管理员可见；项目凭据按 ns 可读性过滤）/ 新建（六类 form；明文即写 K8s Secret 后丢弃；非管理员必须指定 projectId） |
+| PUT/DELETE | `/ci/credentials/:id` | 轮换（留空字段保持原值）/ 删除（被引用拒绝；Secret 从平台 ns + 归属项目 ns 及历史扇出副本一并清理） |
 | GET | `/ci/schedules?pipelineId=` | 定时任务列表 / 新建 `{pipelineId, cron}`（5 段 cron） |
 | PUT/DELETE | `/ci/schedules/:id` | 启停 / 改 cron / 删除 |
 | GET/POST | `/ci/webhooks?pipelineId=` | Webhook 列表（含回调 URL）/ 生成 `{pipelineId, branch?}`（token 随机 48 hex） |
@@ -203,7 +255,7 @@ CI 接口全部经 **X-Cluster** 选择集群（集群隔离）；项目级资�
 | POST | `/ci/webhook/:token` | **GitLab 回调公开端点**（push/tag/MR；分支过滤 + 事件指纹去重；异步触发） |
 | GET | `/ci/globals` | 全局变量列表（节点参数 `${global.KEY}` 引用，编译期注入） |
 | POST/PUT/DELETE | `/ci/globals/:id` | 新建 / 更新（key 不可改）/ 删除 |
-| GET | `/ci/artifacts?projectId=&runId=&type=&page=&size=` | 制品列表（任务成功自动登记） |
+| GET | `/ci/artifacts?projectId=&runId=&type=&page=&size=` | 制品列表（任务成功自动登记；按可读项目集合过滤） |
 | GET | `/ci/artifacts/:id` | 制品详情 + 血缘（commit/branch/run/构建人） |
 | GET | `/ci/artifacts/:id/download` | 流式下载代理（MinIO/Nexus；镜像类提示 docker pull） |
 | GET | `/ci/deployments?projectId=&page=&size=` | 发布记录（部署镜像快照 + rollback 追溯） |

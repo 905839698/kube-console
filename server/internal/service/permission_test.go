@@ -145,3 +145,47 @@ func TestCanWriteNSMulti(t *testing.T) {
 		t.Error("nil Access 应一律拒绝")
 	}
 }
+
+// CI 可见性与"能否触发运行"按只读档判定：view 角色所在 ns 可读可跑但不可写。
+func TestBuildAccessReadSet(t *testing.T) {
+	rules := map[string][]rbacv1.PolicyRule{
+		"view":           {{Verbs: []string{"get", "list", "watch"}, Resources: []string{"*"}}},
+		"edit":           {{Verbs: []string{"create", "update"}, Resources: []string{"pods"}}},
+		"cluster-viewer": {{Verbs: []string{"get", "list"}, Resources: []string{"*"}}},
+	}
+	resolve := func(ref rbacv1.RoleRef, _ string) rolePerm { return rolePermOf(rules[ref.Name]) }
+	users := user("zhang.san")
+
+	// 项目层 view：dev 可读可跑，不可写；其它 ns 一律不可见
+	acc := buildAccess(nil, []rbacv1.RoleBinding{rb("dev", "view", users)}, "zhang.san", nil, false, resolve)
+	if !acc.CanReadNS("dev") {
+		t.Error("view 用户应能读/触发 dev")
+	}
+	if acc.CanWriteNS("dev") {
+		t.Error("view 用户不应可写 dev")
+	}
+	if acc.CanReadNS("prod") || acc.CanReadNS("") {
+		t.Error("未授权 ns 不应可见（含 default）")
+	}
+	// 项目层 edit：可读档同时成立
+	acc = buildAccess(nil, []rbacv1.RoleBinding{rb("dev", "edit", users)}, "zhang.san", nil, false, resolve)
+	if !acc.CanReadNS("dev") || !acc.CanWriteNS("dev") {
+		t.Errorf("edit 用户应既可读又可写 dev: %+v", acc)
+	}
+	// 集群层只读：全 ns 可见，但仍不可写
+	acc = buildAccess([]rbacv1.ClusterRoleBinding{crb("cluster-viewer", users)}, nil, "zhang.san", nil, false, resolve)
+	if !acc.CanReadNS("any-ns") {
+		t.Error("cluster-viewer 应能读任意 ns")
+	}
+	if acc.CanWriteNS("any-ns") {
+		t.Error("cluster-viewer 不应可写")
+	}
+	// 无任何绑定：不可见；nil Access 亦拒绝
+	if acc := buildAccess(nil, nil, "zhang.san", nil, false, resolve); acc.CanReadNS("dev") {
+		t.Error("无绑定用户不应可见任何 ns")
+	}
+	var nilAcc *Access
+	if nilAcc.CanReadNS("dev") {
+		t.Error("nil Access 应一律拒绝")
+	}
+}

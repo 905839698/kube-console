@@ -17,8 +17,8 @@ import (
 	"kube-console/server/internal/kube"
 )
 
-// ExecOnce 单次 exec：不分配 TTY，stdin/stdout/stderr 直通。
-func (s *K8sService) ExecOnce(ctx context.Context, c *kube.Client, namespace, pod, container string, stdin io.Reader, stdout, stderr io.Writer, command ...string) error {
+// ExecOnce 单次 exec：不分配 TTY，stdin/stdout/stderr 直通。文件浏览/下载与数据库运维接口共用。
+func ExecOnce(ctx context.Context, c *kube.Client, namespace, pod, container string, stdin io.Reader, stdout, stderr io.Writer, command ...string) error {
 	if container == "" {
 		podObj, err := c.Clientset.CoreV1().Pods(namespace).Get(ctx, pod, metav1.GetOptions{})
 		if err != nil {
@@ -61,7 +61,7 @@ func (s *K8sService) FileList(ctx context.Context, c *kube.Client, namespace, po
 		path = "/"
 	}
 	var stdout, stderr strings.Builder
-	if err := s.ExecOnce(ctx, c, namespace, pod, container, nil, &stdout, &stderr, "ls", "-la", path); err != nil {
+	if err := ExecOnce(ctx, c, namespace, pod, container, nil, &stdout, &stderr, "ls", "-la", path); err != nil {
 		hint := stderr.String()
 		if strings.Contains(err.Error(), "executable file not found") || strings.Contains(hint, "not found") && strings.Contains(err.Error(), "sh") {
 			return nil, fmt.Errorf("容器内没有可用的 sh，无法浏览文件（可使用调试容器）")

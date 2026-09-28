@@ -13,7 +13,7 @@
 - **全局命名空间选择**：顶栏命名空间多选（含「全选」），命名空间相关页面联动跟随；筛选状态与 URL 同步（`?namespace=` 刷新/分享可复现）
 - **全局集群切换**：顶栏下拉切换已注册集群（`X-Cluster` 请求头）；集群不可达时展示告警面板与「重新检测」，不会把请求挂死
 - **左树右面板**：工作负载 / Pod 详情页左侧资源树（工作负载 → Pod → 容器，状态色点），右侧面板联动
-- **行点击进详情**：所有资源列表支持行点击直达详情（操作列按钮不受影响）；Service 列表例外——点击名称展示 **selector 匹配的后端 Pod 列表**（状态/就绪/重启/IP/节点），YAML 详情走操作列
+- **进详情与文本复制**：工作负载 / Pod 列表**不绑定行点击跳转**（否则想选中或双击复制名称、IP、镜像时会被带进详情页），进详情走蓝色名称链接或操作 → 详情；其余列表（资源 / 节点 / CI 运行 / ArgoCD 应用）仍支持行点击直达详情，且**只要拖选出选区就不跳转**，复制不受影响。Service 列表点名称展示 **selector 匹配的后端 Pod 列表**（状态/就绪/重启/IP/节点），YAML 详情走操作列
 - **个人能力**：修改密码、**个人 API Token**（创建 / 吊销，脚本化调用 `Authorization: Bearer`）、深色模式
 
 ### 集群总览（监控下钻的第一级）
@@ -24,7 +24,7 @@
 
 ## 菜单结构
 
-一级菜单 12 项（总览 + 11 个分组）：
+一级菜单 13 项（总览 + 12 个分组）：
 
 ```
 集群总览
@@ -36,6 +36,8 @@
 可观测性       监控 / 告警 / Grafana 面板 / 事件中心 / 日志检索
 CI / CD       CI 流水线 / ArgoCD 应用 / ArgoCD 仓库 / Helm Releases / Chart 仓库
 微服务         服务发现 / 配置管理（Nacos，登录即可用，跟随顶栏命名空间）
+数据库         MySQL / Redis / Kafka / MongoDB / Elasticsearch / PostgreSQL 六个引擎子菜单（`/kb/:engine`，
+              与 KubeBlocks ClusterDefinition 同名；某引擎 addon 未装时给提示而非空白页）
 安全 (RBAC)    Role / RoleBinding / ClusterRole / ClusterRoleBinding
 配额           ResourceQuota / LimitRange
 平台管理       用户 / 授权 / 角色 / 审计 / 通知 / Nacos 管理 / 镜像仓库 / 用量报表 / 备份概览
@@ -64,7 +66,7 @@ CI / CD       CI 流水线 / ArgoCD 应用 / ArgoCD 仓库 / Helm Releases / Cha
 | 模块 | 功能 |
 | --- | --- |
 | 控制器列表 | Deployment / StatefulSet / DaemonSet / CronJob / Job / HPA：搜索、**批量删除 / 批量重启**、行内缩放 / 滚动重启 / 回滚 / 删除、**导出 / 导入**、新建（表单 + YAML）；Pod 融入同一列表框架（状态 / 就绪 / 重启 / IP / 节点 / 镜像列） |
-| 矩阵视图 | 命名空间 × 工作负载类型二维矩阵（ready/total 着色），点格子直达对应列表 |
+| 矩阵视图 | 命名空间 × 工作负载类型二维矩阵（ready/total 着色），点格子直达对应列表。列为 Deployment / StatefulSet / DaemonSet / **InstanceSet** / **Pod**：InstanceSet 是 KubeBlocks 副本的实际载体（读 `spec.replicas` 与 `status.readyReplicas`，格子跳通用 CRD 页），**只在装了 addon 的集群出现**；Pod 列按容器就绪计（`Running`/`Completed` 记就绪），不参与行合计，免得与控制器副本重复计数 |
 | 工作负载详情 | 左树右面板：关联 Pod 与事件、**缩放 / 滚动重启 / 发布历史与一键回滚**（rollouts 时间线）、**调整镜像**（Tag 下拉来自已配置仓库，可手填）、容器级监控面板、日志采集开关、YAML / 表单编辑 |
 | Pod 详情 | 容器与初始化容器状态、Conditions、事件、**容忍**、Pod 监控；**Web 终端**、**日志**、**容器文件浏览器**（浏览 / 下载 / 上传 / 新建 / 重命名 / 删除）、**镜像 CVE 徽标**（点击弹明细）、驱除（Eviction API，尊重 PDB）与删除 |
 
@@ -74,7 +76,7 @@ CI / CD       CI 流水线 / ArgoCD 应用 / ArgoCD 仓库 / Helm Releases / Cha
 | 模块 | 功能 |
 | --- | --- |
 | Web 终端 | Pod 内 Shell（WebSocket exec）：容器无 shell 时自动回退 `/bin/bash`/`/bin/ash`；distroless 镜像注入临时调试容器（`kubectl debug` 风格，镜像 `k8s.debugImage` 可配，默认 `busybox:1.36`）；终端尺寸自适应。**权限**：Pod 终端与文件浏览走 pods/exec，需该命名空间写权限（edit/admin 或平台管理员） |
-| 容器内日志采集 | 给 Deployment / StatefulSet / DaemonSet 注入 **fluent-bit Sidecar**，与目标容器共享 emptyDir 后 tail 容器内日志文件写集群 ES（复用「平台管理-日志源配置」）。两条索引：**单行文本**写行日志索引（与标准输出同库），**JSON** 字段展开并保留原始行、写独立 JSON 索引；开启或改配置会修改 Pod 模板触发滚动更新，关闭即摘除 Sidecar 与 ConfigMap/Secret |
+| 容器内日志采集 | 给 Deployment / StatefulSet / DaemonSet 注入 **fluent-bit Sidecar**，与目标容器共享 emptyDir 后 tail 容器内日志文件写集群 ES（复用「平台管理-日志源配置」）。两条索引：**单行文本**写行日志索引（与标准输出同库），**JSON** 字段展开并保留原始行、写独立 JSON 索引；开启或改配置会修改 Pod 模板触发滚动更新，关闭即摘除 Sidecar 与 ConfigMap。ES 凭据落在**每命名空间共享**的 `kc-es-credentials`（不再按工作负载复制多份），该 ns 最后一个采集者关闭时回收；旧版 `<工作负载>-fluent-bit-es` 在下次保存时自动清理 |
 | 可视化编辑 | 表单 + YAML 双视图：工作负载（容器 / 镜像 / 环境变量 / 端口 / 资源限制 / 探针 / 挂载 / 卷 / 容忍 / 调度 / 更新策略）、Service（**标签选择器级联下拉**：key/value 选项来自命名空间内 Pod 现有标签）、Ingress、ConfigMap、Secret、PVC、PV、StorageClass、NetworkPolicy、HPA、ServiceAccount、Role / ClusterRole（规则编辑器）、RoleBinding / ClusterRoleBinding、ResourceQuota、LimitRange、Gateway API 全量资源（**路由后端三级级联下拉**：命名空间 → Service → 端口名）；其余资源 YAML 编辑兜底 |
 | 镜像 Tag 自动补全 | 编辑镜像字段后自动拉取该仓库可选 Tag 下拉（Harbor，700ms 防抖） |
 
@@ -90,7 +92,7 @@ CI / CD       CI 流水线 / ArgoCD 应用 / ArgoCD 仓库 / Helm Releases / Cha
 | 工作负载 | 工作负载详情 → 监控（按容器聚合） |
 | Pod | Pod 详情 → 监控 |
 
-「可观测性 → 监控」页提供 **PromQL 控制台**：表达式输入 + 即时/区间图（ECharts）+ 结果指标表 + 时间范围 `1h/6h/24h`，内置快捷查询（集群 CPU / 集群内存 / 节点 CPU 使用率 / Pod 数量 / API 请求 QPS / 节点负载），用于临时验证指标与容量。
+「可观测性 → 监控」页提供 **PromQL 控制台**：表达式输入 + 即时/区间图（ECharts）+ 结果指标表 + 时间范围 `1h/6h/24h/7d`，内置快捷查询（集群 CPU / 集群内存 / 节点 CPU 使用率 / Pod 数量 / API 请求 QPS / 节点负载），用于临时验证指标与容量。
 
 ![PromQL 监控查询](docs/images/05-monitor.png)
 ![命名空间监控](docs/images/07-namespace-monitor.png)
@@ -107,11 +109,37 @@ CI / CD       CI 流水线 / ArgoCD 应用 / ArgoCD 仓库 / Helm Releases / Cha
 ![告警中心](docs/images/06-alerts.png)
 ![日志检索](docs/images/08-logsearch.png)
 
+### 数据库（KubeBlocks）
+
+| 模块 | 功能 |
+| --- | --- |
+| 集群列表 | 按引擎分子菜单（MySQL / Redis / Kafka / MongoDB / Elasticsearch / PostgreSQL），每页只列该引擎、且**跟随顶栏命名空间选择**（列表可见性按当前用户在各 ns 的角色收口），显示拓扑 / 状态 / 各组件就绪数 |
+| 创建向导 | 引擎与拓扑**由 CRD 元数据驱动**：`ClusterDefinition.spec.topologies` 给拓扑与组件，`ComponentDefinition` 给副本上下限、存储卷、serviceVersion、是否带 exporter；版本下拉即该引擎可用的模板列表，命名空间候选=顶栏作用域 ∩ 我有写权限的 ns。**分片型拓扑**（Redis cluster、MongoDB sharding）走 `ShardingDefinition`：向导按分片组出行、多一列「分片数」（上下限取自 `shardsLimit`，Redis 是 3-64、MongoDB 是 1-128），提交时下发 `spec.shardings[].template` |
+| 组件详情 | 组件表（模板 / 版本 / 就绪 / 状态 / 资源 / headless service），实例状态取 `InstanceSet.status.readyReplicas` |
+| Pod | 列出该集群全部实例 Pod（组件、角色 primary/secondary、容器就绪与重启数、节点、IP），点容器名即进 WebTerminal |
+| 查询终端 | MySQL / Redis / PostgreSQL / MongoDB 一键进镜像自带 CLI（`mysql` / `redis-cli` / `psql` / `mongosh`），登录参数由**容器内的环境变量**展开，明文密码不经过控制台；默认连主节点 Pod |
+| Kafka 管理 | topic 列表（分区/ISR/leader/配置，展开看每个分区）、创建、改配置（`kafka-configs.sh --alter`）、删除、消费组与 Lag、有界消息预览（≤200 条 / 8s 超时）；均在 broker 容器内执行官方脚本 |
+| Elasticsearch 管理 | 集群健康、`_cat/indices` 索引表（文档数/存储/段）、点行看索引定义（分片、别名、字段映射）、删除索引、DSL 查询控制台（返回条数服务端收口 200）；在 es 容器内 `curl 127.0.0.1:9200`，认证用容器内 `$ELASTIC_PASSWORD` |
+| 运维 | 一键下发 **OpsRequest**：重启 / 停止 / 启动 / 水平扩缩容（按当前副本算 `scaleOut/scaleIn.replicaChanges`）/ 垂直改规格 / 改配置（`Reconfiguring`）/ 卷扩容 / 切换 / 暴露，工单列表展示 phase 与进度、`status.conditions` 时间线与变更前旧值，进行中的工单可取消。**提交后回读工单状态再回执**，且扩缩容目标与当前一致时直接拒发——否则 apiserver 会收下这个"无变化"工单，现象就是"点了没反应" |
+| 版本升级 | 候选版本来自 `ComponentVersion.compatibilityRules` 升级链（精确名与 `-` 前缀两种写法都认，取每条规则自己的 releases 名单，降序含当前版本），链外版本直接拒；Upgrade 工单按组件下发 |
+| 连接信息 | 组件 Service（排除 headless 与发布期临时 Service）、内网 DNS、NodePort、账号用户名与密码所在 Secret（明文一律不回显） |
+| 备份 | 备份策略与计划（各组件可用方法、cron、保留份数，可在线改）、手动备份、备份记录（各 action 明细 / 卷快照数 / 失败原因）、**恢复到新集群**（复制源集群 spec，按 1.0 的 `kubeblocks.io/restore-from-backup` 注解协议声明来源）、**用备份重建实例**（原地或新建）。仓库取 **BackupRepo**（S3 / OSS 等，管理员先建），未配或不可用时在页顶明确说明，而不是让工单静默失败 |
+| 配置 | 两种模式：**参数表单**（按 1.0 的 `parameters.kubeblocks.io` 契约渲染——ParamConfigRenderer → ParametersDefinition 的 JSON Schema，逐项标注动态/静态/不可变与生效方式，当前值取 `ComponentParameter`；只提交改过的项，动态参数热载、静态参数由 operator 滚动重启）与**原始文件**（列出集群渲染出的配置 ConfigMap，排除 scripts/env 类，在线编辑保存）。没有 ParametersDefinition 的组件表单页给出说明并降级到原始文件 |
+| 账号 | 列出 `<集群>-<组件>-account-*` Secret 的**键名**（绝不回显明文） |
+| 事件 | 该集群相关对象（Pod / InstanceSet / PVC 等，名字以 `<集群>-` 开头）的 Warning 事件，倒序最多 50 条 |
+| 监控 | 指标以**曲线图**呈现（复用与控制台监控页同一套 `MetricChart`）：可切时间窗（1h/6h/24h/7d）、按分组过滤（引擎指标 / 资源）、默认隐藏无数据项；每张小图带标题、当前值、图例（只标能区分序列的标签，如各 Pod）与 PromQL 悬浮说明，单图最多画 8 条序列并标注总数。「一键接入 exporter 抓取」按钮也在本页签。指标源：mysql 17 / pg 12 / ES 22 / redis 16 / kafka 8 / mongo 6 项引擎指标（mysql、pg、es 的名字在本集群 Prometheus 逐个核对过），外加各引擎共用的容器资源组（cAdvisor CPU/内存/网络/磁盘写 + kube-state 重启与未就绪），未接 exporter 时只有资源曲线并明确说明原因 |
+
+权限沿用三层角色：**读**=该 ns 有任意角色（`view`+），**运维与改配置**=该 ns 可写（`edit`/`admin`）。
+某引擎的 `ClusterDefinition` 未安装时，该子菜单给出"未装 addon"提示而不是空白页。
+addon 的 `topologies[].components[].compDef` 往往写成正则（如 `^mysql-\d+\.\d+.*$`），而 `Cluster.spec.componentSpecs[].componentDef` 必须是具体模板名——目录与创建都会先按所选版本解析，避免 apiserver 直接拒绝。
+不走拓扑的"独立组件"建法（`spec` 里只有 `componentSpecs`、没有 `clusterDef`）也照样列出：引擎按组件模板的 `app.kubernetes.io/name` 标签反推，拓扑列显示"独立组件"。
+
 ### CI / CD 与交付
 
 | 模块 | 功能 |
 | --- | --- |
-| CI 流水线（内置 Tekton） | 原生模块，**集群隔离**（接口经 `X-Cluster` 选集群，Tekton 客户端按集群缓存）+ **命名空间隔离**（项目 = 一个 K8s ns，Pipeline/Run/工作区 PVC/凭证 Secret 全落项目 ns）：**执行中心**（统计卡 + WS 状态推送 + 5s 轮询兜底 + SSE 实时日志 + DAG 视图 + 人工审批 + 重跑 / 停止）、**流水线**（CRUD / 复制到项目 / 按分支或 Tag 运行）、**项目**、**凭据**（basic / token / dockerconfig / kubeconfig / aksk / raw 六类，Secret 扇出到平台 ns + 各项目 ns，轮换时留空保持不变）、**制品**（build-image / upload-artifact 成功自动登记，血缘详情 + MinIO/Nexus 流式下载代理）、**发布记录**（k8s-deploy / helm-deploy 镜像快照 + **一键回滚**）、**全局变量**（`${global.KEY}` 编译期注入）；未装 Tekton 的集群优雅降级；写操作限管理员，SSE/WS 用 60s 短期流 token 鉴权 |
+| CI 流水线（内置 Tekton） | 原生模块，**集群隔离**（接口经 `X-Cluster` 选集群，Tekton 客户端按集群缓存）+ **命名空间隔离**（**项目 1:1 绑定一个已存在的 K8s ns**，Pipeline/Run/工作区 PVC/凭据 Secret 全落该 ns）：**执行中心**（统计卡 + WS 状态推送 + 5s 轮询兜底 + SSE 实时日志 + DAG 视图 + 人工审批 + 重跑 / 停止）、**流水线**（CRUD / 复制到项目 / 按分支或 Tag 运行）、**项目**、**凭据**（basic / token / dockerconfig / kubeconfig / aksk / raw 六类，Secret 只落平台 ns + 归属项目 ns，轮换时留空保持不变）、**制品**（build-image / upload-artifact 成功自动登记，血缘详情 + MinIO/Nexus 流式下载代理）、**发布记录**（k8s-deploy / helm-deploy 镜像快照 + **一键回滚**）、**全局变量**（`${global.KEY}` 编译期注入）；未装 Tekton 的集群优雅降级；SSE/WS 用 60s 短期流 token 鉴权 |
+| CI 权限（按命名空间） | CI 不再有独立成员表，全部复用平台三层角色，按**资源所属项目的命名空间**判定：**浏览**项目/流水线/运行/日志/制品 = 该 ns 有任意角色（`view` 及以上）；**运行 / 重跑 / 停止 / 审批** = 同上（`view` 也能跑）；**建改删流水线、项目凭据、定时与 Webhook、回滚、编辑/删除项目** = 该 ns 可写（`edit`/`admin`）；**平台级凭据与全局变量** = 平台管理员。无权限的 ns 其项目在列表与下拉中直接不出现；Webhook token 只对能写该 ns 的人明文展示；跨项目引用凭据在编译期被拒 |
 | 可视化设计器 | vue-flow 画布 + **19 类节点插件**（随二进制 go:embed 分发）：git-clone、go-build、maven-build、gradle-build、npm-build、python-build、build-image、push-registry、image-verify、harbor-scan、trivy-scan、sonar-scan、k8s-deploy、helm-deploy、gitops-bump、argocd-sync、upload-artifact、approval、condition；属性面板 schema 驱动 + Git 分支/Tag/K8s 目标/凭据动态下拉、Dagre 自动布局、**JSON 导入导出 / 复制流水线 / 跨项目复制**、未保存离开拦截、**定时任务与 Webhook 管理**（Designer 设置内） |
 | 节点间数据传递 | 节点参数可引用上游结果 `$(tasks.<任务名>.results.<结果名>)`（如 gitops-bump 的 images 填 `$(tasks.build-image-xxx.results.imageRef)`）；编译期校验连线依赖与结果声明，引用落在参数默认值时由编译器提升为 PipelineTask 级参数（Tekton 不替换内嵌 taskSpec 的默认值） |
 | 触发方式 | 界面运行、**cron 定时**（瞬时失败快速重试）、**GitLab Webhook**（push/tag/MR，token 走 URL，事件去重） |
@@ -174,7 +202,7 @@ OpenAPI 客户端**自动探测版本风格**：1.x/2.x 走 v1 API，3.x 走 `/v
 * **角色 = 内置 + 自定义**：内置角色启动时 seed、不可改删；平台管理员可在「角色管理」按 **API 授权项**（资源组 × 读/写/全部）勾选创建自定义角色，实现最小权限。
 * **绑定以控制台记录为准**：授权记录落库（判定主数据源），并**同事务物化**为 K8s RBAC（`kc-rbac-<id>` 的 RoleBinding/ClusterRoleBinding，自定义角色生成 `kc-role-<name>` ClusterRole），kubectl 侧同样生效。
 * **兼容旧数据**：旧「授权」页生成的 `kc-grant-*` 绑定继续被识别（按项目层授权展示），不做破坏性迁移；运维手工创建的 K8s RBAC 也仍参与判定（并集）。
-* **敏感能力按层级收口**：Pod 终端 / 容器文件浏览需**项目层写权限**；节点终端（宿主机 root shell）需**集群层写权限**；集群管理页与 `/clusters` 完整信息仅**平台角色**可见。
+* **敏感能力按层级收口**：Pod 终端 / 容器文件浏览需**项目层写权限**；节点终端（宿主机 root shell）需**集群层写权限**；集群管理页与 `/clusters` 完整信息仅**平台角色**可见；**CI 全模块按项目绑定的命名空间判定**（读/运行 = 该 ns 有任意角色，建改删 = 该 ns 可写，平台级凭据与全局变量 = 平台管理员）。
 * **用户与组**：先建用户再按层级绑定角色；未绑定任何角色的普通用户无写权限（资源读取登录即可浏览）。用户组作为绑定主体时组内成员继承权限。
 * **审计**：认证后的非 GET 写操作自动落库（操作人 / 方法 / 路径 / 结果 / 时间），支持过滤分页与按保留期自动清理。
 
@@ -282,6 +310,14 @@ nacos:
 
 集群级外部依赖（Prometheus / Grafana / ES / Alertmanager / Harbor / Nacos / Helm 仓库）不写在配置文件里，登录后在界面上按集群配置，落库保存。
 
+**用 MySQL 做元数据库**：`database.driver: mysql` + `dsn: user:pw@tcp(host:3306)/kube_console?charset=utf8mb4&parseTime=True&loc=Local`（库需先建好，字符集 `utf8mb4`）。DSN 里漏写 `charset` / `parseTime` 时启动会自动补齐——缺前者中文按 latin1 存取会乱码，缺后者 `DATETIME` 列扫描直接报错。兼容性可用一条命令自证（不设置该变量时测试自动跳过）：
+
+```bash
+cd server && KC_TEST_MYSQL_DSN='root:pw@tcp(127.0.0.1:3306)/kube_console_test' go test ./cmd/server -run MySQL
+```
+
+它会跑全量建表 + 二次迁移幂等 + 保留字列（`ci_global_vars.key` 在 MySQL 是保留字）排序读取 + 中文往返 + 唯一冲突识别。
+
 ### 部署
 
 前后端分开部署（前端 `web/dist` 静态文件 + 后端 Go 单二进制，经 Nginx 同源反代 `/api`）的完整步骤、Nginx 配置（WS/SSE 关键项）、systemd / Docker / K8s 三种形态与验证清单见 **[docs/deployment.md](docs/deployment.md)**。K8s manifest 在 `deploy/`（后端 Deployment + 前端 Deployment + Gateway API 路由，PostgreSQL）。
@@ -289,11 +325,12 @@ nacos:
 ## 使用指引（常用路径）
 
 1. **接入集群**：集群 → 集群管理 → 添加（粘贴 kubeconfig，自动校验连通性）→ 顶栏切换；顺手配 Prometheus / Grafana 地址解锁监控
-2. **看应用**：工作负载 → Deployment 列表 → 行点击进详情（左树右面板）→ 进 Pod → 日志 / 终端 / 文件 / CVE
+2. **看应用**：工作负载 → Deployment 列表 → 点名称进详情（左树右面板）→ 进 Pod → 日志 / 终端 / 文件 / CVE
 3. **发版**：CI / CD → CI 流水线 → 「设计器」可视化编排 → 运行（选分支/Tag）；或 Helm → Releases → 安装/升级；或 ArgoCD → 应用 → 新建（Git 目录 / Helm Chart，Project 必须是集群已存在的 AppProject；私有仓库先在 ArgoCD → 仓库 注册凭据）
 4. **排障**：可观测性 → 监控（总览 → 命名空间 / 节点 / 工作负载 / Pod 五级下钻）/ 告警 / 事件中心 / 日志检索（「来源」区分标准输出 / 文本文件 / JSON 采集）；应用写文件日志的容器 → 工作负载详情「日志采集」开启 Sidecar；节点问题 → 节点详情 → 终端 / 排水 / 封锁
-5. **授权**：平台管理 → 用户管理建用户/组 → 授权管理按平台·集群·项目三层绑角色 → 角色管理按需自定义最小权限；敏感操作（终端、排水、平台设置）按层级收口
-6. **迁移与盘点**：各列表页「导出 / 导入」批量搬 YAML；平台管理 → 用量报表（导出 CSV）；镜像仓库触发扫描看 CVE 报告
+5. **数据库**：数据库 → 引擎子菜单 → 新建向导（引擎 / 拓扑 / 组件模板 / 分片数全部由 CRD 元数据驱动）→ 详情抽屉按页签看 Pod、进查询终端、监控曲线、Kafka topic、ES 索引、运维工单与备份恢复；没接 exporter 时监控页签有「一键接入抓取」
+6. **授权**：平台管理 → 用户管理建用户/组 → 授权管理按平台·集群·项目三层绑角色 → 角色管理按需自定义最小权限；敏感操作（终端、排水、平台设置）按层级收口
+7. **迁移与盘点**：各列表页「导出 / 导入」批量搬 YAML；平台管理 → 用量报表（导出 CSV）；镜像仓库触发扫描看 CVE 报告
 
 ## 文档
 

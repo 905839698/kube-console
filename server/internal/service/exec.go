@@ -74,8 +74,9 @@ var fallbackShells = []string{"/bin/sh", "/bin/bash", "/bin/ash", "sh", "bash", 
 const debugContainerName = "debug"
 
 // ExecPod 通过 WebSocket 桥接 Pod 内 Shell：ws binary=stdin，ws text JSON=resize，exec 输出=ws binary
-// 正常模式：容器缺少 /bin/sh 时自动回退尝试 /bin/bash 等；debug 模式：注入临时调试容器后进入
-func (s *K8sService) ExecPod(ctx context.Context, c *kube.Client, ws *websocket.Conn, namespace, pod, container, shell string, debug bool) error {
+// 正常模式：容器缺少 /bin/sh 时自动回退尝试 /bin/bash 等；debug 模式：注入临时调试容器后进入。
+// cmd 非空时不进门，而是直接执行这段脚本（数据库页用它带自动登录参数进 mysql/psql/redis-cli）
+func (s *K8sService) ExecPod(ctx context.Context, c *kube.Client, ws *websocket.Conn, namespace, pod, container, shell, cmd string, debug bool) error {
 	if container == "" {
 		podObj, err := c.Clientset.CoreV1().Pods(namespace).Get(ctx, pod, metav1.GetOptions{})
 		if err != nil {
@@ -105,7 +106,9 @@ func (s *K8sService) ExecPod(ctx context.Context, c *kube.Client, ws *websocket.
 	}()
 
 	var err error
-	if debug {
+	if cmd != "" {
+		err = s.execCmdAttempt(ctx, c, ws, msgCh, namespace, pod, container, cmd)
+	} else if debug {
 		err = s.execDebugShell(ctx, c, ws, msgCh, namespace, pod, container)
 	} else {
 		err = s.execShellFallback(ctx, c, ws, msgCh, namespace, pod, container, shell)
@@ -125,7 +128,7 @@ func (s *K8sService) execShellFallback(ctx context.Context, c *kube.Client, ws *
 	var lastSize *remotecommand.TerminalSize
 	allStartupFail := false
 	for i, sh := range shells {
-		err := s.execShellAttempt(ctx, c, ws, msgCh, &lastSize, namespace, pod, container, sh)
+		err := s.execShellAttempt(ctx, c, ws, msgCh, &lastSize, namespace, pod, container, []string{sh})
 		if err == nil {
 			return nil
 		}
@@ -148,6 +151,19 @@ func (s *K8sService) execShellFallback(ctx context.Context, c *kube.Client, ws *
 	return nil
 }
 
+// execCmdAttempt 直接执行一段脚本（容器内 sh -c）：数据库页用它带自动登录参数进 mysql/psql/redis-cli。
+// 脚本由服务端写死模板，容器自己展开 $ENV，明文凭证不经过控制台。
+func (s *K8sService) execCmdAttempt(ctx context.Context, c *kube.Client, ws *websocket.Conn, msgCh <-chan wsInbound, namespace, pod, container, cmd string) error {
+	var lastSize *remotecommand.TerminalSize
+	err := s.execShellAttempt(ctx, c, ws, msgCh, &lastSize, namespace, pod, container, []string{"/bin/sh", "-c", cmd})
+	if err == nil {
+		return nil
+	}
+	startupFail := strings.Contains(err.Error(), "no such file or directory") ||
+		strings.Contains(err.Error(), "executable file not found")
+	return friendlyShellError(err, startupFail)
+}
+
 // friendlyShellError 全部 shell 启动失败时给出友好提示（容器可能为 distroless 无 shell）
 func friendlyShellError(err error, allStartupFail bool) error {
 	if allStartupFail {
@@ -167,7 +183,7 @@ func (s *K8sService) execDebugShell(ctx context.Context, c *kube.Client, ws *web
 		return fmt.Errorf("调试容器未就绪：%v", err)
 	}
 	var lastSize *remotecommand.TerminalSize
-	return s.execShellAttempt(ctx, c, ws, msgCh, &lastSize, namespace, pod, debugContainer, "/bin/sh")
+	return s.execShellAttempt(ctx, c, ws, msgCh, &lastSize, namespace, pod, debugContainer, []string{"/bin/sh"})
 }
 
 // EnsureDebugContainer 确保 Pod 存在可用的临时调试容器并返回其实际名称
@@ -240,13 +256,13 @@ func (s *K8sService) waitDebugContainerRunning(ctx context.Context, c *kube.Clie
 }
 
 // execShellAttempt 用指定 shell 发起一次 exec 会话
-func (s *K8sService) execShellAttempt(ctx context.Context, c *kube.Client, ws *websocket.Conn, msgCh <-chan wsInbound, lastSize **remotecommand.TerminalSize, namespace, pod, container, shell string) error {
+func (s *K8sService) execShellAttempt(ctx context.Context, c *kube.Client, ws *websocket.Conn, msgCh <-chan wsInbound, lastSize **remotecommand.TerminalSize, namespace, pod, container string, command []string) error {
 	execURL := c.Clientset.CoreV1().RESTClient().Post().
 		Resource("pods").Namespace(namespace).Name(pod).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: container,
-			Command:   []string{shell},
+			Command:   command,
 			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,

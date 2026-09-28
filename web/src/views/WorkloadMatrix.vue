@@ -54,6 +54,8 @@ const rows = computed<Row[]>(() => {
     const cells = m.cells[ns] || {}
     let total = 0
     for (const k of m.kinds) {
+      // Pod 列不参与行合计：控制器已经按副本数计过一次，加进来只会把数字翻倍
+      if (k === 'Pod') continue
       total += cells[k]?.total || 0
     }
     return { namespace: ns, total, cells }
@@ -86,7 +88,14 @@ function rowClass({ row }: { row: Row }) {
 }
 
 function goList(ns: string, kind: string) {
-  const kindPath: Record<string, string> = { Deployment: 'deployments', StatefulSet: 'statefulsets', DaemonSet: 'daemonsets' }
+  // InstanceSet 是 KubeBlocks 的 CRD，没有专用列表页，走通用 CRD 页（GVR 模式认 query.namespace）
+  if (kind === 'InstanceSet') {
+    router.push({ path: '/crd/workloads.kubeblocks.io/v1/instancesets', query: { namespace: ns } })
+    return
+  }
+  const kindPath: Record<string, string> = {
+    Deployment: 'deployments', StatefulSet: 'statefulsets', DaemonSet: 'daemonsets', Pod: 'pods',
+  }
   router.push({ path: `/workloads/${kindPath[kind] || kind}`, query: { namespace: ns } })
 }
 </script>

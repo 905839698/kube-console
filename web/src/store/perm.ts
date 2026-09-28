@@ -5,7 +5,10 @@ import { shallowRef } from 'vue'
 import { authzApi, type MyPermissions, type RoleBrief } from '../api'
 import { activeCluster } from './clusterRef'
 
-const EMPTY: MyPermissions = { platformAdmin: false, allNsWrite: false, clusterWrite: false, namespaces: {}, roles: [] }
+const EMPTY: MyPermissions = {
+  platformAdmin: false, allNsWrite: false, clusterWrite: false,
+  namespaces: {}, namespacesRead: {}, roles: [],
+}
 const access = shallowRef<MyPermissions>({ ...EMPTY })
 let loadedCluster = ''
 let inflight: Promise<void> | null = null
@@ -43,6 +46,15 @@ export function usePerm() {
     return !!a.namespaces?.[(ns || 'default').trim()]
   }
 
+  // canReadNS 该 ns 是否有任意角色（含只读 view）——与后端 Access.CanReadNS 同口径：
+  // CI 的可见性与「能否触发运行」用它（view 可跑，不可改定义）
+  function canReadNS(ns?: string) {
+    const a = access.value
+    if (a.platformAdmin || a.allNsWrite || a.allNsRead) return true
+    const key = (ns || 'default').trim()
+    return !!a.namespaces?.[key] || !!a.namespacesRead?.[key]
+  }
+
   // canWriteCluster 集群级写（节点运维、命名空间增删、告警静默）
   function canWriteCluster() {
     return access.value.platformAdmin || access.value.clusterWrite
@@ -59,5 +71,5 @@ export function usePerm() {
     return access.value.roles || []
   }
 
-  return { access, load, canWriteNS, canWriteCluster, isPlatformAdmin, isPlatformViewer, roles }
+  return { access, load, canWriteNS, canReadNS, canWriteCluster, isPlatformAdmin, isPlatformViewer, roles }
 }

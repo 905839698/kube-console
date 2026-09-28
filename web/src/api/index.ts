@@ -770,6 +770,9 @@ export interface MyPermissions {
   allNsWrite: boolean
   clusterWrite: boolean
   namespaces: Record<string, boolean>
+  // namespacesRead / allNsRead：该 ns 有任意角色（含只读 view）——CI 可见性与可触发运行按此判定
+  namespacesRead?: Record<string, boolean>
+  allNsRead?: boolean
   roles?: RoleBrief[]
 }
 

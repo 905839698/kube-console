@@ -231,6 +231,7 @@ import { useClusterStore } from '../store/cluster'
 import { useUserStore } from '../store/user'
 import { usePerm } from '../store/perm'
 import ObjectEditor from '../components/ObjectEditor.vue'
+import { textSelected } from '../utils/selection'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -417,6 +418,7 @@ function goResource(data: ArgoTreeNode, path: string) {
 }
 
 async function openDrawer(row: ArgoCDApp) {
+  if (textSelected()) return // 选中文本（复制）不打开详情抽屉
   drawerApp.value = row
   detail.value = null
   treeData.value = []

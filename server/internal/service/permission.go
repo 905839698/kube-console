@@ -31,7 +31,11 @@ type Access struct {
 	AllNSWrite     bool            `json:"allNsWrite"`     // 全集群可写（项目层 namespaces=["*"] 或集群层写角色）
 	ClusterWrite   bool            `json:"clusterWrite"`   // 集群级可写（cluster-admin 级：nodes / * 的写）
 	NS             map[string]bool `json:"namespaces"`     // 命名空间级可写（项目层绑定在具体 ns 上的 edit/admin）
-	Roles          []RoleBrief     `json:"roles,omitempty"`
+	// NSRead / AllNSRead：在该 ns 有任意角色（含只读 view），或凭平台/集群层角色可读全部。
+	// CI 的可见性与"能否触发运行"按这一档判定（view 也能跑，但不能改定义）。
+	NSRead    map[string]bool `json:"namespacesRead"`
+	AllNSRead bool            `json:"allNsRead"`
+	Roles     []RoleBrief     `json:"roles,omitempty"`
 }
 
 // RoleBrief 用户生效角色的简要快照（前端菜单/用户菜单展示层级角色）
@@ -62,6 +66,30 @@ func (a *Access) CanWriteNS(ns string) bool {
 			continue
 		}
 		if part == "*" || !a.NS[part] {
+			return false
+		}
+	}
+	return true
+}
+
+// CanReadNS 判断用户在该命名空间是否有任意角色（只读 view 也算）——用于资源可见性
+// 与"能否触发流水线运行"。ns 为空按 default，与 CanWriteNS 口径一致。
+func (a *Access) CanReadNS(ns string) bool {
+	if a == nil {
+		return false
+	}
+	if a.PlatformAdmin || a.AllNSWrite || a.AllNSRead {
+		return true
+	}
+	if ns == "" {
+		ns = "default"
+	}
+	for _, part := range strings.Split(ns, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if part == "*" || (!a.NS[part] && !a.NSRead[part]) {
 			return false
 		}
 	}
@@ -113,7 +141,7 @@ func buildAccess(crbs []rbacv1.ClusterRoleBinding, rbs []rbacv1.RoleBinding,
 	username string, groups []string, platformAdmin bool,
 	resolve func(ref rbacv1.RoleRef, ns string) rolePerm) *Access {
 
-	acc := &Access{PlatformAdmin: platformAdmin, NS: map[string]bool{}}
+	acc := &Access{PlatformAdmin: platformAdmin, NS: map[string]bool{}, NSRead: map[string]bool{}}
 	if platformAdmin {
 		acc.AllNSWrite = true
 		acc.ClusterWrite = true
@@ -139,6 +167,8 @@ func buildAccess(crbs []rbacv1.ClusterRoleBinding, rbs []rbacv1.RoleBinding,
 		if !match(b.Subjects) {
 			continue
 		}
+		// 命中集群层绑定：无论读写都算"全 ns 可见"
+		acc.AllNSRead = true
 		if rp := resolve(b.RoleRef, ""); rp.Write {
 			acc.AllNSWrite = true
 			if rp.ClusterWrite {
@@ -151,6 +181,7 @@ func buildAccess(crbs []rbacv1.ClusterRoleBinding, rbs []rbacv1.RoleBinding,
 		if !match(b.Subjects) {
 			continue
 		}
+		acc.NSRead[b.Namespace] = true
 		if resolve(b.RoleRef, b.Namespace).Write {
 			acc.NS[b.Namespace] = true
 		}
@@ -284,7 +315,7 @@ func (s *PermissionService) InvalidateAll() {
 
 // fromDB 由控制台绑定记录（KubeSphere 式角色）推导权限——判定的主数据源。
 func (s *PermissionService) fromDB(cluster, username string) *Access {
-	acc := &Access{NS: map[string]bool{}}
+	acc := &Access{NS: map[string]bool{}, NSRead: map[string]bool{}}
 	if s.db == nil || username == "" {
 		return acc
 	}
@@ -304,6 +335,8 @@ func (s *PermissionService) fromDB(cluster, username string) *Access {
 		role, ok := roleByName[bd.RoleName]
 		switch bd.Level {
 		case model.LevelPlatform:
+			// 平台层任意角色 → 全 ns 可见（platform-viewer 也看得见 CI 项目与运行）
+			acc.AllNSRead = true
 			switch bd.RoleName {
 			case "platform-admin":
 				acc.PlatformAdmin = true
@@ -323,6 +356,7 @@ func (s *PermissionService) fromDB(cluster, username string) *Access {
 			if !ok {
 				continue
 			}
+			acc.AllNSRead = true
 			if b, isBuiltin := builtinByName(role.Name); isBuiltin {
 				acc.AllNSWrite = acc.AllNSWrite || b.consoleAllNSWrite
 				acc.ClusterWrite = acc.ClusterWrite || b.consoleClusterWrite
@@ -335,16 +369,24 @@ func (s *PermissionService) fromDB(cluster, username string) *Access {
 				acc.ClusterWrite = true
 			}
 		case model.LevelProject:
-			if !ok || !projectRoleWritable(role) {
+			if !ok {
 				continue
 			}
+			writable := projectRoleWritable(role)
 			if bd.Namespaces == "*" {
-				acc.AllNSWrite = true
+				if writable {
+					acc.AllNSWrite = true
+				} else {
+					acc.AllNSRead = true
+				}
 				continue
 			}
 			for _, ns := range strings.Split(bd.Namespaces, ",") {
 				if ns = strings.TrimSpace(ns); ns != "" {
-					acc.NS[ns] = true
+					acc.NSRead[ns] = true
+					if writable {
+						acc.NS[ns] = true
+					}
 				}
 			}
 		}
@@ -409,9 +451,15 @@ func (s *PermissionService) load(ctx context.Context, cluster, username string) 
 	acc.PlatformViewer = acc.PlatformViewer || kacc.PlatformViewer
 	acc.AllNSWrite = acc.AllNSWrite || kacc.AllNSWrite
 	acc.ClusterWrite = acc.ClusterWrite || kacc.ClusterWrite
+	acc.AllNSRead = acc.AllNSRead || kacc.AllNSRead
 	for ns, v := range kacc.NS {
 		if v {
 			acc.NS[ns] = true
+		}
+	}
+	for ns, v := range kacc.NSRead {
+		if v && acc.NSRead != nil {
+			acc.NSRead[ns] = true
 		}
 	}
 	if acc.PlatformAdmin {

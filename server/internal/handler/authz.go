@@ -5,7 +5,7 @@ package handler
 
 import (
 	"context"
-	"crypto/sha1"
+	"crypto/sha256"
 	"fmt"
 	"regexp"
 	"sort"
@@ -93,7 +93,7 @@ func bindingName(user, role string) string {
 	// 净化会吞掉非 [a-z0-9.-] 字符：zhang.san 与 zhang-san 得到同名绑定，
 	// 第二人授权时 Create 报 already exists 但 Subjects 仍是第一人（静默丢授权）。
 	// 追加 user+role 的短哈希消歧（kc-grant- 前缀保留，isManagedGrant 仍识别）
-	sum := sha1.Sum([]byte(user + "\x00" + role))
+	sum := sha256.Sum256([]byte(user + "\x00" + role))
 	return fmt.Sprintf("kc-grant-%s-%s-%x", safe(user), safe(role), sum[:4])
 }
 

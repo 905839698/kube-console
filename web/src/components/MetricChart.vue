@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import echarts from '../utils/echarts'
+import { seriesColors } from '../utils/chart-palette'
 
 export interface ChartSeries {
   name: string
@@ -28,6 +29,10 @@ let chart: ReturnType<typeof echarts.init> | null = null
 let observer: ResizeObserver | null = null
 let resizeFallback: (() => void) | null = null
 
+// 缺色时按序号补默认色板：原来传的是 `series.map(s => s.color).filter(Boolean)`，
+// 一个色都没有时得到空数组，等于清空 ECharts 全局调色板——坐标轴与图例文字都在，
+// 唯独曲线不画（数据库监控面板踩过）。
+
 function render() {
   if (!chartEl.value) return
   if (!chart) {
@@ -49,7 +54,7 @@ function render() {
               style: { text: '暂无数据', fill: '#c0c4cc', fontSize: 13 },
             },
           ],
-      color: series.map((s) => s.color).filter(Boolean) as string[],
+      color: seriesColors(series),
       tooltip: {
         trigger: 'axis',
         formatter: (params: any) => {

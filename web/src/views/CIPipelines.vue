@@ -33,7 +33,7 @@
             <el-option v-for="p in pipelines" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
         </div>
-        <el-table border :data="runs" v-loading="runsLoading" size="small" stripe highlight-current-row @row-click="(r: any) => openDetail(r)" row-class-name="cursor-row">
+        <el-table border :data="runs" v-loading="runsLoading" size="small" stripe highlight-current-row @row-click="(r: any) => !textSelected() && openDetail(r)" row-class-name="cursor-row">
           <el-table-column label="#" width="90">
             <template #default="{ row }">
               <span :class="['dot', 'st-' + row.status]"></span>#{{ row.runNo }}
@@ -59,8 +59,8 @@
           <el-table-column label="操作" width="150" fixed="right">
             <template #default="{ row }">
               <el-button size="small" text type="primary" @click.stop="openDetail(row)">详情</el-button>
-              <el-button size="small" text type="warning" :disabled="!canWrite" @click.stop="rerun(row)">重跑</el-button>
-              <el-button size="small" text type="danger" :disabled="!canWrite || isFinished(row.status)" @click.stop="stopRun(row)">停止</el-button>
+              <el-button size="small" text type="warning" :disabled="!canRun" @click.stop="rerun(row)">重跑</el-button>
+              <el-button size="small" text type="danger" :disabled="!canRun || isFinished(row.status)" @click.stop="stopRun(row)">停止</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -92,7 +92,7 @@
           <el-table-column label="操作" width="300" fixed="right">
             <template #default="{ row }">
               <el-button size="small" type="primary" plain @click="openDesigner(row)">设计器</el-button>
-              <el-button v-if="row.latestVersion" size="small" text @click="openRun(row)">运行</el-button>
+              <el-button v-if="row.latestVersion" size="small" text :disabled="!canRun" @click="openRun(row)">运行</el-button>
               <el-button size="small" text @click="openPipeDlg(row)">编辑</el-button>
               <el-button size="small" text type="warning" :disabled="!canWrite" @click="openDup(row)">复制</el-button>
               <el-button size="small" text type="danger" :disabled="!canWrite" @click="delPipe(row)">删除</el-button>
@@ -105,16 +105,21 @@
       <!-- ============ 项目（= 命名空间隔离单元） ============ -->
       <el-tab-pane label="项目" name="projects">
         <div class="toolbar">
-          <el-button v-if="canWrite" type="primary" size="small" @click="openProjDlg()">新建项目</el-button>
-          <span class="cfg-tip">项目 = 一个 K8s 命名空间：该项目的流水线运行 / 工作区 PVC / 凭证 Secret 都落在项目 ns 内（自动创建）。</span>
+          <el-button v-if="canWriteAny" type="primary" size="small" @click="openProjDlg()">新建项目</el-button>
+          <span class="cfg-tip">项目 1:1 绑定一个已存在的 K8s 命名空间：该项目的流水线运行 / 工作区 PVC / 凭据 Secret 都落在该 ns 内；权限也按它判定——ns 有 view 可看与运行，有 edit/admin 才能改流水线与凭据。</span>
         </div>
         <el-table border :data="projects" v-loading="loading" size="small" stripe>
           <el-table-column label="项目" min-width="150">
             <template #default="{ row }">{{ row.displayName || row.name }}</template>
           </el-table-column>
           <el-table-column prop="name" label="标识" min-width="130" />
-          <el-table-column prop="namespace" label="命名空间" min-width="140">
-            <template #default="{ row }"><span class="mono">{{ row.namespace }}</span></template>
+          <el-table-column prop="namespace" label="命名空间" min-width="160">
+            <template #default="{ row }">
+              <span class="mono">{{ row.namespace }}</span>
+              <el-tooltip v-if="row.namespaceMissing" content="绑定的命名空间已不存在：无法在该 ns 运行，请删除项目或重建命名空间">
+                <el-tag size="small" type="danger" style="margin-left: 6px">ns 缺失</el-tag>
+              </el-tooltip>
+            </template>
           </el-table-column>
           <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
           <el-table-column label="创建时间" width="160">
@@ -122,8 +127,8 @@
           </el-table-column>
           <el-table-column label="操作" width="150" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" text :disabled="!canWrite" @click="openProjDlg(row)">编辑</el-button>
-              <el-button size="small" text type="danger" :disabled="!canWrite" @click="delProj(row)">删除</el-button>
+              <el-button size="small" text :disabled="!perm.canWriteNS(row.namespace)" @click="openProjDlg(row)">编辑</el-button>
+              <el-button size="small" text type="danger" :disabled="!perm.canWriteNS(row.namespace)" @click="delProj(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -172,7 +177,7 @@
             <el-option v-for="p in projects" :key="p.id" :label="p.displayName || p.name" :value="p.id" />
           </el-select>
         </div>
-        <el-table border :data="artifacts" v-loading="artLoading" size="small" stripe @row-click="(r: any) => openArtifact(r)" row-class-name="cursor-row">
+        <el-table border :data="artifacts" v-loading="artLoading" size="small" stripe @row-click="(r: any) => !textSelected() && openArtifact(r)" row-class-name="cursor-row">
           <el-table-column prop="name" label="制品" min-width="200" show-overflow-tooltip />
           <el-table-column prop="type" label="类型" width="100" align="center">
             <template #default="{ row }"><el-tag size="small" type="info">{{ row.type }}</el-tag></template>
@@ -240,7 +245,7 @@
       <!-- ============ 全局变量（${global.KEY} 引用） ============ -->
       <el-tab-pane label="全局变量" name="globals" lazy>
         <div class="toolbar">
-          <el-button v-if="canWrite" type="primary" size="small" @click="openGlobalDlg()">新建变量</el-button>
+          <el-button v-if="isPlatformAdmin" type="primary" size="small" @click="openGlobalDlg()">新建变量</el-button>
           <span class="cfg-tip">节点参数中以 <code>${'{'}global.KEY{'}'}</code> 引用（如 <code>${'{'}global.HARBOR{'}'}/app</code>）；编译前替换为变量值，未定义的 key 原样保留。</span>
         </div>
         <el-table border :data="globals" v-loading="globalLoading" size="small" stripe>
@@ -256,8 +261,8 @@
           </el-table-column>
           <el-table-column label="操作" width="130" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" text type="primary" :disabled="!canWrite" @click="openGlobalDlg(row)">编辑</el-button>
-              <el-button size="small" text type="danger" :disabled="!canWrite" @click="delGlobal(row)">删除</el-button>
+              <el-button size="small" text type="primary" :disabled="!isPlatformAdmin" @click="openGlobalDlg(row)">编辑</el-button>
+              <el-button size="small" text type="danger" :disabled="!isPlatformAdmin" @click="delGlobal(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -439,8 +444,11 @@
         <el-form-item label="标识" required><el-input v-model="projForm.name" :disabled="!!projForm.id" placeholder="小写字母/数字/中划线，如 demo-service" /></el-form-item>
         <el-form-item label="显示名"><el-input v-model="projForm.displayName" placeholder="如 演示服务" /></el-form-item>
         <el-form-item label="命名空间" required>
-          <el-input v-model="projForm.namespace" :disabled="!!projForm.id" placeholder="K8s 命名空间，如 ci-projects（不存在会自动创建）" />
-          <div class="cfg-tip" v-if="!projForm.id">命名空间创建后不可更改（项目内资源都落在该 ns）。</div>
+          <el-select v-model="projForm.namespace" :disabled="!!projForm.id" filterable style="width: 100%"
+            :loading="nsLoading" placeholder="选择集群里已存在的命名空间（一个 ns 只能绑一个项目）">
+            <el-option v-for="n in nsChoices" :key="n" :label="n" :value="n" />
+          </el-select>
+          <div class="cfg-tip" v-if="!projForm.id">只能选已存在且未被其他项目占用的命名空间（系统 ns 除外）；绑定后不可更改。</div>
         </el-form-item>
         <el-form-item label="描述"><el-input v-model="projForm.description" type="textarea" :rows="2" /></el-form-item>
       </el-form>
@@ -500,7 +508,8 @@
           </div>
         </el-form-item>
         <el-form-item label="所属项目">
-          <el-select v-model="credForm.projectId" clearable style="width: 100%" placeholder="平台级（全部项目可用）">
+          <el-select v-model="credForm.projectId" clearable style="width: 100%"
+            :placeholder="isPlatformAdmin ? '留空 = 平台级（所有项目可用，仅平台管理员可建）' : '必选：凭据归属的项目（=其命名空间）'">
             <el-option v-for="p in projects" :key="p.id" :label="p.displayName || p.name" :value="p.id" />
           </el-select>
         </el-form-item>
@@ -528,15 +537,29 @@ import {
   type CIGraph, type CIPEdge, type CIProject, type CIPipeline, type CIRun, type CIRunDetail, type CITaskRun, type CICIRReady, type CIGlobalVar, type CIArtifact, type CIArtifactDetail, type CIDeployment,
 } from '../api/ci'
 import { useUserStore } from '../store/user'
+import { usePerm } from '../store/perm'
+import { k8sApi } from '../api'
 import { activeCluster } from '../store/clusterRef'
 import { invalidateNodeTypes } from './ci/nodes'
 import RunLog from './ci/RunLog.vue'
 import { confirmDelete } from '../utils/confirm'
+import { textSelected } from '../utils/selection'
 
 const userStore = useUserStore()
 const route = useRoute()
 const router = useRouter()
-const canWrite = computed(() => userStore.isAdmin)
+const perm = usePerm()
+// 当前筛选项目绑定的命名空间：CI 权限全部按它判定（项目 1:1 绑 ns）
+const activeProjectNs = computed(() => projects.value.find((p) => p.id === filterProject.value)?.namespace || '')
+// 写档：该 ns 有 edit/admin；未选项目时退回平台管理员视角
+const canWrite = computed(() => (activeProjectNs.value ? perm.canWriteNS(activeProjectNs.value) : userStore.isAdmin))
+// 触发档：该 ns 有任意角色（view 也能运行 / 重跑 / 停止 / 审批）
+const canRun = computed(() => (activeProjectNs.value ? perm.canReadNS(activeProjectNs.value) : userStore.isAdmin))
+const isPlatformAdmin = computed(() => !!perm.access.value.platformAdmin || userStore.isAdmin)
+// 至少有一个可写 ns 才展示"新建项目"（真正能否建所选 ns 由后端判定）
+const canWriteAny = computed(() => isPlatformAdmin.value
+  || !!perm.access.value.allNsWrite
+  || Object.keys(perm.access.value.namespaces || {}).length > 0)
 
 // ---- 状态 ----
 const ready = ref(false)
@@ -908,7 +931,27 @@ async function delPipe(p: CIPipeline) {
 }
 
 // ---- 项目 CRUD ----
+const nsLoading = ref(false)
+const nsAll = ref<string[]>([])
+const RESERVED_NS = ['kube-system', 'kube-public', 'kube-node-lease']
+// 可选命名空间：集群现存 - 系统 ns - 已被其他项目绑定的（编辑时保留自己那条）
+const nsChoices = computed(() => {
+  const taken = new Set(projects.value.filter((x) => x.id !== projForm.id).map((x) => x.namespace))
+  return nsAll.value.filter((n) => !RESERVED_NS.includes(n) && (!taken.has(n) || n === projForm.namespace))
+})
+async function loadNamespaces() {
+  nsLoading.value = true
+  try {
+    nsAll.value = (await k8sApi.namespaces()).map((n: any) => n.name)
+  } catch {
+    nsAll.value = []
+  } finally {
+    nsLoading.value = false
+  }
+}
+
 function openProjDlg(p?: CIProject) {
+  loadNamespaces()
   Object.assign(projForm, p
     ? { id: p.id, name: p.name, displayName: p.displayName, namespace: p.namespace, description: p.description || '' }
     : { id: undefined, name: '', displayName: '', namespace: '', description: '' })
@@ -951,6 +994,10 @@ function openCredDlg(row?: any) {
 }
 async function saveCred() {
   if (!credForm.name.trim()) { ElMessage.warning('名称必填'); return }
+  if (!credForm.projectId && !isPlatformAdmin.value) {
+    ElMessage.warning('凭据必须归属一个项目（其命名空间）；平台级凭据仅平台管理员可建')
+    return
+  }
   saving.value = true
   try {
     const body: Record<string, any> = {
@@ -1079,6 +1126,7 @@ async function delGlobal(row: CIGlobalVar) {
 
 // ---- 集群切换：整体重载 ----
 watch(activeCluster, () => {
+  perm.load(true)
   invalidateNodeTypes()
   detail.value = null
   reloadAll()
@@ -1095,6 +1143,7 @@ function applyQuery() {
 watch(() => route.query, applyQuery)
 
 onMounted(async () => {
+  perm.load()
   applyQuery()
   await loadReady()
   await loadProjects()

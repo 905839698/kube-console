@@ -158,6 +158,12 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
+    # 入口页禁缓存（哈希文件名的 JS/CSS 仍可长缓存）：否则发版后浏览器拿旧
+    # index.html，引用的还是旧 bundle，表现为"改了没生效"
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
     gzip on;
     gzip_types text/css application/javascript application/json image/svg+xml;
 }
@@ -170,6 +176,7 @@ server {
 3. **WS 三件套**：`proxy_http_version 1.1` + `Upgrade` + `Connection` 头，缺一个终端就连不上
 4. 前端/后端**跨机器**时 `proxy_pass` 指向后端机器 IP 即可，对浏览器仍是同源；后端自身**不要**再暴露公网端口
 5. 需要 HTTPS 时在本 Nginx 终结 TLS（证书配到 `listen 443 ssl`），后端保持纯 HTTP 内网可达
+6. **`index.html` 要 `Cache-Control: no-cache`**（`deploy/03-web` 的 nginx 已这么配）：带 hash 的 `assets/*.js` 可以放心长缓存，但入口页缓存了就会让旧 SPA 反复引用旧 bundle，"已修复"的问题看起来像没修
 
 ### 4.3 开发环境（对照参考）
 
@@ -238,6 +245,7 @@ kubectl apply -f deploy/04-service/service-gateway.yaml    # 前后端 Service +
 | 终端连上即断 / 一直转圈 | Nginx 缺 WS 升级头（`Upgrade`/`Connection`），或 `proxy_read_timeout` 太短 |
 | CI 日志"卡住"最后一次性刷出 | `proxy_buffering` 未关 |
 | 页面刷新 404 | 缺 `try_files ... /index.html` 回落 |
+| 明明发了新版本，界面还是老样子 | `index.html` 被缓存了（加 `location = /index.html { add_header Cache-Control "no-cache"; }`）；先硬刷新确认，再查响应头 |
 | 大文件上传 413 | `client_max_body_size` 未放宽 |
 | 登录后部分接口 401 | token 超 24h 过期（`KC_JWT_EXPIRE_IN` 可调），重新登录即可；多浏览器不共享 token 属预期（localStorage） |
 | 后端日志里出现乱码集群名 | 客户端 `X-Cluster` 头未做 URL 编码（本前端已处理；第三方接入时注意） |

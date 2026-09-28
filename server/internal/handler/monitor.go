@@ -35,7 +35,8 @@ func (h *MonitorHandler) clusterAndRange(c *gin.Context) (cluster *model.Cluster
 		return nil, "", false
 	}
 	r = c.Query("range")
-	if r != "1h" && r != "6h" && r != "24h" {
+	// 合法档位以 rangeDurations 为准（不再手写一遍名单，避免两处对不齐）
+	if _, known := rangeDurations[r]; !known {
 		r = "6h"
 	}
 	return cl, r, true
@@ -97,15 +98,17 @@ var (
 		"1h":  1 * time.Hour,
 		"6h":  6 * time.Hour,
 		"24h": 24 * time.Hour,
+		"7d":  7 * 24 * time.Hour,
 	}
 	rangeSteps = map[string]time.Duration{
 		"1h":  15 * time.Second,
 		"6h":  60 * time.Second,
 		"24h": 300 * time.Second,
+		"7d":  3600 * time.Second,
 	}
 )
 
-// QueryRange 范围查询（PromQL 图形化展示）?q=&range=1h|6h|24h
+// QueryRange 范围查询（PromQL 图形化展示）?q=&range=1h|6h|24h|7d
 func (h *MonitorHandler) QueryRange(c *gin.Context) {
 	cl, r, ok := h.clusterAndRange(c)
 	if !ok {

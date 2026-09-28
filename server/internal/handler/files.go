@@ -72,7 +72,7 @@ func (h *K8sHandler) DownloadFile(c *gin.Context) {
 			}
 		}
 	}
-	if err := h.k8s.ExecOnce(c.Request.Context(), client, ns, pod, container, nil, c.Writer, io.Discard, "cat", path); err != nil {
+	if err := service.ExecOnce(c.Request.Context(), client, ns, pod, container, nil, c.Writer, io.Discard, "cat", path); err != nil {
 		// 响应可能已写入部分内容，只能终止
 		c.Status(http.StatusBadGateway)
 		return
@@ -99,7 +99,7 @@ func (h *K8sHandler) UploadFile(c *gin.Context) {
 	var stderr strings.Builder
 	// 直接 argv 执行 tee，不走 shell：Go %q 不转义 $ 和反引号，
 	// /data/x$(curl ...) 这类路径在 sh -c 双引号内仍会执行（容器内命令注入）
-	if err := h.k8s.ExecOnce(c.Request.Context(), client, c.Query("namespace"), c.Param("name"), c.Query("container"),
+	if err := service.ExecOnce(c.Request.Context(), client, c.Query("namespace"), c.Param("name"), c.Query("container"),
 		file, io.Discard, &stderr, "tee", "--", path); err != nil {
 		response.Fail(c, 400, 400, "上传失败: "+err.Error())
 		return
@@ -140,7 +140,7 @@ func (h *K8sHandler) FileAction(c *gin.Context) {
 		cmd = []string{"mv", req.Path, req.To}
 	}
 	var stderr strings.Builder
-	if err := h.k8s.ExecOnce(c.Request.Context(), client, c.Query("namespace"), c.Param("name"), c.Query("container"),
+	if err := service.ExecOnce(c.Request.Context(), client, c.Query("namespace"), c.Param("name"), c.Query("container"),
 		nil, io.Discard, &stderr, cmd...); err != nil {
 		response.Fail(c, 400, 400, "操作失败: "+stderr.String()+" "+err.Error())
 		return

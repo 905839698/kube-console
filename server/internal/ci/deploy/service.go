@@ -20,7 +20,7 @@ import (
 )
 
 type Service struct {
-	db    *gorm.DB
+	db     *gorm.DB
 	k8sFor func(cluster string) (*tekton.Client, error)
 }
 
@@ -95,19 +95,19 @@ func (s *Service) RecordDeployment(ctx context.Context, run *model.CIRun, cluste
 	}
 
 	rec := &model.CIDeployment{
-		ClusterName:  cluster,
-		ProjectID:    projectID,
-		PipelineID:   run.PipelineID,
-		RunID:        run.ID,
-		NodeName:     nodeID,
-		Kind:         nodeType,
-		Namespace:    ns,
-		Release:      release,
-		Targets:      targets,
-		Status:       model.CIRunStatusSuccess,
-		GitCommit:    run.GitCommit,
-		GitBranch:    run.GitBranch,
-		CreatedBy:    run.StartedBy,
+		ClusterName: cluster,
+		ProjectID:   projectID,
+		PipelineID:  run.PipelineID,
+		RunID:       run.ID,
+		NodeName:    nodeID,
+		Kind:        nodeType,
+		Namespace:   ns,
+		Release:     release,
+		Targets:     targets,
+		Status:      model.CIRunStatusSuccess,
+		GitCommit:   run.GitCommit,
+		GitBranch:   run.GitBranch,
+		CreatedBy:   run.StartedBy,
 	}
 	if err := s.db.WithContext(ctx).Create(rec).Error; err != nil {
 		log.Printf("deploy: run %d 写发布记录失败: %v", run.ID, err)
@@ -116,8 +116,9 @@ func (s *Service) RecordDeployment(ctx context.Context, run *model.CIRun, cluste
 	log.Printf("deploy: run %d 发布已记录 #%d（%s/%s, %d workload）", run.ID, rec.ID, ns, nodeType, len(targets))
 }
 
-// List 发布记录列表（集群内；projectID 过滤可选）。
-func (s *Service) List(ctx context.Context, cluster string, projectID *uint, page, size int) ([]model.CIDeployment, int64, error) {
+// List 发布记录列表（集群内）。projectIDs 为调用方解析出的可见项目集合：
+// 空切片不放行任何记录，nil 不按项目收口。
+func (s *Service) List(ctx context.Context, cluster string, projectIDs []uint, page, size int) ([]model.CIDeployment, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -125,8 +126,11 @@ func (s *Service) List(ctx context.Context, cluster string, projectID *uint, pag
 		size = 20
 	}
 	q := s.db.WithContext(ctx).Model(&model.CIDeployment{}).Where("cluster_name = ?", cluster)
-	if projectID != nil {
-		q = q.Where("project_id = ?", *projectID)
+	if projectIDs != nil {
+		if len(projectIDs) == 0 {
+			return nil, 0, nil
+		}
+		q = q.Where("project_id IN ?", projectIDs)
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
@@ -176,17 +180,17 @@ func (s *Service) Rollback(ctx context.Context, cluster string, id uint, usernam
 		status = model.CIRunStatusFailed
 	}
 	out := &model.CIDeployment{
-		ClusterName:  cluster,
-		ProjectID:    rec.ProjectID,
-		PipelineID:   rec.PipelineID,
-		NodeName:     rec.NodeName,
-		Kind:         "rollback",
-		Namespace:    rec.Namespace,
-		Release:      rec.Release,
-		Targets:      rec.Targets,
-		Status:       status,
+		ClusterName:    cluster,
+		ProjectID:      rec.ProjectID,
+		PipelineID:     rec.PipelineID,
+		NodeName:       rec.NodeName,
+		Kind:           "rollback",
+		Namespace:      rec.Namespace,
+		Release:        rec.Release,
+		Targets:        rec.Targets,
+		Status:         status,
 		RolledBackFrom: &rec.ID,
-		CreatedBy:    username,
+		CreatedBy:      username,
 	}
 	if err := s.db.WithContext(ctx).Create(out).Error; err != nil {
 		return nil, err

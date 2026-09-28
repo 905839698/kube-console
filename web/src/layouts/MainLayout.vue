@@ -87,6 +87,12 @@
             <el-menu-item index="/micro/services"><el-icon><Connection /></el-icon><span>服务发现</span></el-menu-item>
             <el-menu-item index="/micro/configs"><el-icon><Document /></el-icon><span>配置管理</span></el-menu-item>
           </el-sub-menu>
+          <el-sub-menu index="kb-group">
+            <template #title><el-icon><component :is="KB_GROUP_ICON" /></el-icon><span>数据库</span></template>
+            <el-menu-item v-for="e in KB_ENGINES" :key="e.key" :index="`/kb/${e.key}`">
+              <el-icon><component :is="e.icon" /></el-icon><span>{{ e.label }}</span>
+            </el-menu-item>
+          </el-sub-menu>
           <el-sub-menu index="security-group">
             <template #title><el-icon><UserFilled /></el-icon><span>安全 (RBAC)</span></template>
             <el-menu-item index="/resources/roles"><el-icon><Avatar /></el-icon><span>Role</span></el-menu-item>
@@ -265,6 +271,7 @@ import { authApi, tokenApi, type ApiTokenItem } from '../api'
 import GlobalSearch from '../components/GlobalSearch.vue'
 import NamespaceSelect from '../components/NamespaceSelect.vue'
 import { confirmDelete } from '../utils/confirm'
+import { KB_ENGINES, KB_GROUP_ICON } from '../utils/kb-engines'
 
 const route = useRoute()
 const router = useRouter()

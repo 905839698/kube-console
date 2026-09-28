@@ -3,6 +3,7 @@ package credential
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"strconv"
 	"time"
@@ -10,13 +11,13 @@ import (
 	"gorm.io/gorm"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 
-	"kube-console/server/internal/config"
-	"kube-console/server/internal/model"
+	"kube-console/server/internal/ci/errcode"
 	"kube-console/server/internal/ci/nodetype"
 	pipelinesvc "kube-console/server/internal/ci/pipeline"
 	dsl "kube-console/server/internal/ci/pipeline/model"
 	"kube-console/server/internal/ci/tekton"
-	"kube-console/server/internal/ci/errcode"
+	"kube-console/server/internal/config"
+	"kube-console/server/internal/model"
 )
 
 // Service 凭证管理。核心原则：平台只存引用+元数据，明文同步写入 K8s Secret。
@@ -25,35 +26,38 @@ type Service struct {
 	cfg *config.CIConfig
 	// k8sFor 按集群取 Tekton 客户端（Secret 同步用）
 	k8sFor func(cluster string) (*tekton.Client, error)
-	reg nodetype.Registry // 节点注册表：按 schema 的 credential 属性判断引用
+	reg    nodetype.Registry // 节点注册表：按 schema 的 credential 属性判断引用
 }
 
 func NewService(db *gorm.DB, cfg *config.CIConfig, k8sFor func(cluster string) (*tekton.Client, error), reg nodetype.Registry) *Service {
 	return &Service{db: db, cfg: cfg, k8sFor: k8sFor, reg: reg}
 }
 
-// secretNamespaces 返回该集群下凭证 Secret 需要同步的全部命名空间：
-// 平台 ns + 该集群全部项目 ns。secretRef 不支持跨 ns，而 run 落在项目 ns，
-// 因此 Secret 必须与 run 同 ns——创建/更新/删除时全量扇出。
-func (s *Service) secretNamespaces(ctx context.Context, cluster string) []string {
+// secretNamespaces 凭证 Secret 的落点：平台 ns（权威副本，run 时按需拉齐）
+// + 归属项目的 ns。secretRef 不支持跨 ns，项目级凭证必须与它的 run 同 ns 才能被注入；
+// 平台级凭证（projectID=nil）只留平台副本，由各 run 在拉齐时写入自己的 ns——
+// 不再向集群内全部项目 ns 扇出，避免 A 项目的密钥材料出现在 B 项目里被读走。
+func (s *Service) secretNamespaces(ctx context.Context, cluster string, projectID *uint) []string {
 	out := []string{s.cfg.PlatformNS}
-	var nsList []string
-	_ = s.db.WithContext(ctx).Model(&model.CIProject{}).
-		Where("cluster_name = ?", cluster).Distinct().Pluck("namespace", &nsList).Error
-	seen := map[string]bool{s.cfg.PlatformNS: true}
-	for _, ns := range nsList {
-		if ns != "" && !seen[ns] {
-			seen[ns] = true
-			out = append(out, ns)
-		}
+	if projectID == nil {
+		return out
+	}
+	var ns string
+	if err := s.db.WithContext(ctx).Model(&model.CIProject{}).
+		Where("id = ?", *projectID).Select("namespace").Scan(&ns).Error; err != nil {
+		log.Printf("credential: 查询项目 %d 命名空间失败: %v", *projectID, err)
+		return out
+	}
+	if ns != "" && ns != s.cfg.PlatformNS {
+		out = append(out, ns)
 	}
 	return out
 }
 
-// syncSecret 把 Secret 同步到集群内全部目标 ns。
-func (s *Service) syncSecret(ctx context.Context, k8s *tekton.Client, cluster, name string, data map[string][]byte) error {
+// syncSecret 把 Secret 同步到该凭证的目标 ns。
+func (s *Service) syncSecret(ctx context.Context, k8s *tekton.Client, cluster, name string, projectID *uint, data map[string][]byte) error {
 	var lastErr error
-	for _, ns := range s.secretNamespaces(ctx, cluster) {
+	for _, ns := range s.secretNamespaces(ctx, cluster, projectID) {
 		if err := k8s.EnsureSecret(ctx, ns, name, data); err != nil {
 			lastErr = err
 		}
@@ -61,13 +65,26 @@ func (s *Service) syncSecret(ctx context.Context, k8s *tekton.Client, cluster, n
 	return lastErr
 }
 
-// deleteSecretAll 从集群内全部目标 ns 删除 Secret（best effort）。
-func (s *Service) deleteSecretAll(ctx context.Context, cluster, name string) {
+// deleteSecretAll 从凭证的所有目标 ns 删除 Secret（best effort）。
+// 除目标 ns 外，还要清理历史上曾全量扇出留下的副本：该集群其余项目 ns。
+func (s *Service) deleteSecretAll(ctx context.Context, cluster, name string, projectID *uint) {
 	k8s, err := s.k8sFor(cluster)
 	if err != nil {
 		return
 	}
-	for _, ns := range s.secretNamespaces(ctx, cluster) {
+	targets := map[string]bool{}
+	for _, ns := range s.secretNamespaces(ctx, cluster, projectID) {
+		targets[ns] = true
+	}
+	var legacy []string
+	_ = s.db.WithContext(ctx).Model(&model.CIProject{}).
+		Where("cluster_name = ?", cluster).Distinct().Pluck("namespace", &legacy).Error
+	for _, ns := range legacy {
+		if ns != "" {
+			targets[ns] = true
+		}
+	}
+	for ns := range targets {
 		_ = k8s.DeleteSecret(ctx, ns, name)
 	}
 }
@@ -132,7 +149,7 @@ func credParamValues(reg nodetype.Registry, n dsl.Node) []string {
 // Form 是密钥形态（basic/token/dockerconfig/kubeconfig/aksk/raw），决定 Secret 数据结构
 // 与运行时注入策略；Type 是业务用途标签（可选，兼容旧数据）。
 type CreateReq struct {
-	Cluster      string            `json:"-"`                          // 所属集群：handler 从 X-Cluster 注入，不接受客户端传入
+	Cluster      string            `json:"-"` // 所属集群：handler 从 X-Cluster 注入，不接受客户端传入
 	Name         string            `json:"name" binding:"required"`
 	Form         string            `json:"form" binding:"required"` // basic/token/dockerconfig/kubeconfig/aksk/raw
 	Type         string            `json:"type"`                    // 业务用途标签（git/registry/k8s/cloud/generic，可选）
@@ -141,13 +158,13 @@ type CreateReq struct {
 	Password     string            `json:"password"`                // basic / dockerconfig(自动拼装时)
 	Token        string            `json:"token"`                   // token
 	Dockerconfig string            `json:"dockerconfig"`            // 整包 .dockerconfigjson
-	Kubeconfig   string            `json:"kubeconfig"`             // 整包 kubeconfig
+	Kubeconfig   string            `json:"kubeconfig"`              // 整包 kubeconfig
 	AccessKey    string            `json:"accessKey"`               // aksk
-	SecretKey    string            `json:"secretKey"`              // aksk
+	SecretKey    string            `json:"secretKey"`               // aksk
 	Region       string            `json:"region"`                  // aksk 可选
-	Endpoint     string            `json:"endpoint"`               // aksk 可选
+	Endpoint     string            `json:"endpoint"`                // aksk 可选
 	Data         map[string]string `json:"data"`                    // raw 任意 key-value
-	ProjectID    *uint             `json:"projectId"`              // nil=平台级
+	ProjectID    *uint             `json:"projectId"`               // nil=平台级
 }
 
 // 校验凭证 form 合法。
@@ -211,7 +228,7 @@ func (s *Service) Create(ctx context.Context, req CreateReq) (*model.CICredentia
 	if err != nil {
 		return nil, errcode.Newf(errcode.DepUnavailable, "集群不可用: %v", err)
 	}
-	if err := s.syncSecret(ctx, k8s, req.Cluster, secretName, data); err != nil {
+	if err := s.syncSecret(ctx, k8s, req.Cluster, secretName, req.ProjectID, data); err != nil {
 		return nil, errcode.Newf(errcode.DepUnavailable, "写入 K8s Secret 失败: %v", err)
 	}
 
@@ -231,7 +248,7 @@ func (s *Service) Create(ctx context.Context, req CreateReq) (*model.CICredentia
 	}
 	if err := s.db.WithContext(ctx).Create(cred).Error; err != nil {
 		// 回滚：删掉刚建的 Secret，避免悬空
-		s.deleteSecretAll(ctx, req.Cluster, secretName)
+		s.deleteSecretAll(ctx, req.Cluster, secretName, req.ProjectID)
 		if isUnique(err) {
 			return nil, errcode.Newf(errcode.Conflict, "凭证名已存在: %s", req.Name)
 		}
@@ -377,16 +394,16 @@ func (s *Service) activeRunRefs(ctx context.Context, cluster, credName, credIDSt
 // UpdateReq 更新凭证密钥材料。form/type/name 不可改（DSL 按 name 引用，改名会产生孤儿引用）。
 // 各字段 nil 或空串 = 保持原值（password/token 留空即可只改 host/username）。
 type UpdateReq struct {
-	Host         *string `json:"host"`
-	Username     *string `json:"username"`
-	Password     *string `json:"password"`
-	Token        *string `json:"token"`
-	Dockerconfig *string `json:"dockerconfig"`
-	Kubeconfig   *string `json:"kubeconfig"`
-	AccessKey    *string `json:"accessKey"`
-	SecretKey    *string `json:"secretKey"`
-	Region       *string `json:"region"`
-	Endpoint     *string `json:"endpoint"`
+	Host         *string           `json:"host"`
+	Username     *string           `json:"username"`
+	Password     *string           `json:"password"`
+	Token        *string           `json:"token"`
+	Dockerconfig *string           `json:"dockerconfig"`
+	Kubeconfig   *string           `json:"kubeconfig"`
+	AccessKey    *string           `json:"accessKey"`
+	SecretKey    *string           `json:"secretKey"`
+	Region       *string           `json:"region"`
+	Endpoint     *string           `json:"endpoint"`
 	Data         map[string]string `json:"data"`
 }
 
@@ -469,7 +486,7 @@ func (s *Service) Update(ctx context.Context, id uint, req UpdateReq) (*model.CI
 	if err != nil {
 		return nil, errcode.Newf(errcode.InvalidParam, "%v", err)
 	}
-	if err := s.syncSecret(ctx, k8s, c.ClusterName, c.SecretName, data); err != nil {
+	if err := s.syncSecret(ctx, k8s, c.ClusterName, c.SecretName, c.ProjectID, data); err != nil {
 		return nil, errcode.Newf(errcode.DepUnavailable, "更新 K8s Secret 失败: %v", err)
 	}
 	// 同步 Extra（host/region/endpoint 变化时）
@@ -555,7 +572,7 @@ func (s *Service) Delete(ctx context.Context, id uint) error {
 	if err := s.db.WithContext(ctx).Delete(&c).Error; err != nil {
 		return err
 	}
-	s.deleteSecretAll(ctx, c.ClusterName, c.SecretName)
+	s.deleteSecretAll(ctx, c.ClusterName, c.SecretName, c.ProjectID)
 	return nil
 }
 

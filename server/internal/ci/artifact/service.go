@@ -33,8 +33,9 @@ func NewService(db *gorm.DB, cfg *config.CIConfig) *Service {
 // Registrar 暴露注册器（runtime 任务成功时登记制品）。
 func (s *Service) Registrar() *Registrar { return s.reg }
 
-// List 制品列表（query: projectId/pipelineRunId/type/page/size），集群内。
-func (s *Service) List(ctx context.Context, cluster string, projectID, runID *uint, artType string, page, size int) ([]model.CIArtifact, int64, error) {
+// List 制品列表。projectIDs 是调用方（handler）解析出的可见项目集合：
+// 空切片表示不放行任何项目，nil 表示不按项目收口（平台管理员全集群视角）。
+func (s *Service) List(ctx context.Context, cluster string, projectIDs []uint, runID *uint, artType string, page, size int) ([]model.CIArtifact, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -42,8 +43,11 @@ func (s *Service) List(ctx context.Context, cluster string, projectID, runID *ui
 		size = 50
 	}
 	q := s.db.WithContext(ctx).Model(&model.CIArtifact{}).Where("cluster_name = ?", cluster)
-	if projectID != nil {
-		q = q.Where("project_id = ?", *projectID)
+	if projectIDs != nil {
+		if len(projectIDs) == 0 {
+			return nil, 0, nil
+		}
+		q = q.Where("project_id IN ?", projectIDs)
 	}
 	if runID != nil {
 		q = q.Where("pipeline_run_id = ?", *runID)

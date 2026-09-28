@@ -142,6 +142,7 @@ import StatusTag from '../components/StatusTag.vue'
 import MetricCard from '../components/MetricCard.vue'
 import MetricChart, { type ChartSeries } from '../components/MetricChart.vue'
 import { useClusterStore } from '../store/cluster'
+import { textSelected } from '../utils/selection'
 
 const router = useRouter()
 const clusterStore = useClusterStore()
@@ -270,6 +271,7 @@ async function loadMonitor() {
 }
 
 function goNode(row: { name: string }) {
+  if (textSelected()) return // 选中文本（复制）不跳节点详情
   router.push(`/nodes/${row.name}`)
 }
 

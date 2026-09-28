@@ -32,6 +32,8 @@ const props = defineProps<{
   namespace: string
   pod: string
   container?: string
+  /** 非空=进去直接执行这段脚本（数据库页用它带自动登录参数进 mysql/psql/redis-cli），不进裸 shell */
+  cmd?: string
   /** 节点终端模式：pod 传节点名，经 nsenter 调试 Pod 进入宿主机 shell */
   node?: boolean
 }>()
@@ -136,7 +138,7 @@ function connect() {
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://'
   const url = props.node
     ? `${proto}${location.host}/api/nodes/${encodeURIComponent(props.pod)}/exec?token=${encodeURIComponent(token)}&cluster=${encodeURIComponent(cluster)}`
-    : `${proto}${location.host}/api/pods/${encodeURIComponent(props.pod)}/exec?token=${encodeURIComponent(token)}&cluster=${encodeURIComponent(cluster)}&namespace=${encodeURIComponent(props.namespace)}${props.container ? `&container=${encodeURIComponent(props.container)}` : ''}${debugMode.value ? '&debug=1' : ''}`
+    : `${proto}${location.host}/api/pods/${encodeURIComponent(props.pod)}/exec?token=${encodeURIComponent(token)}&cluster=${encodeURIComponent(cluster)}&namespace=${encodeURIComponent(props.namespace)}${props.container ? `&container=${encodeURIComponent(props.container)}` : ''}${props.cmd ? `&cmd=${encodeURIComponent(props.cmd)}` : ''}${debugMode.value ? '&debug=1' : ''}`
 
   ws = new WebSocket(url)
   ws.binaryType = 'arraybuffer'

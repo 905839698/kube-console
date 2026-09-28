@@ -36,6 +36,13 @@ const (
 	LogFormatField     = "kube-console.log-format"
 	// DefaultIndexPrefix 日志源未配置前缀时的兜底
 	DefaultIndexPrefix = "logstash-"
+	// LogESSecretName 是**每命名空间一个**的 ES 凭据 Secret，同 ns 内所有采集 Sidecar 共用。
+	// 早期实现按工作负载各建一份（<name>-fluent-bit-es）：同一密码被复制 N 份，
+	// 且任何对该 ns 有 get secret 权限的人都能读走平台 ES 账号。
+	LogESSecretName = "kc-es-credentials"
+	// LegacyESSecretSuffix 旧版按工作负载命名的后缀（保存/关闭时清理）
+	LegacyESSecretSuffix = "-fluent-bit-es"
+	logESKey             = "pass"
 )
 
 // LogCollectionInput 采集配置表单
@@ -302,7 +309,7 @@ func (s *K8sService) EnableLogCollection(ctx context.Context, c *kube.Client, ki
 	ensureVolume(spec, LogShareVolumeName, corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}})
 
 	cmName := name + "-fluent-bit"
-	secretName := name + "-fluent-bit-es"
+	legacySecretName := name + LegacyESSecretSuffix // 旧版遗留（本次保存顺手清掉）
 	ensureVolume(spec, LogConfVolumeName, corev1.VolumeSource{
 		ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: cmName}},
 	})
@@ -331,16 +338,21 @@ func (s *K8sService) EnableLogCollection(ctx context.Context, c *kube.Client, ki
 		return fmt.Errorf("写入 fluent-bit 配置失败: %w", err)
 	}
 
-	// ES 密码只落 Secret 并经 env 注入（配置里 ${KC_ES_PASS} 插值）；无账号时清理旧 Secret
+	// ES 密码只落 Secret 并经 env 注入（配置里 ${KC_ES_PASS} 插值）。
+	// Secret 按命名空间共享一份：同 ns 的多个采集 Sidecar 都引用它，
+	// 密码不再随工作负载数量复制成 N 份；无账号时清理。
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns, OwnerReferences: ownerRefs},
-		StringData: map[string]string{"pass": src.Password},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: LogESSecretName, Namespace: ns,
+			Labels: map[string]string{"app.kubernetes.io/managed-by": "kube-console"},
+		},
+		StringData: map[string]string{logESKey: src.Password},
 	}
 	secCli := c.Clientset.CoreV1().Secrets(ns)
 	if src.Username == "" {
-		_ = secCli.Delete(ctx, secretName, metav1.DeleteOptions{})
+		_ = secCli.Delete(ctx, LogESSecretName, metav1.DeleteOptions{})
 	} else {
-		if _, err = secCli.Get(ctx, secretName, metav1.GetOptions{}); err == nil {
+		if _, err = secCli.Get(ctx, LogESSecretName, metav1.GetOptions{}); err == nil {
 			_, err = secCli.Update(ctx, sec, metav1.UpdateOptions{})
 		} else if apierrors.IsNotFound(err) {
 			_, err = secCli.Create(ctx, sec, metav1.CreateOptions{})
@@ -349,6 +361,8 @@ func (s *K8sService) EnableLogCollection(ctx context.Context, c *kube.Client, ki
 			return fmt.Errorf("写入 ES 凭证 Secret 失败: %w", err)
 		}
 	}
+	// 旧版按工作负载建的凭据 Secret 顺手回收，避免密码副本长期留存
+	_ = secCli.Delete(ctx, legacySecretName, metav1.DeleteOptions{})
 
 	sidecar := corev1.Container{
 		Name:    LogSidecarName,
@@ -372,7 +386,7 @@ func (s *K8sService) EnableLogCollection(ctx context.Context, c *kube.Client, ki
 	}
 	if src.Username != "" {
 		sidecar.Env = append(sidecar.Env, corev1.EnvVar{Name: "KC_ES_PASS", ValueFrom: &corev1.EnvVarSource{
-			SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}, Key: "pass"},
+			SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: LogESSecretName}, Key: logESKey},
 		}})
 	}
 	replaced := false
@@ -430,8 +444,68 @@ func (s *K8sService) RemoveLogCollection(ctx context.Context, c *kube.Client, ki
 	delete(tpl.Annotations, logCollectionAnn)
 
 	_ = c.Clientset.CoreV1().ConfigMaps(ns).Delete(ctx, name+"-fluent-bit", metav1.DeleteOptions{})
-	_ = c.Clientset.CoreV1().Secrets(ns).Delete(ctx, name+"-fluent-bit-es", metav1.DeleteOptions{})
-	return update(ctx)
+	_ = c.Clientset.CoreV1().Secrets(ns).Delete(ctx, name+LegacyESSecretSuffix, metav1.DeleteOptions{})
+	if err = update(ctx); err != nil {
+		return err
+	}
+	// 共享凭据 Secret 只在**该 ns 再无采集者**时回收（在 update 之后判定，避免把自己算进去）
+	if left, e := collectorsLeftIn(ctx, c, ns); e == nil && !left {
+		_ = c.Clientset.CoreV1().Secrets(ns).Delete(ctx, LogESSecretName, metav1.DeleteOptions{})
+	}
+	return nil
+}
+
+// collectorsLeftIn 命名空间内是否仍有带 fluent-bit Sidecar 的工作负载。
+// 任一类负载查询失败一律按"还有"处理（fail-safe）——误删会让其它 Sidecar 起不来。
+func collectorsLeftIn(ctx context.Context, c *kube.Client, ns string) (bool, error) {
+	var firstErr error
+	dl, err := c.Clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		firstErr = err
+	} else {
+		for _, d := range dl.Items {
+			if hasLogSidecar(d.Spec.Template.Spec.Containers) {
+				return true, nil
+			}
+		}
+	}
+	sl, err := c.Clientset.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if firstErr == nil {
+			firstErr = err
+		}
+	} else {
+		for _, st := range sl.Items {
+			if hasLogSidecar(st.Spec.Template.Spec.Containers) {
+				return true, nil
+			}
+		}
+	}
+	wl, err := c.Clientset.AppsV1().DaemonSets(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if firstErr == nil {
+			firstErr = err
+		}
+	} else {
+		for _, w := range wl.Items {
+			if hasLogSidecar(w.Spec.Template.Spec.Containers) {
+				return true, nil
+			}
+		}
+	}
+	if firstErr != nil {
+		return true, firstErr
+	}
+	return false, nil
+}
+
+func hasLogSidecar(containers []corev1.Container) bool {
+	for _, ct := range containers {
+		if ct.Name == LogSidecarName {
+			return true
+		}
+	}
+	return false
 }
 
 func stripMounts(ms []corev1.VolumeMount) []corev1.VolumeMount {

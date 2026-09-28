@@ -8,21 +8,15 @@ import (
 
 // ============ CI（由 ci-platform 融合而来，多集群 + 命名空间隔离） ============
 //
-// 隔离模型：
+// 隔离模型（与 handler/cicd.go 的鉴权档位一致）：
 //   - 集群隔离：Project/Pipeline/Credential/Run 均带 ClusterName（哪个 K8s 集群）
-//   - 命名空间隔离：Project.Namespace 是该项目的 K8s 命名空间，Tekton
-//     Pipeline/PipelineRun/工作区 PVC/凭证 Secret 全部落在项目 ns 内
+//   - 命名空间隔离：项目 1:1 绑定一个**已存在**的 K8s 命名空间，Tekton
+//     Pipeline/PipelineRun/工作区 PVC/凭证 Secret 全部落在项目 ns 内；
+//     流水线与凭据都归属某个项目，因此权限按「资源所属 ns」判定
 //
 // 表名 GORM 默认复数：ci_projects / ci_pipelines / ci_pipeline_versions /
 // ci_pipeline_run_counters / ci_pipeline_runs / ci_task_runs / ci_credentials。
 // 硬删除（无软删），唯一索引保持普通索引（跨驱动兼容）。
-
-// 项目角色
-const (
-	CIProjRoleAdmin  = "admin"
-	CIProjRoleDev    = "developer"
-	CIProjRoleReader = "reader"
-)
 
 // 运行状态
 const (
@@ -61,17 +55,17 @@ func (CIProject) TableName() string { return "ci_projects" }
 
 // CIPipeline 流水线（项目内名称唯一）
 type CIPipeline struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
-	ClusterName string    `gorm:"size:128;index" json:"clusterName"`
-	ProjectID   uint      `gorm:"index:idx_ci_pipe_proj" json:"projectId"`
-	Name        string    `gorm:"size:64;index:idx_ci_pipe_proj" json:"name"`
-	Description string    `gorm:"size:512" json:"description"`
-	Status      string    `gorm:"size:32;default:active" json:"status"` // active/disabled
-	CreatedBy   uint      `json:"createdBy"`
+	ID          uint   `gorm:"primaryKey" json:"id"`
+	ClusterName string `gorm:"size:128;index" json:"clusterName"`
+	ProjectID   uint   `gorm:"index:idx_ci_pipe_proj" json:"projectId"`
+	Name        string `gorm:"size:64;index:idx_ci_pipe_proj" json:"name"`
+	Description string `gorm:"size:512" json:"description"`
+	Status      string `gorm:"size:32;default:active" json:"status"` // active/disabled
+	CreatedBy   uint   `json:"createdBy"`
 	// LatestVersion 最新版本号（列表时填充，非持久化）
-	LatestVersion int `gorm:"-" json:"latestVersion"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	LatestVersion int       `gorm:"-" json:"latestVersion"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 func (CIPipeline) TableName() string { return "ci_pipelines" }
@@ -82,7 +76,7 @@ type CIPipelineVersion struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
 	PipelineID   uint      `gorm:"index;uniqueIndex:idx_ci_pipe_ver" json:"pipelineId"`
 	Version      int       `gorm:"uniqueIndex:idx_ci_pipe_ver" json:"version"`
-	GraphJSON    string    `gorm:"type:text" json:"graphJson"`   // CI Pipeline DSL
+	GraphJSON    string    `gorm:"type:text" json:"graphJson"`    // CI Pipeline DSL
 	CompiledYAML string    `gorm:"type:text" json:"compiledYaml"` // 编译后的 Tekton YAML
 	CreatedBy    uint      `json:"createdBy"`
 	CreatedAt    time.Time `json:"createdAt"`
@@ -100,23 +94,23 @@ func (CIRunCounter) TableName() string { return "ci_pipeline_run_counters" }
 
 // CIRun 一次流水线运行（= 一个 Tekton PipelineRun）
 type CIRun struct {
-	ID            uint       `gorm:"primaryKey" json:"id"`
-	ClusterName   string     `gorm:"size:128;index" json:"clusterName"`
-	PipelineID    uint       `gorm:"index;uniqueIndex:idx_ci_run_no" json:"pipelineId"`
-	VersionID     uint       `gorm:"index" json:"versionId"`
-	RunNo         int        `gorm:"uniqueIndex:idx_ci_run_no" json:"runNo"` // #1024（与 PipelineID 复合唯一）
-	Status        string     `gorm:"size:32;default:pending" json:"status"`
-	TriggerType   string     `gorm:"size:32;default:manual" json:"triggerType"` // manual/webhook/schedule
-	GitCommit     string     `gorm:"size:64" json:"gitCommit"`
-	GitBranch     string     `gorm:"size:128" json:"gitBranch"`
-	GitRepo       string     `gorm:"size:256" json:"gitRepo"`
-	StartedBy     string     `gorm:"size:64" json:"startedBy"`
-	TektonRunName string     `gorm:"size:128" json:"tektonRunName"` // 对应 k8s PipelineRun 名
-	TektonPipelineCR string  `gorm:"size:128" json:"-"`             // 本 run 的 Pipeline CR 名（按 run 唯一，终态清理）
-	PVCName       string     `gorm:"size:128" json:"pvcName"`       // 本 run 的共享 workspace PVC
-	StartedAt     *time.Time `json:"startedAt"`
-	FinishedAt    *time.Time `json:"finishedAt"`
-	CreatedAt     time.Time  `json:"createdAt"`
+	ID               uint       `gorm:"primaryKey" json:"id"`
+	ClusterName      string     `gorm:"size:128;index" json:"clusterName"`
+	PipelineID       uint       `gorm:"index;uniqueIndex:idx_ci_run_no" json:"pipelineId"`
+	VersionID        uint       `gorm:"index" json:"versionId"`
+	RunNo            int        `gorm:"uniqueIndex:idx_ci_run_no" json:"runNo"` // #1024（与 PipelineID 复合唯一）
+	Status           string     `gorm:"size:32;default:pending" json:"status"`
+	TriggerType      string     `gorm:"size:32;default:manual" json:"triggerType"` // manual/webhook/schedule
+	GitCommit        string     `gorm:"size:64" json:"gitCommit"`
+	GitBranch        string     `gorm:"size:128" json:"gitBranch"`
+	GitRepo          string     `gorm:"size:256" json:"gitRepo"`
+	StartedBy        string     `gorm:"size:64" json:"startedBy"`
+	TektonRunName    string     `gorm:"size:128" json:"tektonRunName"` // 对应 k8s PipelineRun 名
+	TektonPipelineCR string     `gorm:"size:128" json:"-"`             // 本 run 的 Pipeline CR 名（按 run 唯一，终态清理）
+	PVCName          string     `gorm:"size:128" json:"pvcName"`       // 本 run 的共享 workspace PVC
+	StartedAt        *time.Time `json:"startedAt"`
+	FinishedAt       *time.Time `json:"finishedAt"`
+	CreatedAt        time.Time  `json:"createdAt"`
 }
 
 func (CIRun) TableName() string { return "ci_pipeline_runs" }
@@ -141,18 +135,18 @@ func (CITaskRun) TableName() string { return "ci_task_runs" }
 
 // CICredential 只存引用与元数据，不存明文。明文同步写入 K8s Secret（项目 ns 内）。
 type CICredential struct {
-	ID         uint       `gorm:"primaryKey" json:"id"`
+	ID          uint       `gorm:"primaryKey" json:"id"`
 	ClusterName string     `gorm:"size:128;index" json:"clusterName"`
-	Name       string     `gorm:"size:64;index:idx_ci_cred_name" json:"name"`
-	Form       string     `gorm:"size:32;default:basic" json:"form"` // basic/token/dockerconfig/kubeconfig/aksk/raw
-	Type       string     `gorm:"size:32" json:"type"`               // 业务用途标签（git/registry/k8s/cloud/generic）
-	SecretName string     `gorm:"size:128" json:"secretName"`        // k8s Secret 名
-	SecretNS   string     `gorm:"size:64" json:"secretNs"`
-	Extra      JSONObject `gorm:"type:text" json:"extra"` // 结构化非敏感元数据（host/region/endpoint/context）
-	ProjectID  *uint      `gorm:"index" json:"projectId"`  // nil=平台级（所有项目可用）
-	CreatedBy  uint       `json:"createdBy"`
-	CreatedAt  time.Time  `json:"createdAt"`
-	UpdatedAt  time.Time  `json:"updatedAt"`
+	Name        string     `gorm:"size:64;index:idx_ci_cred_name" json:"name"`
+	Form        string     `gorm:"size:32;default:basic" json:"form"` // basic/token/dockerconfig/kubeconfig/aksk/raw
+	Type        string     `gorm:"size:32" json:"type"`               // 业务用途标签（git/registry/k8s/cloud/generic）
+	SecretName  string     `gorm:"size:128" json:"secretName"`        // k8s Secret 名
+	SecretNS    string     `gorm:"size:64" json:"secretNs"`
+	Extra       JSONObject `gorm:"type:text" json:"extra"` // 结构化非敏感元数据（host/region/endpoint/context）
+	ProjectID   *uint      `gorm:"index" json:"projectId"` // nil=平台级（所有项目可用）
+	CreatedBy   uint       `json:"createdBy"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
 
 	// References 引用该凭据的流水线名（List 时填充，非持久化）
 	References []string `gorm:"-" json:"references,omitempty"`
@@ -178,18 +172,18 @@ func (CIGlobalVar) TableName() string { return "ci_global_vars" }
 // CISchedule 定时触发流水线（标准 5 段 cron；NextRunAt 30s tick 检查，
 // fire 前原子占位防重复触发；瞬时失败 60s 快速重试）。
 type CISchedule struct {
-	ID         uint           `gorm:"primaryKey" json:"id"`
-	ClusterName string         `gorm:"size:128;index" json:"clusterName"`
-	PipelineID uint           `gorm:"index" json:"pipelineId"`
-	ProjectID  uint           `gorm:"index" json:"projectId"`
-	Cron       string         `gorm:"size:64" json:"cron"`
-	Enabled    bool           `gorm:"default:true" json:"enabled"`
-	LastRunAt  *time.Time     `json:"lastRunAt"`
-	NextRunAt  *time.Time     `gorm:"index" json:"nextRunAt"`
-	LastError  string         `gorm:"size:512" json:"lastError"`
-	CreatedBy  uint           `json:"createdBy"`
-	CreatedAt  time.Time      `json:"createdAt"`
-	UpdatedAt  time.Time      `json:"updatedAt"`
+	ID          uint       `gorm:"primaryKey" json:"id"`
+	ClusterName string     `gorm:"size:128;index" json:"clusterName"`
+	PipelineID  uint       `gorm:"index" json:"pipelineId"`
+	ProjectID   uint       `gorm:"index" json:"projectId"`
+	Cron        string     `gorm:"size:64" json:"cron"`
+	Enabled     bool       `gorm:"default:true" json:"enabled"`
+	LastRunAt   *time.Time `json:"lastRunAt"`
+	NextRunAt   *time.Time `gorm:"index" json:"nextRunAt"`
+	LastError   string     `gorm:"size:512" json:"lastError"`
+	CreatedBy   uint       `json:"createdBy"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
 }
 
 func (CISchedule) TableName() string { return "ci_schedules" }
@@ -197,16 +191,16 @@ func (CISchedule) TableName() string { return "ci_schedules" }
 // CIWebhook 流水线 Webhook 触发（GitLab push）：token 走 URL 路径（公开路由），
 // 交付记录保留最近 200 条。
 type CIWebhook struct {
-	ID         uint           `gorm:"primaryKey" json:"id"`
-	ClusterName string         `gorm:"size:128;index" json:"clusterName"`
-	PipelineID uint           `gorm:"index" json:"pipelineId"`
-	ProjectID  uint           `gorm:"index" json:"projectId"`
-	Token      string         `gorm:"size:64;uniqueIndex" json:"token"` // URL 触发凭据
-	Branch     string         `gorm:"size:128" json:"branch"`           // 可选：仅该分支触发
-	Enabled    bool           `gorm:"default:true" json:"enabled"`
-	CreatedBy  uint           `json:"createdBy"`
-	CreatedAt  time.Time      `json:"createdAt"`
-	UpdatedAt  time.Time      `json:"updatedAt"`
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	ClusterName string    `gorm:"size:128;index" json:"clusterName"`
+	PipelineID  uint      `gorm:"index" json:"pipelineId"`
+	ProjectID   uint      `gorm:"index" json:"projectId"`
+	Token       string    `gorm:"size:64;uniqueIndex" json:"token"` // URL 触发凭据
+	Branch      string    `gorm:"size:128" json:"branch"`           // 可选：仅该分支触发
+	Enabled     bool      `gorm:"default:true" json:"enabled"`
+	CreatedBy   uint      `json:"createdBy"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 
 	// URL 由 handler 拼装（非持久化）
 	URL string `gorm:"-" json:"url,omitempty"`
@@ -246,19 +240,19 @@ const (
 // CIArtifact 制品登记（任务成功时由 Registrar 落库）。
 // 复合唯一 (pipeline_run_id, type, storage_path)：同一 run 内同类型同路径只登记一次。
 type CIArtifact struct {
-	ID            uint   `gorm:"primaryKey" json:"id"`
-	ClusterName   string `gorm:"size:128;index" json:"clusterName"`
-	ProjectID     uint   `gorm:"index" json:"projectId"`
-	PipelineID    uint   `gorm:"index" json:"pipelineId"`
-	PipelineRunID uint   `gorm:"index;uniqueIndex:idx_ci_art_dedup" json:"pipelineRunId"`
-	Name          string `gorm:"size:256" json:"name"`
-	Type          string `gorm:"size:32;uniqueIndex:idx_ci_art_dedup" json:"type"`
-	Version       string `gorm:"size:128" json:"version"`
-	StorageType   string `gorm:"size:32" json:"storageType"`
-	StoragePath   string `gorm:"size:512;uniqueIndex:idx_ci_art_dedup" json:"storagePath"` // harbor ref / nexus path / minio key
-	Size          int64  `json:"size"`
-	SHA256        string `gorm:"size:64" json:"sha256"`
-	Digest        string `gorm:"size:128" json:"digest"` // 镜像 digest
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	ClusterName   string    `gorm:"size:128;index" json:"clusterName"`
+	ProjectID     uint      `gorm:"index" json:"projectId"`
+	PipelineID    uint      `gorm:"index" json:"pipelineId"`
+	PipelineRunID uint      `gorm:"index;uniqueIndex:idx_ci_art_dedup" json:"pipelineRunId"`
+	Name          string    `gorm:"size:256" json:"name"`
+	Type          string    `gorm:"size:32;uniqueIndex:idx_ci_art_dedup" json:"type"`
+	Version       string    `gorm:"size:128" json:"version"`
+	StorageType   string    `gorm:"size:32" json:"storageType"`
+	StoragePath   string    `gorm:"size:512;uniqueIndex:idx_ci_art_dedup" json:"storagePath"` // harbor ref / nexus path / minio key
+	Size          int64     `json:"size"`
+	SHA256        string    `gorm:"size:64" json:"sha256"`
+	Digest        string    `gorm:"size:128" json:"digest"` // 镜像 digest
 	CreatedAt     time.Time `json:"createdAt"`
 }
 
