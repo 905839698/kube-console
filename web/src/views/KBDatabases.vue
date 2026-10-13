@@ -43,7 +43,9 @@
     </el-table>
 
     <!-- 新建向导：引擎 → 拓扑 → 组件资源 -->
-    <el-dialog v-model="createDlg" title="新建数据库集群" width="720px">
+    <!-- destroy-on-close：调度设置的行式编辑器每次打开重新挂载、从 sched 播种，
+         关闭即销毁——否则上次会话的残留行会带进下一次新建 -->
+    <el-dialog v-model="createDlg" title="新建数据库集群" width="720px" destroy-on-close>
       <el-form label-width="96px" size="small">
         <el-form-item label="命名空间" required>
           <el-select v-model="form.namespace" filterable style="width: 260px" :disabled="nsLocked">
@@ -97,10 +99,19 @@
               </template>
             </el-table-column>
             <el-table-column label="存储" width="120">
-              <template #default="{ row }"><el-input v-model="row.storage" size="small" placeholder="如 20Gi" /></template>
+              <template #default="{ row }">
+                <el-input v-if="!row.ownsData" v-model="row.storage" size="small" placeholder="如 20Gi" />
+                <el-tooltip v-else placement="top" content="该模板自带名为 data 的卷（emptyDir），配了存储会让集群卡在 Creating，所以这里不给填">
+                  <span class="tip">模板自带</span>
+                </el-tooltip>
+              </template>
             </el-table-column>
           </el-table>
           <div class="tip">版本下拉即该引擎可用的 ComponentDefinition；副本范围与存储来自模板定义；分片拓扑的「分片数」上下限来自 ShardingDefinition 的 shardsLimit。未装 exporter 的组件不会有引擎指标。</div>
+        </el-form-item>
+        <el-form-item label="调度设置">
+          <KbScheduling v-model="sched" />
+          <div class="tip">对全部组件生效（<span class="mono">Cluster.spec.schedulingPolicy</span>）：专用 DB 节点带污点时，这里加容忍 + 节点标签，否则 Pod 会一直 Pending。</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -115,6 +126,9 @@
         <div class="detail-head">
           <el-tag :type="phaseType(cur.phase)">{{ cur.phase }}</el-tag>
           <span class="meta">{{ cur.engine || cur.clusterDef }} · {{ cur.topology || '独立组件' }} · 回收 {{ cur.terminationPolicy }}</span>
+          <el-tooltip v-if="cur.scheduling" placement="bottom" :content="cur.scheduling">
+            <span class="meta sched-meta">调度：{{ cur.scheduling }}</span>
+          </el-tooltip>
           <span class="meta" v-if="cur.message">{{ cur.message }}</span>
           <el-button size="small" @click="openConn">连接信息</el-button>
           <el-button size="small" style="margin-left: auto" @click="loadDetail">刷新</el-button>
@@ -249,6 +263,8 @@
                 <el-button size="small" type="primary" :disabled="!opsReady || !changedCount" :loading="cfgSubmitting" @click="submitParams">
                   提交 {{ changedCount ? `（${changedCount} 项）` : '' }}
                 </el-button>
+                <el-input v-model="cfgFilter" size="small" clearable placeholder="过滤参数名 / 说明" style="width: 200px" />
+                <el-checkbox v-model="cfgOnlyChanged" size="small">只看已改</el-checkbox>
                 <span class="tip" v-if="cfgSchema?.note">{{ cfgSchema.note }}</span>
                 <span class="tip" v-else>动态参数热载生效；静态参数由 operator 滚动重启</span>
               </template>
@@ -268,8 +284,10 @@
                     <el-tag size="small" :type="f.reload === 'Dynamic' ? 'success' : f.reload === 'Script' ? 'warning' : 'info'" style="margin-left: 6px">
                       {{ f.reload === 'Dynamic' ? '动态热载' : f.reload === 'Script' ? '脚本热载' : '需重启' }}
                     </el-tag>
+                    <span class="tip" style="margin-left: 8px">{{ shownParams(f).length }} / {{ f.params.length }} 项</span>
                   </div>
-                  <el-table border :data="f.params" size="small" max-height="420">
+                  <!-- 高度按视口给：原来写死 420px，MySQL 几百个参数只能在小框里滚，抽屉下面全空着 -->
+                  <el-table border :data="shownParams(f)" size="small" :max-height="paramTableMax">
                     <el-table-column prop="name" label="参数" min-width="210" show-overflow-tooltip>
                       <template #default="{ row }">
                         <span class="mono">{{ row.name }}</span>
@@ -301,6 +319,9 @@
                       </template>
                     </el-table-column>
                   </el-table>
+                  <div v-if="!shownParams(f).length" class="tip" style="margin: 6px 0">
+                    没有匹配的参数，换个关键词或去掉「只看已改」。
+                  </div>
                 </div>
               </div>
             </template>
@@ -503,9 +524,12 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { k8sApi } from '../api'
 import WebTerminal from '../components/WebTerminal.vue'
 import { kbEngineMeta } from '../utils/kb-engines'
+import { confirmDelete } from '../utils/confirm'
 import KbKafka from '../components/kb/KbKafka.vue'
 import KbEs from '../components/kb/KbEs.vue'
 import KbMetrics from '../components/kb/KbMetrics.vue'
+import KbScheduling from '../components/kb/KbScheduling.vue'
+import { emptyScheduling, kbSchedulingPayload, type KBSchedulingState } from '../utils/kb-scheduling'
 import { useNamespaceStore } from '../store/namespace'
 import { kbApi, kbMatchesEngine, type KBCluster, type KBCLIEntry, type KBCompOption, type KBContainer, type KBEngine, type KBOps, type KBOpsDetail, type KBComponentVersions, type KBConnection, type KBEvent, type KBPod, type KBConfigMapRef, type KBAccount, type KBConfigSchema, type KBTopology } from '../api/kb'
 import KbBackup from '../components/kb/KbBackup.vue'
@@ -580,6 +604,8 @@ interface KBFormRow {
   kind: 'component' | 'sharding'
   name: string; compDef: string; options: KBCompOption[]; replicas: number
   replicasMin: number; replicasMax: number; serviceVersion: string; cpuLimit: string; memLimit: string; storage: string
+  // 当前选中模板自带 data 卷（该行不该配存储）
+  ownsData: boolean
   shardingDef: string; shards: number; shardsMin: number; shardsMax: number
 }
 
@@ -589,6 +615,10 @@ const form = reactive<{
 }>({ namespace: '', clusterDef: '', topology: '', name: '', terminationPolicy: 'Delete', components: [] })
 
 const hasShardings = computed(() => form.components.some((r) => r.kind === 'sharding'))
+
+// 调度设置（亲和性 / 容忍污点 / 打散），每次开向导都从空开始：
+// 上一个集群的污点设置留着会让人以为新集群也配了
+const sched = ref<KBSchedulingState>(emptyScheduling())
 
 const topologies = computed<KBTopology[]>(() => engines.value.find((e) => e.name === form.clusterDef)?.topologies || [])
 
@@ -605,6 +635,7 @@ async function openCreate() {
     namespace: nsLocked.value ? scopeNs.value[0] : (nsOptions.value[0] || ''),
     clusterDef: engine.value, topology: topo?.name || '', name: '', terminationPolicy: 'Delete', components: [],
   })
+  sched.value = emptyScheduling()
   if (!nsOptions.value.length) {
     ElMessage.warning('没有可写的命名空间，无法新建（需要目标 ns 的 edit/admin 角色）')
     return
@@ -615,6 +646,9 @@ async function openCreate() {
 function rowBase(c: KBTemplateComponent, kind: 'component' | 'sharding'): KBFormRow {
   const options = c.compDefs || []
   const first = options.find((o) => o.compDef === c.compDef) || options[0]
+  // 模板自带 data 卷（mongos 是 emptyDir）时这一格必须留空：同名卷一起下发，
+  // KB 合成 InstanceSet 会失败，集群卡在 Creating 一个 Pod 都没有
+  const ownsData = !!(first?.ownsDataVolume || c.ownsDataVolume)
   return {
     kind,
     name: c.name,
@@ -623,7 +657,8 @@ function rowBase(c: KBTemplateComponent, kind: 'component' | 'sharding'): KBForm
     replicas: Math.max(1, c.replicasMin || 1),
     replicasMin: c.replicasMin || 1, replicasMax: c.replicasMax || 0, // 0 = 模板未声明上限
     serviceVersion: first ? first.serviceVersion || '' : c.serviceVersion || '',
-    cpuLimit: '', memLimit: '', storage: c.volumes?.length ? '20Gi' : '',
+    cpuLimit: '', memLimit: '', storage: !ownsData && c.volumes?.length ? '20Gi' : '',
+    ownsData,
     shardingDef: '', shards: 0, shardsMin: 0, shardsMax: 0,
   }
 }
@@ -653,8 +688,16 @@ function onTopoChange() {
 }
 
 // 切版本 = 换 ComponentDefinition（模板名与版本是一对一的，不能只改版本号）
-function onCompDefChange(row: { compDef: string; options: KBCompOption[]; serviceVersion: string }) {
-  row.serviceVersion = row.options.find((o) => o.compDef === row.compDef)?.serviceVersion || ''
+function onCompDefChange(row: KBFormRow) {
+  const picked = row.options.find((o) => o.compDef === row.compDef)
+  row.serviceVersion = picked?.serviceVersion || ''
+  // 换到的模板自带 data 卷就把存储清掉（留着会被后端挡下，报一个用户看不懂的错）
+  if (picked?.ownsDataVolume) {
+    row.ownsData = true
+    row.storage = ''
+  } else if (row.ownsData) {
+    row.ownsData = false
+  }
 }
 async function submitCreate() {
   if (!form.namespace || !form.name) {
@@ -669,6 +712,7 @@ async function submitCreate() {
     await kbApi.create(form.namespace, {
       name: form.name, clusterDef: form.clusterDef, topology: form.topology,
       terminationPolicy: form.terminationPolicy, components: compRows,
+      scheduling: kbSchedulingPayload(sched.value),
       shardings: shardRows.map((r) => ({
         name: r.name, shardingDef: r.shardingDef, shards: r.shards, compDef: r.compDef,
         replicas: r.replicas, serviceVersion: r.serviceVersion, cpuLimit: r.cpuLimit, memLimit: r.memLimit, storage: r.storage,
@@ -681,8 +725,13 @@ async function submitCreate() {
 }
 
 async function del(row: KBCluster) {
+  // 删库是不可逆动作，且 terminationPolicy=Delete 时数据一起没了：只点一下"确定"
+  // 太轻，必须完整输入集群名（与其它破坏性操作同一口径）
   try {
-    await ElMessageBox.confirm(`删除集群 ${row.namespace}/${row.name}？回收策略 ${row.terminationPolicy} 决定是否连带删除数据。`, '删除集群', { type: 'warning' })
+    await confirmDelete(row.name, {
+      title: '删除数据库集群',
+      warning: `${row.namespace} 下的 ${row.name} 将被删除；回收策略 ${row.terminationPolicy || '-'}${row.terminationPolicy === 'Delete' ? '（连 PV 与备份数据一起删）' : ''}；组件 ${row.components?.map((c) => c.name).join(' / ') || '-'}`,
+    })
   } catch { return }
   await kbApi.remove(row.namespace, row.name)
   ElMessage.success('已提交删除')
@@ -771,7 +820,8 @@ async function loadDetail() {
     if (!cms.some((x) => x.name === cfg.name)) cfg.name = cms[0]?.name || ''
     if (cfgMode.value === 'raw') loadCfg()
     loadCfgSchema()
-    loadMetrics()
+    // try/catch 会吞掉上面的同步异常：一旦某步抛错，排在其后的 loadPods/loadEvents
+    // 就没机会执行，Pod/事件页签只能靠手动刷新——新增调用时别把会抛错的代码插到它们前面
     loadPods()
     loadEvents()
   } catch { /* 拦截器已提示 */ }
@@ -921,13 +971,34 @@ const cfgSchema = ref<KBConfigSchema | null>(null)
 const cfgLoading = ref(false)
 const cfgSubmitting = ref(false)
 const edits = reactive<Record<string, string>>({})
+// 参数过滤：MySQL 一个 my.cnf 就有几百个键，没有过滤框等于让人在 420px 的表里大海捞针
+const cfgFilter = ref('')
+const cfgOnlyChanged = ref(false)
+// 抽屉里表格上方的固定占用（标题 / 状态行 / 页签 / 工具条 / 文件名）约 300px，
+// 剩下的都给表格：一屏能看 20+ 行，下面不再空一片
+const paramTableMax = 'calc(100vh - 300px)'
+
+function shownParams(f: { params: { name: string; description?: string; current?: string }[] }) {
+  const q = cfgFilter.value.trim().toLowerCase()
+  return f.params.filter((p) => {
+    if (cfgOnlyChanged.value && !isParamChanged(p)) return false
+    if (!q) return true
+    return p.name.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q)
+  })
+}
+
+function isParamChanged(p: { name: string; current?: string }) {
+  const v = edits[p.name]
+  return v !== undefined && v !== '' && v !== (p.current ?? '')
+}
+// 「改过了」的判定只有一处（isParamChanged）：提交按钮的计数与「只看已改」过滤
+// 必须同一口径，否则勾上过滤看到的项可能不在提交数里，用户会以为漏提交了
 const changedCount = computed(() => {
   if (!cfgSchema.value) return 0
   let n = 0
   for (const f of cfgSchema.value.files) {
     for (const p of f.params) {
-      const v = edits[p.name]
-      if (v !== undefined && v !== '' && v !== p.current) n++
+      if (isParamChanged(p)) n++
     }
   }
   return n
@@ -975,15 +1046,17 @@ async function saveCfg() {
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .title { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
 .title-icon { font-size: 16px; color: var(--el-color-primary); }
-.tip { font-size: 12px; color: #909399; }
-.scope-line { font-size: 12px; color: #606266; margin-bottom: 8px; }
+.tip { font-size: 13px; color: #909399; }
+.scope-line { font-size: 13px; color: #606266; margin-bottom: 8px; }
 .detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.meta { font-size: 12px; color: #606266; }
+.meta { font-size: 13px; color: #606266; }
+/* 调度摘要可能很长（多条容忍 + 亲和），截断并用 tooltip 看全文 */
+.sched-meta { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .ops-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
-.metric-line { font-size: 12px; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+.metric-line { font-size: 13px; }
 .sec-title { font-weight: 600; margin: 12px 0 6px; font-size: 13px; }
-.err-box { background: #fef0f0; color: #c45656; padding: 8px 10px; border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
+.err-box { background: #fef0f0; color: #c45656; padding: 8px 10px; border-radius: 4px; font-size: 13px; white-space: pre-wrap; }
 .json-box { background: #f5f7fa; padding: 8px 10px; border-radius: 4px; max-height: 260px; overflow: auto; margin: 0; }
-.help { font-style: normal; font-size: 12px; color: #909399; cursor: help; margin-left: 4px; }
+.help { font-style: normal; font-size: 13px; color: #909399; cursor: help; margin-left: 4px; }
 </style>

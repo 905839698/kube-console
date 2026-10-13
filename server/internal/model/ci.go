@@ -20,6 +20,7 @@ import (
 
 // 运行状态
 const (
+	CIRunStatusQueued    = "queued" // 排队等前一个 run 结束（同项目共享 workspace，不能并发）
 	CIRunStatusPending   = "pending"
 	CIRunStatusRunning   = "running"
 	CIRunStatusSuccess   = "success"
@@ -27,6 +28,19 @@ const (
 	CIRunStatusCancelled = "cancelled"
 	CIRunStatusSkipped   = "skipped" // 条件分支未命中的任务（Tekton when 表达式为假）
 )
+
+// CIRunActiveStatuses 未进入终态的 run（排队中的也算：它占着项目的执行位）。
+// 判"项目是否有执行在跑"、"能否取消"、对账保护集都按这个口径。
+var CIRunActiveStatuses = []string{CIRunStatusQueued, CIRunStatusPending, CIRunStatusRunning}
+
+// CIRunSubmittedStatuses 已提交到集群的 run（有 Tekton 对象可对）。
+// 排队中的 run 还没有 PipelineRun/PVC 绑定，状态同步与孤儿回收都必须跳过它。
+var CIRunSubmittedStatuses = []string{CIRunStatusPending, CIRunStatusRunning}
+
+// IsRunActive 该状态是否算"还在跑/还占位"
+func IsRunActive(status string) bool {
+	return status == CIRunStatusQueued || status == CIRunStatusPending || status == CIRunStatusRunning
+}
 
 // 凭证 form（密钥形态），驱动 K8s Secret 的数据结构与运行时注入策略。
 const (
@@ -94,23 +108,34 @@ func (CIRunCounter) TableName() string { return "ci_pipeline_run_counters" }
 
 // CIRun 一次流水线运行（= 一个 Tekton PipelineRun）
 type CIRun struct {
-	ID               uint       `gorm:"primaryKey" json:"id"`
-	ClusterName      string     `gorm:"size:128;index" json:"clusterName"`
-	PipelineID       uint       `gorm:"index;uniqueIndex:idx_ci_run_no" json:"pipelineId"`
-	VersionID        uint       `gorm:"index" json:"versionId"`
-	RunNo            int        `gorm:"uniqueIndex:idx_ci_run_no" json:"runNo"` // #1024（与 PipelineID 复合唯一）
-	Status           string     `gorm:"size:32;default:pending" json:"status"`
-	TriggerType      string     `gorm:"size:32;default:manual" json:"triggerType"` // manual/webhook/schedule
-	GitCommit        string     `gorm:"size:64" json:"gitCommit"`
-	GitBranch        string     `gorm:"size:128" json:"gitBranch"`
-	GitRepo          string     `gorm:"size:256" json:"gitRepo"`
-	StartedBy        string     `gorm:"size:64" json:"startedBy"`
-	TektonRunName    string     `gorm:"size:128" json:"tektonRunName"` // 对应 k8s PipelineRun 名
-	TektonPipelineCR string     `gorm:"size:128" json:"-"`             // 本 run 的 Pipeline CR 名（按 run 唯一，终态清理）
-	PVCName          string     `gorm:"size:128" json:"pvcName"`       // 本 run 的共享 workspace PVC
-	StartedAt        *time.Time `json:"startedAt"`
-	FinishedAt       *time.Time `json:"finishedAt"`
-	CreatedAt        time.Time  `json:"createdAt"`
+	ID               uint   `gorm:"primaryKey" json:"id"`
+	ClusterName      string `gorm:"size:128;index" json:"clusterName"`
+	PipelineID       uint   `gorm:"index;uniqueIndex:idx_ci_run_no" json:"pipelineId"`
+	VersionID        uint   `gorm:"index" json:"versionId"`
+	RunNo            int    `gorm:"uniqueIndex:idx_ci_run_no" json:"runNo"` // #1024（与 PipelineID 复合唯一）
+	Status           string `gorm:"size:32;default:pending" json:"status"`
+	TriggerType      string `gorm:"size:32;default:manual" json:"triggerType"` // manual/webhook/schedule
+	GitCommit        string `gorm:"size:64" json:"gitCommit"`
+	GitBranch        string `gorm:"size:128" json:"gitBranch"`
+	GitRepo          string `gorm:"size:256" json:"gitRepo"`
+	StartedBy        string `gorm:"size:64" json:"startedBy"`
+	TektonRunName    string `gorm:"size:128" json:"tektonRunName"` // 对应 k8s PipelineRun 名
+	TektonPipelineCR string `gorm:"size:128" json:"-"`             // 本 run 的 Pipeline CR 名（按 run 唯一，终态清理）
+	PVCName          string `gorm:"size:128" json:"pvcName"`       // 本次执行用的 workspace PVC（项目级共享，名为 ci-ws-p<项目>）
+	// QueuePayload 排队 run 的启动参数（JSON：分支/commit 覆盖）。放行时按它原样提交，
+	// 不能从 git_branch/git_commit 反推——那两个字段是"生效值"，把它们当覆盖值会让
+	// 图里配的默认分支被当成 branchOverride，从而强制走完整克隆。
+	QueuePayload string `gorm:"size:512" json:"-"`
+	// CacheInfo 本次执行的依赖缓存情况（"已启用 ci-cache-p3"／"未启用：<原因>"）。
+	// 缓存是加速手段，建不出来不该挡住发布——但必须在界面说清楚，
+	// 原来只写服务日志，用户勾了缓存却完全看不出没生效。
+	CacheInfo        string     `gorm:"size:256" json:"cacheInfo"`
+	// Message 失败原因（目前用于排队 run 放行失败：那会儿还没有任务行，
+	// 不给 run 级留一句话，界面就只剩一个没有上下文的「失败」）
+	Message    string     `gorm:"size:1024" json:"message"`
+	StartedAt  *time.Time `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt"`
+	CreatedAt  time.Time  `json:"createdAt"`
 }
 
 func (CIRun) TableName() string { return "ci_pipeline_runs" }

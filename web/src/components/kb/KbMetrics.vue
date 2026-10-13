@@ -149,7 +149,15 @@ async function access() {
   if (!props.cluster) return
   try {
     const r = await kbApi.monitorAccess(props.cluster.namespace, props.cluster.name)
-    ElMessage.success(r?.created?.length ? `已接入：${r.created.join(', ')}` : '没有带 exporter 端口的组件，无需接入')
+    const n = r?.created?.length || 0
+    if (!n) {
+      ElMessage.info('没有带 exporter 端口的组件，无需接入')
+    } else if (r.warning) {
+      // 说清楚"建出来了但 Prometheus 不会加载"，否则用户只能对着空图表猜
+      ElMessage.warning(`已提交 ${n} 条抓取配置，但${r.warning}`)
+    } else {
+      ElMessage.success(`已接入 ${n} 条抓取配置，约 1 分钟后出曲线${r.note ? '（' + r.note + '）' : ''}`)
+    }
     load()
   } catch { /* 拦截器已提示 */ }
 }
@@ -157,7 +165,7 @@ async function access() {
 
 <style scoped>
 .ops-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.tip { font-size: 12px; color: #909399; }
+.tip { font-size: 13px; color: #909399; }
 .chart-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 10px; margin-top: 10px; }
 .chart-card :deep(.el-card__body) { padding: 6px 10px 8px; }
 .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
@@ -165,9 +173,9 @@ async function access() {
 .chart-head .val { font-size: 13px; color: #303133; font-variant-numeric: tabular-nums; }
 .chart-head .val.empty { color: #c0c4cc; }
 .vals { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 2px; }
-.val-item { font-size: 11px; color: #606266; display: inline-flex; align-items: center; gap: 4px; }
+.val-item { font-size: 12px; color: #606266; display: inline-flex; align-items: center; gap: 4px; }
 .val-item i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.val.multi { font-size: 11px; color: #a8abb2; }
-.cap { font-size: 11px; color: #a8abb2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.val.multi { font-size: 12px; color: #a8abb2; }
+.cap { font-size: 12px; color: #a8abb2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cap.mono { font-family: ui-monospace, Consolas, monospace; }
 </style>

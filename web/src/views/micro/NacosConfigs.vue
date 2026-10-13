@@ -341,7 +341,7 @@ onMounted(load)
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .header-right { display: flex; align-items: center; gap: 10px; }
-.hint { color: #909399; font-size: 12px; margin-top: 10px; }
-.hint-inline { color: #909399; font-size: 12px; }
+.hint { color: #909399; font-size: 13px; margin-top: 10px; }
+.hint-inline { color: #909399; font-size: 13px; }
 .content-area :deep(textarea) { font-family: Consolas, monospace; font-size: 12.5px; }
 </style>

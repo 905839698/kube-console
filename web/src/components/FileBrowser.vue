@@ -144,6 +144,6 @@ onMounted(() => cd('/'))
 .fb-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
 .fb-crumb { flex: 1; }
 .fb-actions { display: flex; gap: 8px; align-items: center; }
-.link-target { color: #909399; font-size: 12px; }
+.link-target { color: #909399; font-size: 13px; }
 .empty { text-align: center; color: #909399; padding: 30px 0; }
 </style>

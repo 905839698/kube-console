@@ -21,18 +21,19 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"gorm.io/gorm"
 	admissionv1 "k8s.io/api/admission/v1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"gorm.io/gorm"
 
 	"kube-console/server/internal/config"
 	"kube-console/server/internal/kube"
@@ -252,8 +253,8 @@ func (c *NacosClient) doWrite(ctx context.Context, method, path string, form url
 }
 
 type NacosNsInfo struct {
-	Namespace         string `json:"namespace"`           // v1/v3 列表返回的真实 ID 字段
-	NamespaceId       string `json:"namespaceId"`         // 部分版本字段名，回填供前端/匹配使用
+	Namespace         string `json:"namespace"`   // v1/v3 列表返回的真实 ID 字段
+	NamespaceId       string `json:"namespaceId"` // 部分版本字段名，回填供前端/匹配使用
 	CustomNamespaceId string `json:"customNamespaceId"`
 	NamespaceShowName string `json:"namespaceShowName"`
 	NamespaceDesc     string `json:"namespaceDesc"`
@@ -499,11 +500,11 @@ func (c *NacosClient) ListServices(ctx context.Context, namespaceId string) ([]N
 		var r struct {
 			Data struct {
 				PageItems []struct {
-					Name                string `json:"name"`
-					GroupName           string `json:"groupName"`
-					ClusterCount        int    `json:"clusterCount"`
-					IpCount             int    `json:"ipCount"`
-					HealthyInstanceCount int   `json:"healthyInstanceCount"`
+					Name                 string `json:"name"`
+					GroupName            string `json:"groupName"`
+					ClusterCount         int    `json:"clusterCount"`
+					IpCount              int    `json:"ipCount"`
+					HealthyInstanceCount int    `json:"healthyInstanceCount"`
 				} `json:"pageItems"`
 			} `json:"data"`
 		}
@@ -717,11 +718,37 @@ type NacosService struct {
 	clusters *ClusterManager
 	cfg      config.NacosConfigYaml
 
-	mu       sync.Mutex
-	lastErr  map[string]string // cluster -> 最近一轮同步错误
-	clients  map[string]*NacosClient
-	certPEM  []byte
-	keyPEM   []byte
+	mu      sync.Mutex
+	lastErr map[string]string // cluster -> 最近一轮同步错误
+	clients map[string]*NacosClient
+	certPEM []byte
+	keyPEM  []byte
+	tlsCert *tls.Certificate // 由 certPEM/keyPEM 解析，供 GetCertificate 热替换
+
+	// extraRoutes 同一个 HTTPS webhook 服务上挂的其它注入路由（日志采集 Sidecar 注入）
+	extraRoutes []extraRoute
+}
+
+type extraRoute struct {
+	pattern string
+	h       http.HandlerFunc
+}
+
+// MountInjectRoute 在 webhook HTTPS 服务上注册额外路由。必须在 Start() 之前调用。
+func (s *NacosService) MountInjectRoute(pattern string, h http.HandlerFunc) {
+	s.extraRoutes = append(s.extraRoutes, extraRoute{pattern: pattern, h: h})
+}
+
+// WebhookCABundle 取 webhook 证书的 CA bundle（供其它 MWC 复用同一证书）
+func (s *NacosService) WebhookCABundle() ([]byte, error) {
+	bundle, _, err := s.ensureCert()
+	if err != nil {
+		return nil, err
+	}
+	if len(bundle) == 0 {
+		return nil, fmt.Errorf("Webhook 证书为空")
+	}
+	return bundle, nil
 }
 
 func NewNacosService(db *gorm.DB, clusters *ClusterManager, cfg config.NacosConfigYaml) *NacosService {
@@ -746,25 +773,30 @@ func (s *NacosService) Start() {
 	// Webhook TLS（端口 0 = 不启动）
 	if s.cfg.WebhookPort > 0 {
 		go func() {
-			certPEM, keyPEM, err := s.ensureCert()
-			if err != nil {
+			// ensureCert 内部已经把证书存进内存（含 tls.Certificate），这里只要确认能签出来
+			if _, _, err := s.ensureCert(); err != nil {
 				fmt.Printf("nacos webhook: 生成/加载证书失败: %v（Pod 注入不可用）\n", err)
 				return
 			}
-			s.mu.Lock()
-			s.certPEM, s.keyPEM = certPEM, keyPEM
-			s.mu.Unlock()
 			mux := http.NewServeMux()
 			mux.HandleFunc("/inject/", s.handleInject)
 			mux.HandleFunc("/inject", s.handleInject)
+			for _, r := range s.extraRoutes {
+				mux.HandleFunc(r.pattern, r.h)
+			}
 			srv := &http.Server{
-				Addr:              ":" + strconv.Itoa(s.cfg.WebhookPort),
-				Handler:           mux,
-				TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
+				Addr:    ":" + strconv.Itoa(s.cfg.WebhookPort),
+				Handler: mux,
+				// 证书用 GetCertificate 而不是文件路径：接入配置改了 SAN 会重签，
+				// 而 ListenAndServeTLS 只在启动时读一次文件，改了也不会生效
+				TLSConfig: &tls.Config{
+					MinVersion:     tls.VersionTLS12,
+					GetCertificate: s.getCertificate,
+				},
 				ReadHeaderTimeout: 10 * time.Second,
 			}
 			fmt.Printf("nacos webhook: HTTPS 监听 :%d（/inject/{cluster}）\n", s.cfg.WebhookPort)
-			if err := srv.ListenAndServeTLS(filepath.Join(s.cfg.CertDir, "nacos-webhook-cert.pem"), filepath.Join(s.cfg.CertDir, "nacos-webhook-key.pem")); err != nil {
+			if err := srv.ListenAndServeTLS("", ""); err != nil {
 				fmt.Printf("nacos webhook: 启动失败: %v\n", err)
 			}
 		}()
@@ -1114,18 +1146,130 @@ func genPassword() (string, error) {
 
 // ------------------- MutatingWebhookConfiguration 管理 -------------------
 
-// CaBundlePEM 返回自签证书 PEM（供 MWC caBundle；证书未就绪时为空）
-func (s *NacosService) CaBundlePEM() []byte {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.certPEM
+// webhookSANs 现算证书要覆盖的域名与 IP。
+//
+// 为什么不写死：apiserver 是按 <service>.<namespace>.svc 回调我们的，控制台部署在哪个 ns
+// 是环境决定的（kube-console / kube-public / 自定义都可能）。SAN 少这个名字时 TLS 校验直接失败，
+// 而 Webhook 的 failurePolicy=Ignore —— 不报错、不阻塞建 Pod，现象是"注入配好了却什么都没发生"，
+// 排查成本极高。域名从各集群的接入配置里取，URL 模式则取它的主机。
+func (s *NacosService) webhookSANs() (dnsNames []string, ips []net.IP) {
+	dns := map[string]bool{"localhost": true}
+	ipSet := map[string]bool{"127.0.0.1": true, "::1": true}
+	if s.db != nil {
+		var rows []model.NacosConfig
+		s.db.Find(&rows)
+		for _, r := range rows {
+			if strings.EqualFold(r.WebhookMode, "service") && r.WebhookServiceName != "" {
+				n := strings.ToLower(strings.TrimSpace(r.WebhookServiceName))
+				ns := strings.ToLower(strings.TrimSpace(r.WebhookServiceNS))
+				dns[n] = true
+				if ns != "" {
+					for _, f := range []string{n + "." + ns, n + "." + ns + ".svc", n + "." + ns + ".svc.cluster.local"} {
+						dns[f] = true
+					}
+				}
+			}
+			if h := webhookHostOf(r.WebhookURL); h != "" {
+				if net.ParseIP(h) != nil {
+					ipSet[h] = true
+				} else {
+					dns[h] = true
+				}
+			}
+		}
+	}
+	for k := range dns {
+		dnsNames = append(dnsNames, k)
+	}
+	sort.Strings(dnsNames)
+	for k := range ipSet {
+		if ip := net.ParseIP(k); ip != nil {
+			ips = append(ips, ip)
+		}
+	}
+	sort.Slice(ips, func(i, j int) bool { return ips[i].String() < ips[j].String() })
+	return dnsNames, ips
 }
 
+// webhookHostOf 取 https://host:port/path 里的 host；解析不了就当没有
+func webhookHostOf(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+// certCovers 现有证书是否已覆盖这些名字与 IP（少一个就该重签）
+func certCovers(certPEM []byte, dnsNames []string, ips []net.IP) bool {
+	blk, _ := pem.Decode(certPEM)
+	if blk == nil {
+		return false
+	}
+	c, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		return false
+	}
+	has := map[string]bool{}
+	for _, n := range c.DNSNames {
+		has[strings.ToLower(n)] = true
+	}
+	for _, n := range dnsNames {
+		if !has[n] {
+			return false
+		}
+	}
+	for _, want := range ips {
+		found := false
+		for _, got := range c.IPAddresses {
+			if got.Equal(want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// storeCert 换证书要同时更新内存里那份：HTTPS 监听用 GetCertificate 取，
+// 不这么做的话重签完还在握手旧证书（ListenAndServeTLS 只在启动时读一次文件）。
+func (s *NacosService) storeCert(certPEM, keyPEM []byte) error {
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.certPEM, s.keyPEM, s.tlsCert = certPEM, keyPEM, &pair
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *NacosService) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tlsCert == nil {
+		return nil, fmt.Errorf("nacos webhook 证书未就绪")
+	}
+	return s.tlsCert, nil
+}
+
+// ensureCert 取磁盘上的证书，缺了或 SAN 不覆盖当前配置就重签（自身即 CA，10 年）
 func (s *NacosService) ensureCert() (certPEM, keyPEM []byte, err error) {
+	dnsNames, ips := s.webhookSANs()
 	certPath := filepath.Join(s.cfg.CertDir, "nacos-webhook-cert.pem")
 	keyPath := filepath.Join(s.cfg.CertDir, "nacos-webhook-key.pem")
 	if b, e := os.ReadFile(certPath); e == nil {
-		if k, e2 := os.ReadFile(keyPath); e2 == nil {
+		if k, e2 := os.ReadFile(keyPath); e2 == nil && certCovers(b, dnsNames, ips) {
+			if err := s.storeCert(b, k); err != nil {
+				return nil, nil, err
+			}
 			return b, k, nil
 		}
 	}
@@ -1139,22 +1283,16 @@ func (s *NacosService) ensureCert() (certPEM, keyPEM []byte, err error) {
 		return nil, nil, err
 	}
 	tpl := x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "kube-console-webhook", Organization: []string{"kube-console"}},
-		NotBefore:    time.Now().Add(-24 * time.Hour),
-		NotAfter:     time.Now().AddDate(10, 0, 0),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "kube-console-webhook", Organization: []string{"kube-console"}},
+		NotBefore:             time.Now().Add(-24 * time.Hour),
+		NotAfter:              time.Now().AddDate(10, 0, 0),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		IsCA:         true,
-		DNSNames: []string{
-			"localhost",
-			"kube-console-server",
-			"kube-console-server.kube-console",
-			"kube-console-server.kube-console.svc",
-			"kube-console-server.kube-console.svc.cluster.local",
-		},
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		IsCA:                  true,
+		DNSNames:              dnsNames,
+		IPAddresses:           ips,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &tpl, &tpl, &priv.PublicKey, priv)
 	if err != nil {
@@ -1175,18 +1313,22 @@ func (s *NacosService) ensureCert() (certPEM, keyPEM []byte, err error) {
 	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
 		return nil, nil, err
 	}
+	if err := s.storeCert(certPEM, keyPEM); err != nil {
+		return nil, nil, err
+	}
 	return certPEM, keyPEM, nil
 }
 
 // ensureWebhookConfig 维护集群的 MutatingWebhookConfiguration（caBundle 自动回填）
 func (s *NacosService) ensureWebhookConfig(ctx context.Context, client *kube.Client, cfg *model.NacosConfig) error {
-	caBundle := s.CaBundlePEM()
+	// 每轮都重算证书：接入里换了 Service 命名空间/名字或 URL 主机，SAN 必须跟上，
+	// 否则 apiserver 那边 TLS 校验不过，表现是"配好了却静默不注入"
+	caBundle, _, err := s.ensureCert()
+	if err != nil {
+		return err
+	}
 	if len(caBundle) == 0 {
-		certPEM, _, err := s.ensureCert()
-		if err != nil {
-			return err
-		}
-		caBundle = certPEM
+		return fmt.Errorf("Webhook 证书为空")
 	}
 	ignore := admissionregistrationv1.Ignore
 	none := admissionregistrationv1.SideEffectClassNone
@@ -1194,7 +1336,11 @@ func (s *NacosService) ensureWebhookConfig(ctx context.Context, client *kube.Cli
 	var timeout int32 = 5
 	path := "/inject"
 	if cfg.ClusterName != "" {
-		path = "/inject/" + cfg.ClusterName
+		token, err := webhookClusterToken(s.db, cfg.ClusterName)
+		if err != nil {
+			return err
+		}
+		path = "/inject/" + token
 	}
 	webhook := admissionregistrationv1.MutatingWebhook{
 		Name: "nacos-inject.kube-console.io",
@@ -1250,6 +1396,40 @@ func (s *NacosService) ensureWebhookConfig(ctx context.Context, client *kube.Cli
 	return err
 }
 
+// webhookClusterToken 把集群名编码进 webhook 路径。MutatingWebhookConfiguration 的
+// service.path 每段都按 RFC 1123 子域校验（小写字母数字/中划线），中文等集群名直接
+// 编码会被 apiserver 整单拒绝，所以用 c<集群ID>（数字恒合法）；handler 再解析回名字。
+// nacos 注入与日志采集注入共用这套 token。
+func webhookClusterToken(db *gorm.DB, clusterName string) (string, error) {
+	var cl model.Cluster
+	if err := db.Select("id").Where("name = ?", clusterName).First(&cl).Error; err != nil {
+		return "", fmt.Errorf("集群 %q 不存在，无法生成 webhook 路径: %w", clusterName, err)
+	}
+	return fmt.Sprintf("c%d", cl.ID), nil
+}
+
+// resolveClusterToken 把 webhook 路径段还原成集群名：先按名字精确匹配（旧路径直接
+// 编码合法集群名，继续可用），查不到再按 c<id> 解析。名字恰好长得像 c<数字> 的集群
+// 走名字分支，结果也是同一个集群，不会错。查询用 Find 避免 GORM 每次准入打 NotFound 日志。
+func resolveClusterToken(db *gorm.DB, token string) string {
+	if token == "" {
+		return ""
+	}
+	var byName model.Cluster
+	if err := db.Select("name").Where("name = ?", token).Limit(1).Find(&byName).Error; err == nil && byName.Name != "" {
+		return byName.Name
+	}
+	if len(token) > 1 && token[0] == 'c' {
+		if id, err := strconv.Atoi(token[1:]); err == nil {
+			var byID model.Cluster
+			if err := db.Select("name").Where("id = ?", id).Limit(1).Find(&byID).Error; err == nil && byID.Name != "" {
+				return byID.Name
+			}
+		}
+	}
+	return ""
+}
+
 // RemoveWebhookConfig 集群取消注入配置时清理 MWC（不存在则忽略）
 func (s *NacosService) RemoveWebhookConfig(clusterName string) {
 	client, err := s.clusters.Client(clusterName)
@@ -1268,7 +1448,7 @@ func (s *NacosService) handleInject(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	cluster := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/inject"), "/")
+	cluster := resolveClusterToken(s.db, strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/inject"), "/"))
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -1316,9 +1496,13 @@ func (s *NacosService) mutate(cluster string, review *admissionv1.AdmissionRevie
 	_ = mapping
 
 	var ops []map[string]interface{}
-	refs := []map[string]interface{}{
-		{"kind": "ConfigMap", "name": NacosConfigMapName},
-		{"kind": "Secret", "name": NacosSecretName},
+	// 注意条目结构：这是 EnvFromSource，必须是 configMapRef/secretRef 包一层。
+	// 曾经写成 {"kind","name"} 的扁平结构——apiserver 应用补丁时剪掉未知字段，
+	// 条目变成空 {}，Pod 直接校验失败（must specify one of: configMapRef or secretRef），
+	// 命中映射的命名空间里所有新建 Pod 全部卡死在 ReplicaFailure。
+	refs := []corev1.EnvFromSource{
+		{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: NacosConfigMapName}}},
+		{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: NacosSecretName}}},
 	}
 	appendRef := func(containerIndex int, envFrom []corev1.EnvFromSource) {
 		has := func(name string) bool {
@@ -1329,9 +1513,15 @@ func (s *NacosService) mutate(cluster string, review *admissionv1.AdmissionRevie
 			}
 			return false
 		}
-		missing := []map[string]interface{}{}
+		missing := []corev1.EnvFromSource{}
 		for _, ref := range refs {
-			if !has(ref["name"].(string)) {
+			name := ""
+			if ref.ConfigMapRef != nil {
+				name = ref.ConfigMapRef.Name
+			} else {
+				name = ref.SecretRef.Name
+			}
+			if !has(name) {
 				missing = append(missing, ref)
 			}
 		}

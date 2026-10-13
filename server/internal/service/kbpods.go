@@ -165,10 +165,18 @@ func kbCLIFor(engine, container string) (string, bool) {
 		}
 		return `psql -U "${PGUSER_SUPERUSER:-postgres}" -d "${PGDATABASE:-postgres}"`, true
 	case "mongodb":
-		if container != "mongodb" {
-			return "", false
+		// KB mongodb addon 的凭据变量按容器形态不同（真机 2026-09-30）：
+		//   mongos 容器（分片形态）：MONGOS_USER/MONGOS_PASSWORD（指向 config-server 的 root 账号）
+		//   mongodb 容器（普通/分片成员）：MONGODB_ROOT_USER/MONGODB_ROOT_PASSWORD（root 账号），
+		//     旧版 addon 只有 MONGODB_USER/MONGODB_PASSWORD，一并兜住
+		// 变量缺失时退化成不带认证，至少能进 CLI
+		switch container {
+		case "mongodb":
+			return `if [ -n "$MONGODB_ROOT_PASSWORD" ]; then mongosh -u "${MONGODB_ROOT_USER:-root}" -p "$MONGODB_ROOT_PASSWORD" --authenticationDatabase admin; elif [ -n "$MONGODB_PASSWORD" ]; then mongosh -u "${MONGODB_USER:-root}" -p "$MONGODB_PASSWORD" --authenticationDatabase admin; else mongosh; fi`, true
+		case "mongos":
+			return `if [ -n "$MONGOS_PASSWORD" ]; then mongosh -u "${MONGOS_USER:-root}" -p "$MONGOS_PASSWORD" --authenticationDatabase admin; else mongosh; fi`, true
 		}
-		return `if [ -n "$MONGODB_PASSWORD" ]; then mongosh -u "${MONGODB_USERNAME:-admin}" -p "$MONGODB_PASSWORD" --authenticationDatabase admin; else mongosh; fi`, true
+		return "", false
 	}
 	return "", false
 }

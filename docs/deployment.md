@@ -56,7 +56,10 @@
 | `KC_K8S_DEBUG_IMAGE` | 无 shell 容器注入调试镜像 | `harbor.xxx/library/busybox:1.36`（内网集群须可拉取） |
 | `KC_CI_ENABLED` | 关闭内置 CI 模块 | `false` |
 | `KC_CI_RUN_TIMEOUT` / `KC_CI_PVC_SIZE` | CI 运行超时 / 工作区 PVC 大小 | `2h` / `10Gi` |
+| `KC_RBAC_ENFORCE_MENUS` | 读接口按「菜单能力」收口（详见 README 权限管理） | 只认 `1` / `true` 为打开；默认关 |
 | `KC_DEBUG` | 调试日志 | `1` |
+
+打开 `KC_RBAC_ENFORCE_MENUS` 前先在「授权」页把该给的 `view`/`edit` 补齐：收口依据是用户生效角色的可读资源集合（DB 授权与集群侧手工 RBAC 取并集），没授权的用户切换后会看不见大部分集群页面。回退方式就是把该变量去掉或配 `rbac.enforceMenus: false` 重启。
 
 ### 3.2 数据库
 
@@ -195,7 +198,7 @@ docker build -f web/Dockerfile    -t <仓库>/kube-console-web:latest .    && do
 
 # 按序 apply（03-web 是前端 Deployment）
 kubectl apply -f deploy/01-namespace/namespace.yaml
-kubectl apply -f deploy/02-deployment/server.yaml    # 后端 Deployment + Secret（PostgreSQL DSN 在 Secret 的 db-dsn 键）
+kubectl apply -f deploy/02-deployment/server.yaml    # 后端 Deployment + 数据 PVC（Webhook 证书/SQLite）+ Secret（PostgreSQL DSN 在 Secret 的 db-dsn 键）
 kubectl apply -f deploy/03-web/web.yaml              # 前端 Deployment（nginx 镜像内置 dist + 反代配置）
 kubectl apply -f deploy/04-service/service-gateway.yaml    # 前后端 Service + Gateway + HTTPRoute
 # 或一次性: kubectl apply -R -f deploy/
@@ -218,11 +221,15 @@ kubectl apply -f deploy/04-service/service-gateway.yaml    # 前后端 Service +
 **Service 模式（控制台部署在集群内，deploy/ manifests）**：
 - 前提：无额外网络要求（apiserver → ClusterIP 天然可达），且 server Service 已包含 9443 端口（`deploy/04-service` 已内置）
 - 连接配置选 Service 模式，填控制台所在 ns（默认 `kube-console`）与 Service 名（默认 `kube-console-server`）、端口 9443
+- **控制台不在 `kube-console` 命名空间也没关系**：自签证书的 SAN 按各集群接入配置里填的 Service ns/名（或 URL 主机名/IP）动态生成；填错或改过之后，下一轮同步会重签并把新的 caBundle 写回 MutatingWebhookConfiguration。旧版本把 `kube-console-server.kube-console.svc` 写死在证书里，控制台部署在别的命名空间时 apiserver TLS 校验必失败，而 `failurePolicy=Ignore` 让这件事一声不响——排查"配好了却不注入"时先查这里：
+  `kubectl get mutatingwebhookconfiguration kube-console-nacos-inject -o jsonpath='{.webhooks[0].clientConfig}'`，再用 `openssl s_client` 对 `<svc>.<ns>.svc:9443` 看证书 SAN 是否含该域名
 
 **安全与降级**：
-- Webhook 仅对带 `nacos-injection=enabled` 标签的命名空间生效（同步器自动打标，可关）
+- Webhook 仅对带 `nacos-injection=enabled` 标签的命名空间生效（同步器自动打标，可关；`nacos.skipNamespaces` 里的 ns 不打标，默认含 `kube-system,kube-public,kube-node-lease,kube-console`）
+- 注入只发生在 Pod **CREATE** 时，已存在的 Pod 不会补，需要 `rollout restart`；且要求该 ns 的映射已同步成功（`status=synced`）
 - `failurePolicy: Ignore`：控制台宕机不影响业务 Pod 创建（只是暂不注入）
-- 证书持久化在 `certDir`（K8s 部署挂 `/data` 卷），删除证书文件重启会重新自签，需等同步器刷新各集群的 caBundle
+- 证书目录 `nacos.certDir` 必须持久化：`deploy/02-deployment/server.yaml` 用 PVC `kube-console-data` 挂 `/data`（集群没有默认 StorageClass 时显式填 `storageClassName`，或退回 `emptyDir`——代价是每次重启换一张 CA，重启到首轮同步（启动后 15s）之间新建的 Pod 不被注入）
+- 注入内容只有 `envFrom`：ConfigMap `nacos-config`（`NACOS_SERVER_ADDR`、`NACOS_NAMESPACE`）+ Secret `nacos-credentials`（`NACOS_USERNAME`、`NACOS_PASSWORD`），逐项含义见 README 的 Nacos 章节
 
 ## 6. 部署后验证清单
 

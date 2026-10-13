@@ -347,12 +347,12 @@ func (h *KBHandler) MonitorAccess(c *gin.Context) {
 	if h.denyWrite(c, ns) {
 		return
 	}
-	created, err := service.KBEnsureServiceMonitor(c.Request.Context(), cli, ns, name)
+	res, err := service.KBEnsureServiceMonitor(c.Request.Context(), cli, ns, name)
 	if err != nil {
 		response.Fail(c, 400, 400, err.Error())
 		return
 	}
-	response.OK(c, gin.H{"created": created})
+	response.OK(c, res)
 }
 
 // ConfigMaps GET /kb/clusters/:namespace/:name/configmaps —— 该集群渲染出的配置载体

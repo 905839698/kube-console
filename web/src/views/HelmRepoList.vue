@@ -326,6 +326,6 @@ async function doInstall() {
 .none { color: #909399; font-size: 13px; }
 .mb12 { margin-bottom: 12px; }
 .ns-check { margin-left: 12px; }
-.unit { margin-left: 6px; color: #909399; font-size: 12px; }
+.unit { margin-left: 6px; color: #909399; font-size: 13px; }
 .editor-wrap { width: 100%; height: 260px; border: 1px solid #dcdfe6; border-radius: 4px; overflow: hidden; }
 </style>

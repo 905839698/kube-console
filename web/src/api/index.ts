@@ -273,11 +273,29 @@ export interface ControlCard {
   dec: number
 }
 
-export interface ControlPlaneItem {
+// 控制平面组件监控（可观测性独立页）：列表轻量，详情点开才查
+export interface ControlPlaneSummary {
   name: string
+  title: string
   ready: number
   total: number
   cards: ControlCard[]
+}
+export interface ControlChart {
+  name: string
+  unit: string
+  dec: number
+  points: TrendPoint[]
+}
+export interface ControlPlaneDetail {
+  name: string
+  title: string
+  desc: string
+  ready: number
+  total: number
+  range: string
+  cards: ControlCard[]
+  charts: ControlChart[]
 }
 
 export interface MonitorOverview {
@@ -296,7 +314,6 @@ export interface MonitorOverview {
   nodeCpuRank: RankItem[]
   nodeMemRank: RankItem[]
   namespaceCpuRank: RankItem[]
-  controlPlane: ControlPlaneItem[]
   // Request/Limit 配额视角（kube-state-metrics；缺指标时为 0）
   cpuRequestsCores: number
   cpuLimitsCores: number
@@ -304,15 +321,12 @@ export interface MonitorOverview {
   memRequestsGi: number
   memLimitsGi: number
   memAllocatableGi: number
-  // PV 存储用量（kubelet_volume_stats；未采集时为 0）
+  // PV 存储用量：数量/总容量 = kube-state-metrics 的 PV 容量（spec.capacity）；
+  // 已用率与 PVC Top = kubelet volume stats（卷所在文件系统的口径）
   pvCount: number
   pvTotalGi: number
   pvUsedPct: number
   pvTopUsed: RankItem[]
-  // 控制面趋势
-  apiserverQpsTrend: TrendPoint[]
-  coreDnsQpsTrend: TrendPoint[]
-  etcdDbSizeTrend: TrendPoint[]
 }
 
 export interface KubeletMonitor {
@@ -566,6 +580,10 @@ export const k8sApi = {
 
   // Prometheus 监控
   monitorOverview: (range = '6h') => request<MonitorOverview>({ url: '/monitor/overview', params: { range } }),
+  // 控制平面组件监控（列表轻量：up + 概要；详情点开某组件才查全卡片与趋势）
+  controlPlane: () => request<ControlPlaneSummary[]>({ url: '/monitor/controlplane' }),
+  controlPlaneDetail: (component: string, range = '6h') =>
+    request<ControlPlaneDetail>({ url: `/monitor/controlplane/${component}`, params: { range } }),
   // PromQL 查询（瞬时 / 范围）
   monitorQuery: (q: string) => request<PromQueryResult[]>({ url: '/monitor/query', params: { q } }),
   monitorQueryRange: (q: string, range = '6h') => request<PromQueryResult[]>({ url: '/monitor/query-range', params: { q, range } }),
@@ -774,6 +792,9 @@ export interface MyPermissions {
   namespacesRead?: Record<string, boolean>
   allNsRead?: boolean
   roles?: RoleBrief[]
+  // 可见菜单键（后端按资源能力算，见 server menu.go）：项用路径，组用 "group:<名>"。
+  // 缺字段按"全部可见"处理——旧后端没算过，不能让侧边栏直接空掉。
+  menus?: string[]
 }
 
 export const authzApi = {
@@ -1129,7 +1150,78 @@ export const registryApi = {
 }
 
 export const usageApi = { report: (days = 7) => request<NSUsageRow[]>({ url: '/usage', params: { days } }) }
-export const backupApi = { list: () => request<{ installed: boolean; items?: GenericItem[]; schedules?: GenericItem[] }>({ url: '/backups' }) }
+
+// ============ 备份概览（Velero） ============
+export interface VeleroBackup {
+  name: string; namespace: string; schedule?: string; phase: string; createdAt: string
+  startedAt?: string; finishedAt?: string; expiration?: string; durationSec: number
+  progressTotal: number; progressCompleted: number
+  snapshotsAttempted: number; snapshotsCaptured: number
+  validationWarnings?: string[]; warnings: number; errors: number
+  storageLocation?: string; includedNamespaces?: string[]; excludedNamespaces?: string[]
+  ttl?: string; snapshotVolumes?: boolean; fsBackup?: boolean
+}
+export interface VeleroSchedule {
+  name: string; namespace: string; cron: string; paused: boolean; createdAt: string
+  lastBackup?: string; lastError?: string; nextRun?: string
+  storageLocation?: string; includedNamespaces?: string[]; excludedNamespaces?: string[]
+  ttl?: string; snapshotVolumes?: boolean; fsBackup?: boolean
+}
+export interface VeleroRestore {
+  name: string; namespace: string; backupName: string; phase: string; createdAt: string
+  startedAt?: string; finishedAt?: string; durationSec: number
+  progressTotal: number; progressCompleted: number
+  validationErrors?: string[]; warnings: number; errors: number
+  includedNamespaces?: string[]; restorePVs?: boolean; preserveNodePorts?: boolean
+  namespaceMapping?: Record<string, string>
+}
+export interface VeleroLocation { name: string; namespace: string; default: boolean }
+export interface VeleroOverview {
+  // locations/namespace 自"新建备份"版本起返回；可选字段用于识别"旧后端未返回"
+  // 与"真的没配置 BSL"两种情况，不能混为一谈（旧实现把缺字段当空数组，
+  // 后端没升级时页面谎报"集群里没有存储位置"）
+  installed: boolean; namespace?: string; partial?: string[]; locations?: VeleroLocation[]
+  backups: VeleroBackup[]; schedules: VeleroSchedule[]; restores: VeleroRestore[]
+}
+export interface VeleroBackupTemplate {
+  includedNamespaces?: string[]; excludedNamespaces?: string[]
+  snapshotVolumes?: boolean; fsBackup?: boolean; storageLocation?: string; ttlHours?: number
+}
+export interface VeleroEvent {
+  type: string; reason: string; message: string; object: string
+  count: number; firstSeen: string; lastSeen: string
+}
+// 卷备份明细（PodVolumeBackup CR）：Canceled/Failed 项直接定位坏在哪个 Pod 哪个卷
+export interface VeleroVolumeBackup {
+  name: string; namespace: string; podNamespace: string; podName: string
+  volume: string; node?: string; phase: string; message?: string
+  startedAt?: string; completedAt?: string; bytesBackedUp: number
+}
+export const veleroApi = {
+  overview: () => request<VeleroOverview>({ url: '/velero/overview' }),
+  events: (namespace: string, kind: string, name: string) =>
+    request<VeleroEvent[]>({ url: '/velero/events', params: { namespace, kind, name } }),
+  volumes: (backup: string) => request<VeleroVolumeBackup[]>({ url: '/velero/volumes', params: { backup } }),
+  createBackup: (body: VeleroBackupTemplate & { namespace?: string; name?: string }) =>
+    request<{ name: string }>({ url: '/velero/backups', method: 'post', data: body }),
+  createSchedule: (body: VeleroBackupTemplate & { namespace?: string; name: string; cron: string; paused?: boolean }) =>
+    request<{ name: string }>({ url: '/velero/schedules', method: 'post', data: body }),
+  updateSchedule: (namespace: string, name: string, body: VeleroBackupTemplate & { cron: string; paused?: boolean }) =>
+    request<{ ok: boolean }>({ url: `/velero/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, method: 'put', data: body }),
+  deleteSchedule: (namespace: string, name: string) =>
+    request({ url: `/velero/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, method: 'delete' }),
+  createRestore: (body: {
+    namespace: string; backupName: string; name?: string
+    includedNamespaces?: string[]; excludedNamespaces?: string[]
+    restorePVs?: boolean; preserveNodePorts?: boolean
+  }) => request<{ name: string }>({ url: '/velero/restores', method: 'post', data: body }),
+  pauseSchedule: (namespace: string, name: string, paused: boolean) =>
+    request<void>({ url: `/velero/schedules/${namespace}/${name}/pause`, method: 'put', data: { paused } }),
+  deleteBackup: (namespace: string, name: string) =>
+    request<void>({ url: `/velero/backups/${namespace}/${name}`, method: 'delete' }),
+  deleteRestore: (namespace: string, name: string) =>
+    request<void>({ url: `/velero/restores/${namespace}/${name}`, method: 'delete' }),
+}
 export const certsApi = { list: () => request<ClusterCertItem[]>({ url: '/clusters/certs' }) }
 
 export const groupApi = {

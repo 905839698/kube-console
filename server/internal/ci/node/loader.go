@@ -299,6 +299,9 @@ var placeholderRe = regexp.MustCompile(`\{\{(\w+)\}\}`)
 //     值是多行文本时续行按占位符所在行的缩进补齐：块标量（script: |）里续行若顶格
 //     会直接终止标量，渲染出的 YAML 解析失败——多行 shell 参数（script / preShell /
 //     configFiles）正是这种输入。
+//
+// 注意：模板里任何位置的 {{word}} 都会被替换，**包括 YAML/shell 注释**。注释里想写
+// 占位符字面量必须改写（如去掉大括号），否则多行值会把注释行劈开、续行顶格终止块标量。
 func renderTemplate(tmpl string, merged map[string]interface{}) string {
 	// 1) 双引号段内：转义替换
 	tmpl = quotedSegRe.ReplaceAllStringFunc(tmpl, func(seg string) string {

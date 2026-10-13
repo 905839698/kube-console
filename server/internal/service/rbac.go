@@ -34,14 +34,14 @@ const (
 
 // BuiltinRole 内置角色的静态定义（权限语义在代码里，DB 记录只做注册表与展示）
 type BuiltinRole struct {
-	Name              string `json:"name"`
-	Level             string `json:"level"`
-	DisplayName       string `json:"displayName"`
-	Description       string `json:"description"`
+	Name        string `json:"name"`
+	Level       string `json:"level"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
 	// k8sClusterRole 物化时引用的 ClusterRole；空 = 不物化（平台层）
 	k8sClusterRole string
 	// consoleWrite 控制台写语义：cluster 层直接给集群级写；project 层由 k8s 角色决定
-	consoleAllNSWrite bool
+	consoleAllNSWrite   bool
 	consoleClusterWrite bool
 }
 
@@ -52,18 +52,18 @@ var BuiltinRoles = []BuiltinRole{
 	{Name: "platform-viewer", Level: model.LevelPlatform, DisplayName: "平台观察者",
 		Description: "平台管理只读：可查看授权、角色、审计日志与用量报表，不能修改"},
 	{Name: "cluster-admin", Level: model.LevelCluster, DisplayName: "集群管理员",
-		Description: "集群级写：节点运维、命名空间增删、告警静默，且可写集群内全部命名空间",
+		Description:    "集群级写：节点运维、命名空间增删、告警静默，且可写集群内全部命名空间",
 		k8sClusterRole: "cluster-admin", consoleAllNSWrite: true, consoleClusterWrite: true},
 	{Name: "cluster-viewer", Level: model.LevelCluster, DisplayName: "集群观察者",
-		Description: "集群级只读：kubectl 查看集群资源，不能在控制台做任何修改",
+		Description:    "集群级只读：kubectl 查看集群资源，不能在控制台做任何修改",
 		k8sClusterRole: "view"},
 	{Name: "view", Level: model.LevelProject, DisplayName: "只读 (view)",
 		Description: "可查看命名空间内全部资源，不可修改", k8sClusterRole: "view"},
 	{Name: "edit", Level: model.LevelProject, DisplayName: "运维 (edit)",
-		Description: "可增删改命名空间内工作负载/配置等（不含角色与配额修改）",
+		Description:    "可增删改命名空间内工作负载/配置等（不含角色与配额修改）",
 		k8sClusterRole: "edit", consoleAllNSWrite: true},
 	{Name: "admin", Level: model.LevelProject, DisplayName: "项目管理员 (admin)",
-		Description: "命名空间全部权限（含角色与配额管理）",
+		Description:    "命名空间全部权限（含角色与配额管理）",
 		k8sClusterRole: "admin", consoleAllNSWrite: true},
 }
 

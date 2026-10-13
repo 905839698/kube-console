@@ -1,0 +1,10 @@
+{
+  "type": "artifact-fetch",
+  "properties": [
+    { "name": "url", "type": "string", "required": true, "description": "下载地址（镜像构建器生成的平台制品接口，含访问令牌）" },
+    { "name": "fileName", "type": "string", "required": true, "description": "落盘文件名（安全文件名，产物写入 workspace 的 upload/<fileName>）" },
+    { "name": "sha256", "type": "string", "required": false, "default": "", "description": "期望的 sha256（留空不校验）" },
+    { "name": "extract", "type": "boolean", "required": false, "default": false, "description": "tar.gz 解包到 upload/dist/（前端静态包），其余形态原样落盘" },
+    { "name": "preShell", "type": "text", "required": false, "description": "前置 shell（可选）：本节点主步骤前在同一容器/工作区执行" }
+  ]
+}

@@ -172,6 +172,25 @@ type NacosNamespace struct {
 
 func (NacosNamespace) TableName() string { return "nacos_namespaces" }
 
+// LogCollectionPolicy 日志采集 Sidecar 的注入策略（webhook 模式）。
+// Pod 创建时由准入 webhook 按此注入 fluent-bit Sidecar，不改工作负载模板——
+// GitOps（ArgoCD）管的工作负载不会出现漂移，也不会被 sync 回滚掉采集。
+type LogCollectionPolicy struct {
+	ID          uint   `gorm:"primaryKey" json:"id"`
+	ClusterName string `gorm:"uniqueIndex:idx_log_policy;size:128;not null" json:"clusterName"`
+	Namespace   string `gorm:"uniqueIndex:idx_log_policy;size:128;not null" json:"namespace"`
+	Workload    string `gorm:"uniqueIndex:idx_log_policy;size:128;not null" json:"workload"` // Deployment/StatefulSet/DaemonSet 名
+	Container   string `gorm:"size:128;not null" json:"container"`                           // 目标应用容器名
+	LogPath     string `gorm:"size:255;not null" json:"logPath"`                             // 容器内日志文件路径，支持 glob
+	Format      string `gorm:"size:8;not null;default:text" json:"format"`                   // text | json
+	Image       string `gorm:"size:255" json:"image"`                                        // fluent-bit 镜像（空用默认）
+	ESUser      string `gorm:"size:128" json:"esUser"`                                       // ES basic auth 用户名（密码只在 ns 的 kc-es-credentials Secret 里）
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+func (LogCollectionPolicy) TableName() string { return "log_collection_policies" }
+
 // NotifyChannel 告警通知渠道（钉钉机器人 / 通用 webhook）
 type NotifyChannel struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`

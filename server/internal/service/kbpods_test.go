@@ -79,7 +79,8 @@ func TestKBCLIForEngines(t *testing.T) {
 		{"mysql", "kbagent", false, nil, nil},
 		{"redis", "redis", true, []string{"REDIS_PASSWORD", "redis-cli"}, nil},
 		{"postgresql", "postgresql", true, []string{"PGUSER_SUPERUSER", "psql"}, nil},
-		{"mongodb", "mongodb", true, []string{"MONGODB_PASSWORD", "mongosh"}, nil},
+		{"mongodb", "mongodb", true, []string{"MONGODB_ROOT_PASSWORD", "MONGODB_ROOT_USER", "MONGODB_PASSWORD", "mongosh"}, []string{"MONGOS_PASSWORD"}},
+		{"mongodb", "mongos", true, []string{"MONGOS_PASSWORD", "MONGOS_USER", "mongosh"}, []string{"MONGODB_ROOT_PASSWORD"}},
 		{"kafka", "kafka-broker", false, nil, nil},
 		{"elasticsearch", "elasticsearch", false, nil, nil},
 	}

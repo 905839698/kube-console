@@ -64,6 +64,32 @@ steps:
           *) echo "unsupported repo url scheme: $URL" >&2; exit 1 ;;
         esac
       fi
+      # workspace 现在是项目级共享盘（不再每 run 新建一块空盘），上一次运行的内容还在；
+      # git clone 到非空目录会直接失败，所以先清空工作目录（含 .git），每次都是干净起点。
+      # 用 shell 通配而不是 find：busybox/alpine/GNU 都一致，且不依赖 find 的 -mindepth。
+      # rm 对枚举到一半就消失的条目会报 ENOENT（有 Pod 还在收尾写盘时），属预期噪音；
+      # 清完之后用"目录是否为空"做判据，而不是 rm 的退出码。
+      wipe_ws() {
+        for entry in ./* ./.[!.]* ./..?*; do
+          [ -e "$entry" ] || continue
+          rm -rf "$entry" 2>/dev/null
+        done
+      }
+      wipe_ws
+      if [ -n "$(ls -A 2>/dev/null)" ]; then
+        echo "工作区清理后仍有残留，等 5 秒重试一次（可能有刚结束的 run 还在收尾）"
+        sleep 5
+        wipe_ws
+      fi
+      # 还非空就明确失败：与其让 git clone 撞上残留，报一句
+      # "BUG: refs/files-backend.c ... / destination path '.' already exists" 让人摸不着头脑，
+      # 不如把残留摆出来——那意味着有别的 Pod 正共用这块盘，串行没兜住。
+      LEFTOVER="$(ls -A 2>/dev/null)"
+      if [ -n "$LEFTOVER" ]; then
+        echo "工作区清不干净，克隆中止。残留内容："
+        echo "$LEFTOVER"
+        exit 1
+      fi
       git clone $CLONE_ARGS "$URL" .
       # 切到目标 revision（commit > tag > branch）；fetch/checkout 失败即任务失败
       if [ -n "$REVISION" ] && [ "$REVISION" != "HEAD" ]; then

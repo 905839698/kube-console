@@ -69,6 +69,42 @@ func (h *MonitorHandler) Overview(c *gin.Context) {
 	response.OK(c, data)
 }
 
+// ControlPlane 控制平面组件列表（可观测性 → 控制平面组件）
+func (h *MonitorHandler) ControlPlane(c *gin.Context) {
+	cl, _, ok := h.clusterAndRange(c)
+	if !ok {
+		return
+	}
+	client, ok := h.clientOf(c, cl)
+	if !ok {
+		return
+	}
+	data, err := h.monitor.ControlPlaneList(c.Request.Context(), client, cl)
+	if err != nil {
+		response.K8sError(c, err)
+		return
+	}
+	response.OK(c, data)
+}
+
+// ControlPlaneDetail 单组件详情：全指标卡 + 趋势（?range=1h|6h|24h）
+func (h *MonitorHandler) ControlPlaneDetail(c *gin.Context) {
+	cl, r, ok := h.clusterAndRange(c)
+	if !ok {
+		return
+	}
+	client, ok := h.clientOf(c, cl)
+	if !ok {
+		return
+	}
+	data, err := h.monitor.ControlPlaneDetail(c.Request.Context(), client, cl, c.Param("component"), r)
+	if err != nil {
+		response.Fail(c, 400, 400, err.Error())
+		return
+	}
+	response.OK(c, data)
+}
+
 // Query 通用 PromQL 查询（调试/排查用）?q=
 func (h *MonitorHandler) Query(c *gin.Context) {
 	cl, _, ok := h.clusterAndRange(c)

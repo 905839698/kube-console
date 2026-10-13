@@ -214,11 +214,11 @@ watch(
 <style scoped>
 .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .lbl { font-size: 13px; color: #606266; }
-.tip { font-size: 12px; color: #909399; }
+.tip { font-size: 13px; color: #909399; }
 .groups { max-height: calc(100vh - 340px); min-height: 200px; overflow-y: auto; }
 .group { border: 1px solid #e4e7ed; border-radius: 6px; padding: 10px 14px; margin-bottom: 10px; }
 .group-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
-.count { font-size: 12px; color: #909399; }
+.count { font-size: 13px; color: #909399; }
 .kinds { display: flex; flex-direction: column; gap: 4px; margin-left: 22px; }
 .items { display: flex; flex-wrap: wrap; gap: 0 16px; margin-left: 22px; }
 .items :deep(.el-checkbox) { margin-right: 0; width: auto; min-width: 180px; }

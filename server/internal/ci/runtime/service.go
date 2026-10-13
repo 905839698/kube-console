@@ -26,6 +26,7 @@ import (
 	"kube-console/server/internal/ci/credential"
 	"kube-console/server/internal/ci/deploy"
 	"kube-console/server/internal/ci/errcode"
+	pipelinesvc "kube-console/server/internal/ci/pipeline"
 	"kube-console/server/internal/ci/pipeline/compiler"
 	dsl "kube-console/server/internal/ci/pipeline/model"
 	"kube-console/server/internal/ci/pipeline/validator"
@@ -33,7 +34,6 @@ import (
 	ws "kube-console/server/internal/ci/websocket"
 	"kube-console/server/internal/config"
 	"kube-console/server/internal/model"
-	pipelinesvc "kube-console/server/internal/ci/pipeline"
 )
 
 // submitGrace StartRun 提交后 Tekton controller 创建 PipelineRun 对象的正常窗口。
@@ -42,6 +42,9 @@ const submitGrace = 60 * time.Second
 
 // syncBatchLimit 单轮 syncOnce 处理的 run 数上限（防积压时单轮失控）。
 const syncBatchLimit = 200
+
+// queuePumpLimit 单轮从队列里放行的 run 数上限。
+const queuePumpLimit = 20
 
 // Notifier 执行事件推送接口（由 kube-console 通知服务实现；nil = 关闭）。
 type Notifier interface {
@@ -68,11 +71,11 @@ type runMeta struct {
 //	StartRun   DSL → Pipeline CR + PipelineRun + PVC（项目 ns 内），落 ci_runs/ci_task_runs
 //	StartSyncer 后台轮询各集群 Tekton 状态 → 回写 DB → WS 推送 → 完成后清理 PVC
 type Service struct {
-	cfg  *config.CIConfig
-	db   *gorm.DB
-	pipe *pipelinesvc.Service
+	cfg   *config.CIConfig
+	db    *gorm.DB
+	pipe  *pipelinesvc.Service
 	store *pipelinesvc.Store
-	hub  *ws.Hub
+	hub   *ws.Hub
 	creds *credential.Service // 凭证解析（envFrom 注入）
 
 	// k8sFor 按集群名惰性取 Tekton 客户端（内部缓存 + 熔断判断由调用方保证）
@@ -80,7 +83,7 @@ type Service struct {
 
 	runTimeout time.Duration
 
-	notifier  Notifier         // 执行事件推送（失败/待审批），nil = no-op
+	notifier  Notifier // 执行事件推送（失败/待审批），nil = no-op
 	artReg    *artifact.Registrar
 	deploySvc *deploy.Service
 
@@ -88,6 +91,11 @@ type Service struct {
 	// nodeID→params 解析结果，避免每 3s 对每个 run 反复读库 + 解析 JSON。
 	nodeParamsMu    sync.Mutex
 	nodeParamsCache map[uint]map[string]map[string]interface{}
+
+	// launchLocks 每流水线一把启动互斥（惰性建，launchMu 守护本表）。
+	// 见 pipelineLaunchLock 的注释：检查占用与启动必须整体原子。
+	launchMu    sync.Mutex
+	launchLocks map[uint]*sync.Mutex
 }
 
 // NewService 构建执行服务。runTimeout 解析失败回退 2h。
@@ -101,7 +109,27 @@ func NewService(cfg *config.CIConfig, db *gorm.DB, pipe *pipelinesvc.Service, st
 		cfg: cfg, db: db, pipe: pipe, store: store, hub: hub, creds: creds, k8sFor: k8sFor,
 		runTimeout:      timeout,
 		nodeParamsCache: map[uint]map[string]map[string]interface{}{},
+		launchLocks:     map[uint]*sync.Mutex{},
 	}
+}
+
+// pipelineLaunchLock 每流水线一把启动互斥（StartRun 与 pumpQueue 放行共用）。
+// 「查占用 → 直接启动 / 进队列」是 check-then-act：同一条流水线被 webhook 与人工
+// 并发触发时，两个请求并发检查都查到 0 就双双直接启动——同一块流水线工作区
+// 子目录被两个 Pod 同时清空/克隆，表现为 clone 步骤 rm ENOENT 刷屏、git clone
+// "destination path '.' already exists"、git refs 内部错误。锁要覆盖检查+启动全程：
+// 后来者要么等锁、要么在锁内查到占用进队列。
+// 粒度是流水线而不是项目：工作区按流水线分了子目录（PipelineWorkspaceDir），
+// 同项目不同流水线互不踩，可以并行。
+func (s *Service) pipelineLaunchLock(pipelineID uint) *sync.Mutex {
+	s.launchMu.Lock()
+	defer s.launchMu.Unlock()
+	m, ok := s.launchLocks[pipelineID]
+	if !ok {
+		m = &sync.Mutex{}
+		s.launchLocks[pipelineID] = m
+	}
+	return m
 }
 
 // SetNotifier 注入通知服务（装配阶段调用；nil = 关闭通知）。
@@ -231,10 +259,6 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 		return nil, errcode.New(errcode.NotFound, "项目不存在")
 	}
 	ns := proj.Namespace
-	k8s, err := s.k8sFor(p.ClusterName)
-	if err != nil {
-		return nil, errcode.Newf(errcode.DepUnavailable, "集群不可用: %v", err)
-	}
 
 	// 1) 取版本（指定或最新）
 	var version *model.CIPipelineVersion
@@ -250,14 +274,118 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 			return nil, err
 		}
 	}
+	k8s, err := s.k8sFor(p.ClusterName)
+	if err != nil {
+		return nil, errcode.Newf(errcode.DepUnavailable, "集群不可用: %v", err)
+	}
 
-	// 2) 解析 + 校验 + 运行时增强 + 编译
-	graph, err := pipelinesvc.ParseGraph(version.GraphJSON)
+	// 同流水线串行：工作区 PVC 里每条流水线一个子目录（PipelineWorkspaceDir），
+	// 同项目不同流水线并行互不踩；同流水线的并发 run 会互踩同一份工作区
+	// （git-clone 清空目录、构建产物同名覆盖），所以后来的进队列，由 syncer 放行。
+	// 检查与启动整体持流水线锁（见 pipelineLaunchLock）：并发触发时后来者在锁内
+	// 查到占用，老老实实进队列，而不是抢跑。
+	mu := s.pipelineLaunchLock(p.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	if n, err := s.pipelineOccupyingRuns(ctx, p.ID); err != nil {
+		return nil, err
+	} else if n > 0 {
+		return s.enqueueRun(ctx, p, version, username, triggerType, branchOverride, commitOverride)
+	}
+	return s.launchRun(ctx, p, version, ns, k8s, username, triggerType, branchOverride, commitOverride, nil)
+}
+
+// runOptions 提交一次的附加上下文：adopt 非空表示这是一次排队放行（复用已存在的 run 行与 runNo）。
+type runOptions struct {
+	adopt *model.CIRun
+}
+
+// enqueueRun 登记一次排队执行：只落库，不碰集群（没有 PipelineRun、没有 PVC）。
+// 分支/commit 等要解析图才能确定的字段留空，放行时补上。
+func (s *Service) enqueueRun(ctx context.Context, p *model.CIPipeline, version *model.CIPipelineVersion,
+	username, triggerType, branchOverride, commitOverride string) (*model.CIRun, error) {
+	runNo, err := s.nextRunNo(ctx, p.ID)
 	if err != nil {
 		return nil, err
 	}
+	payload, err := json.Marshal(runOverrides{Branch: branchOverride, Commit: commitOverride})
+	if err != nil {
+		return nil, err
+	}
+	run := &model.CIRun{
+		ClusterName:  p.ClusterName,
+		PipelineID:   p.ID,
+		VersionID:    version.ID,
+		RunNo:        runNo,
+		Status:       model.CIRunStatusQueued,
+		TriggerType:  triggerType,
+		StartedBy:    username,
+		QueuePayload: string(payload),
+	}
+	if err := s.db.WithContext(ctx).Create(run).Error; err != nil {
+		return nil, err
+	}
+	log.Printf("runtime: pipeline=%d run#%d 排队（同流水线已有执行在跑，共享工作区子目录不能并发）", p.ID, runNo)
+	s.publishRun(ctx, run.ID)
+	return run, nil
+}
+
+// runOverrides 排队期间要原样保留的启动参数。不能从 run 行的 git_branch/git_commit 反推：
+// 那是"生效值"，当成覆盖值提交会走 branchOverride 分支、强制完整克隆，行为变了。
+type runOverrides struct {
+	Branch string `json:"branch"`
+	Commit string `json:"commit"`
+}
+
+// pipelineOccupyingRuns 该流水线当前占用/等待工作区子目录的 run 数（排队中的也算，它排在前面）。
+func (s *Service) pipelineOccupyingRuns(ctx context.Context, pipelineID uint) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&model.CIRun{}).
+		Where("pipeline_id = ? AND status IN ?", pipelineID, model.CIRunActiveStatuses).
+		Count(&n).Error
+	return n, err
+}
+
+// pipelineSubmittedRuns 该流水线已提交到集群的 run 数（真正占着工作区的那些）。
+// 排队放行按这个口径判空，否则候选自己那条 queued 记录会把自己挡在门外。
+func (s *Service) pipelineSubmittedRuns(ctx context.Context, pipelineID uint) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&model.CIRun{}).
+		Where("pipeline_id = ? AND status IN ?", pipelineID, model.CIRunSubmittedStatuses).
+		Count(&n).Error
+	return n, err
+}
+
+// launchRun 解析 → 编译 → 补齐基础设施 → 落库 → 建 PVC/PipelineRun。
+// adopt（runOptions.adopt）非空时复用排队行与它的 runNo，并把失败写成"该 run 失败"
+// 而不是删行——删掉排队记录等于用户提交的东西凭空消失。
+func (s *Service) launchRun(ctx context.Context, p *model.CIPipeline, version *model.CIPipelineVersion,
+	ns string, k8s *tekton.Client, username, triggerType, branchOverride, commitOverride string,
+	opts *runOptions) (*model.CIRun, error) {
+	var adopt *model.CIRun
+	if opts != nil {
+		adopt = opts.adopt
+	}
+	// fail 是启动失败的补偿口径：直接启动删掉本次刚建的行（不留半条记录占 runNo）；
+	// 排队放行不能删——那行是用户提交排队时看到的记录，删了等于"提交消失"，置失败。
+	fail := func(r *model.CIRun, cause error) (*model.CIRun, error) {
+		if adopt == nil {
+			s.cleanupRun(ctx, r, k8s, ns)
+			return nil, cause
+		}
+		s.failQueuedLaunch(ctx, adopt, cause)
+		return nil, cause
+	}
+
+	// 2) 解析 + 校验 + 运行时增强 + 编译
+	//    这三步的失败是确定性的（版本行不可变，同样输入永远同样结果）：排队放行的场合
+	//    必须就地置失败，否则 syncer 每 3s 重试一条永远不会成功的队列记录。
+	graph, err := pipelinesvc.ParseGraph(version.GraphJSON)
+	if err != nil {
+		return fail(nil, err)
+	}
 	if res := s.pipe.Validator.Validate(graph); !res.Valid {
-		return nil, &pipelinesvc.CompileError{Errors: res.Errors}
+		return fail(nil, &pipelinesvc.CompileError{Errors: res.Errors})
 	}
 	// 节点按 DAG 拓扑序重排（稳定：同层保持画布原序）
 	if order := validator.Topological(graph); order != nil {
@@ -293,18 +421,25 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 	s.enrichGraph(graph, branchOverride, commitOverride) // 注入存储/构建端点伪参数 + 分支/commit 覆盖
 	spec, err := s.pipe.Compiler.Compile(graph, ns)
 	if err != nil {
-		return nil, err
+		return fail(nil, err)
 	}
 	log.Printf("runtime: StartRun pipeline=%d 编译结果 tasks=%v", p.ID, taskRunAfterSummary(spec))
 
-	// 3) 原子分配 runNo；runName/PVC 名加随机后缀（并发触发不撞名）
-	runNo, err := s.nextRunNo(ctx, pipelineID)
-	if err != nil {
-		return nil, err
+	// 3) runNo：排队放行沿用登记时的号，直接启动则原子取新号；runName/CR 名加随机后缀
+	//    （同流水线已经串行，但人工与 webhook 同时触发仍可能撞在同一号之前）。
+	var runNo int
+	if adopt != nil {
+		runNo = adopt.RunNo
+	} else {
+		if runNo, err = s.nextRunNo(ctx, p.ID); err != nil {
+			return nil, err
+		}
 	}
 	suffix := randomSuffix()
 	runName := fmt.Sprintf("run-%d-%d-%s", p.ID, runNo, suffix)
-	pvcName := fmt.Sprintf("ci-ws-%d-%d-%s", p.ID, runNo, suffix)
+	// workspace PVC 按项目复用一个（原来是每 run 一个：每次触发都要等新盘绑定，
+	// 还要在终态回收；项目串行后同一块盘就是天然的工作区）。
+	pvcName := ProjectWorkspacePVCName(p.ProjectID)
 
 	// Pipeline CR 按 run 唯一：branchOverride/shallow 这类 run 级差异会被烤进 taskSpec，
 	// 若多个 run 共享 pl-<id>-v<version>（apply 整体覆盖），并发触发时先建的 run 生成
@@ -338,6 +473,13 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 	if s.cfg.ImagePullSecret != "" {
 		pullSecrets = appendUniqueString(pullSecrets, s.cfg.ImagePullSecret)
 	}
+	// 缓存决定在落库前做：使用情况（已启用 / 未启用 + 原因）要随 run 行一起写下去，
+	// 事后补 UPDATE 会漏掉"启动即失败"那批记录。
+	cacheSub, cacheNote := s.cacheBinding(p, graph)
+	// 任务级 workspace subPath 绑定（PipelineRun 仍然只有一条 shared 绑定，见
+	// tekton_ops.CreatePipelineRun 注释）：source 挂到流水线自己的子目录——同项目
+	// 不同流水线并行互不踩；缓存挂到项目级 kc-cache，跨流水线共享。
+	bindWorkspaceSubPaths(spec, p.ID, cacheSub)
 	specMap, err := specToMap(spec)
 	if err != nil {
 		return nil, err
@@ -371,9 +513,29 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 		TektonRunName:    runName,
 		TektonPipelineCR: pipelineCRName,
 		PVCName:          pvcName,
+		CacheInfo:        cacheNote,
 		StartedAt:        &now,
 	}
-	if err := s.db.WithContext(ctx).Create(run).Error; err != nil {
+	if adopt != nil {
+		// 排队放行：补上集群侧字段并置 pending，行还是用户排队时看到的那一条
+		run.ID = adopt.ID
+		if err := s.db.WithContext(ctx).Model(&model.CIRun{}).Where("id = ?", adopt.ID).
+			Updates(map[string]interface{}{
+				"status":             model.CIRunStatusPending,
+				"git_commit":         commit,
+				"git_branch":         branch,
+				"git_repo":           gitParam(graph, "url"),
+				"tekton_run_name":    runName,
+				"tekton_pipeline_cr": pipelineCRName,
+				"pvc_name":           pvcName,
+				"cache_info":         cacheNote,
+				"started_at":         now,
+				"queue_payload":      "",
+			}).Error; err != nil {
+			return nil, err
+		}
+		run.CreatedAt = adopt.CreatedAt
+	} else if err := s.db.WithContext(ctx).Create(run).Error; err != nil {
 		return nil, err
 	}
 	for _, n := range graph.Nodes {
@@ -386,31 +548,131 @@ func (s *Service) StartRun(ctx context.Context, pipelineID, versionID, uid uint,
 			TektonNamespace: ns,
 		}
 		if err := s.db.WithContext(ctx).Create(tr).Error; err != nil {
-			s.cleanupRun(ctx, run, k8s, ns)
-			return nil, err
+			return fail(run, err)
 		}
 	}
 
-	// 6) PVC + PipelineRun（失败 → 补偿：删 PVC + DB 记录）
-	if err := k8s.CreatePVC(ctx, ns, pvcName, s.cfg.PVCSize); err != nil {
-		s.cleanupRun(ctx, run, k8s, ns)
-		return nil, errcode.Newf(errcode.DepUnavailable, "创建 workspace PVC 失败: %v", err)
+	// 6) PVC + PipelineRun（失败 → 补偿：删本次建的行 + CR；项目级 workspace 盘不删，见 cleanupRun）
+	//    EnsurePVC 幂等：项目第一次建，之后复用同一块盘（原来每 run 新建一块，
+	//    每次触发都要等绑定，终态还得回收）。
+	if err := k8s.EnsurePVC(ctx, ns, pvcName, s.cfg.PVCSize, ""); err != nil {
+		return fail(run, errcode.Newf(errcode.DepUnavailable, "准备 workspace PVC %s 失败: %v", pvcName, err))
 	}
-	// 项目级依赖缓存：任一节点勾选 cache 且平台开关开启时，确保缓存 PVC 并绑定
-	cacheClaim := s.ensureCachePVC(ctx, k8s, ns, p, graph)
+	// 工作区是项目级 RWO 盘，local CSI（openebs lvm 等）不允许同一 device 同时挂到多个
+	// Pod；preserveLogs 保留的终态 Pod 会一直占着它（reconcile 的 24h 租约还没到），同项目
+	// 的下一次触发就会卡在 FailedMount: device already mounted。下发 PipelineRun 前先把
+	// 非活跃 run 的旧 Pod 回收掉，把盘让出来。
+	s.reclaimStalePods(ctx, k8s, p.ClusterName, ns)
 	params := gitParams(graph, branchOverride, commitOverride)
-	if err := k8s.CreatePipelineRun(ctx, ns, runName, pipelineCRName, s.cfg.ServiceAccount, pvcName, cacheClaim, params, pullSecrets); err != nil {
-		s.cleanupRun(ctx, run, k8s, ns)
-		return nil, errcode.Newf(errcode.DepUnavailable, "创建 PipelineRun 失败: %v", err)
+	if err := k8s.CreatePipelineRun(ctx, ns, runName, pipelineCRName, s.cfg.ServiceAccount, pvcName, params, pullSecrets, ciScheduling(s.cfg)); err != nil {
+		return fail(run, errcode.Newf(errcode.DepUnavailable, "创建 PipelineRun 失败: %v", err))
 	}
 
 	s.publishRun(ctx, run.ID)
 	return run, nil
 }
 
+// reclaimStalePods 回收命名空间里不对应任何活跃 run 的 TaskRun Pod。
+// 动机：工作区（ci-ws-p<项目>）是项目级 RWO 盘，local CSI 一块盘同时只能挂一个 Pod，
+// 而 preserveLogs 保留的终态 Pod 会一直占着它——同项目的下一次触发会卡在
+// FailedMount（verifyMount: device already mounted）。下发 PipelineRun 前清掉这些旧
+// Pod，把盘让出来。只按 DB 里的活跃状态判定保留，正在跑的 run 绝不动；DB 无记录的
+// 孤儿 Pod 也一并回收（reconcile 会再兜底）。回收失败不阻断 run：最坏退回原来的
+// FailedMount 语义，用户仍能看到现象。
+func (s *Service) reclaimStalePods(ctx context.Context, k8s *tekton.Client, cluster, ns string) {
+	pods, err := k8s.ListTaskRunPods(ctx, ns)
+	if err != nil || len(pods) == 0 {
+		return
+	}
+	var active []string
+	if err := s.db.WithContext(ctx).Model(&model.CIRun{}).
+		Where("cluster_name = ?", cluster).
+		Where("status IN ?", model.CIRunActiveStatuses).
+		Pluck("tekton_run_name", &active).Error; err != nil {
+		log.Printf("runtime: 查询活跃 run 失败，跳过残留 Pod 回收（ns=%s）: %v", ns, err)
+		return
+	}
+	keep := make(map[string]bool, len(active))
+	for _, name := range active {
+		if name != "" {
+			keep[name] = true
+		}
+	}
+	for pod, runName := range pods {
+		if keep[runName] {
+			continue
+		}
+		if err := k8s.DeletePod(ctx, ns, pod); err != nil {
+			log.Printf("runtime: 回收残留 Pod %s/%s（run=%s）失败: %v", ns, pod, runName, err)
+		} else {
+			log.Printf("runtime: 回收残留 Pod %s/%s（run=%s 已非活跃）", ns, pod, runName)
+		}
+	}
+}
+
+const projectWorkspacePrefix = "ci-ws-p"
+
+// ProjectWorkspacePVCName 项目共享 workspace 的 PVC 名（项目删除时也要按它回收，故导出）。
+// LegacyProjectCachePVCName 是旧设计里独立缓存盘的名字（缓存改为与工作区同盘后不再创建）。
+// 保留命名函数只为两件事：缓存页要列出这些**遗留盘**让用户回收，项目删除时顺手清掉。
+// 新代码不要再按它建盘。
+const projectCachePrefix = "ci-cache-p"
+
+func LegacyProjectCachePVCName(projectID uint) string {
+	return fmt.Sprintf("%s%d", projectCachePrefix, projectID)
+}
+
+func ProjectWorkspacePVCName(projectID uint) string {
+	return fmt.Sprintf("%s%d", projectWorkspacePrefix, projectID)
+}
+
+// isProjectWorkspacePVC 该 PVC 是不是项目级共享工作区（长期存在，终态不能删）。
+// 老命名 ci-ws-<流水线>-<run>-<后缀> 仍是每 run 一个，继续按原口径回收。
+func isProjectWorkspacePVC(name string) bool {
+	return strings.HasPrefix(name, projectWorkspacePrefix)
+}
+
+// failQueuedLaunch 排队 run 放行失败：置 failed，行必须留着——
+// 用户看到的排队记录凭空消失比一条失败记录更难解释。
+// 原因写进任务行的 message（执行详情看得到）；编译阶段就失败时还没有任务行，只有日志。
+func (s *Service) failQueuedLaunch(ctx context.Context, run *model.CIRun, cause error) {
+	now := time.Now()
+	if err := s.db.WithContext(ctx).Model(&model.CIRun{}).
+		Where("id = ? AND status = ?", run.ID, model.CIRunStatusQueued).
+		Updates(map[string]interface{}{
+			"status":      model.CIRunStatusFailed,
+			"message":     cutRunMessage(cause.Error()),
+			"finished_at": now,
+		}).Error; err != nil {
+		log.Printf("runtime: 排队 run %d 置失败失败: %v", run.ID, err)
+	}
+	if err := s.db.WithContext(ctx).Model(&model.CITaskRun{}).
+		Where("run_id = ?", run.ID).
+		Updates(map[string]interface{}{
+			"status":      model.CIRunStatusFailed,
+			"finished_at": now,
+		}).Error; err != nil {
+		log.Printf("runtime: 排队 run %d 的任务行回写失败: %v", run.ID, err)
+	}
+	log.Printf("runtime: 排队 run %d 放行失败: %v", run.ID, cause)
+	s.publishRun(ctx, run.ID)
+}
+
+// cutRunMessage 失败原因按列宽截断（1024）：错误文本可能带很长的 API 响应体，
+// 超宽写入在 MySQL 严格模式下会直接失败，那样连「失败」这个状态都留不下。
+func cutRunMessage(s string) string {
+	const max = 1000
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}
+
 // Cancel 停止一次进行中的执行（执行中心「停止」入口）。
 // Tekton 侧置 PipelineRunCancelled（controller 终止 Pod），DB 侧立即置
-// cancelled 并清理 workspace PVC；进行中的 TaskRun 由 syncer 收敛为 cancelled。
+// cancelled；进行中的 TaskRun 由 syncer 收敛为 cancelled。
+// 排队中的 run 还没提交到集群，取消就是出队（不碰 Tekton，也不涉及 PVC）。
 // 已终态的 run 重复调用是幂等 no-op。
 func (s *Service) Cancel(ctx context.Context, runID uint) (*model.CIRun, error) {
 	var run model.CIRun
@@ -423,6 +685,22 @@ func (s *Service) Cancel(ctx context.Context, runID uint) (*model.CIRun, error) 
 	switch run.Status {
 	case model.CIRunStatusSuccess, model.CIRunStatusFailed, model.CIRunStatusCancelled:
 		return &run, nil // 已终态，幂等返回
+	}
+	if run.Status == model.CIRunStatusQueued {
+		now := time.Now()
+		if err := s.db.WithContext(ctx).Model(&model.CIRun{}).
+			Where("id = ? AND status = ?", run.ID, model.CIRunStatusQueued).
+			Updates(map[string]interface{}{
+				"status": model.CIRunStatusCancelled, "finished_at": now, "queue_payload": "",
+			}).Error; err != nil {
+			return nil, err
+		}
+		run.Status = model.CIRunStatusCancelled
+		run.FinishedAt = &now
+		run.QueuePayload = ""
+		log.Printf("runtime: run %d 已出队取消（尚未提交到集群）", run.ID)
+		s.publishRun(ctx, run.ID)
+		return &run, nil
 	}
 	k8s, meta, err := s.k8sForRun(ctx, &run)
 	if err != nil {
@@ -448,9 +726,7 @@ func (s *Service) Cancel(ctx context.Context, runID uint) (*model.CIRun, error) 
 		Where("run_id = ? AND status IN ?", run.ID,
 			[]string{model.CIRunStatusPending, model.CIRunStatusRunning}).
 		Updates(map[string]interface{}{"status": model.CIRunStatusCancelled, "finished_at": now}).Error
-	if run.PVCName != "" {
-		_ = k8s.DeletePVC(ctx, meta.NS, run.PVCName)
-	}
+	s.releaseWorkspace(ctx, k8s, meta.NS, run.PVCName)
 	run.Status = model.CIRunStatusCancelled
 	run.FinishedAt = &now
 	s.publishRun(ctx, run.ID)
@@ -458,16 +734,29 @@ func (s *Service) Cancel(ctx context.Context, runID uint) (*model.CIRun, error) 
 	return &run, nil
 }
 
+// releaseWorkspace 释放一次运行占用的 workspace PVC。
+// 项目级共享盘（ci-ws-p*）长期保留：每 run 建/删一次盘正是原来每次触发都要等绑定的原因，
+// 而且盘没了下一次就得重新走存储供给。老命名（ci-ws-<流水线>-<run>-<后缀>）每 run 一个，
+// 仍按原样回收，否则升级窗口期的存量盘会一直堆着。项目删除时才真正删盘。
+func (s *Service) releaseWorkspace(ctx context.Context, k8s *tekton.Client, ns, name string) {
+	if name == "" || k8s == nil {
+		return
+	}
+	if isProjectWorkspacePVC(name) {
+		return
+	}
+	if err := k8s.DeletePVC(ctx, ns, name); err != nil {
+		log.Printf("runtime: 删 workspace PVC %s 失败: %v（reconcile 会兜底）", name, err)
+	}
+}
+
 // cleanupRun 补偿删除一次失败的启动：PVC + DB 记录（硬删，避免残留占 runNo 唯一键）。
 func (s *Service) cleanupRun(ctx context.Context, run *model.CIRun, k8s *tekton.Client, ns string) {
 	if run == nil {
 		return
 	}
-	if run.PVCName != "" {
-		if err := k8s.DeletePVC(ctx, ns, run.PVCName); err != nil {
-			log.Printf("runtime: 补偿删 PVC %s 失败: %v（reconcile 会兜底）", run.PVCName, err)
-		}
-	}
+	// 项目级共享工作区不删（下次运行还要用），见 releaseWorkspace
+	s.releaseWorkspace(ctx, k8s, ns, run.PVCName)
 	if run.TektonPipelineCR != "" {
 		_ = k8s.DeletePipeline(ctx, ns, run.TektonPipelineCR)
 	}
@@ -488,29 +777,81 @@ func randomSuffix() string {
 	return fmt.Sprintf("%x", b)[:5]
 }
 
-// ensureCachePVC 项目级依赖缓存 PVC（ci-cache-p<projectID>）：
-//   - 图中任一节点勾选 cache 且平台开关开启 → 幂等确保 PVC 存在并返回其名
-//   - 未使用 / 平台关闭 / 创建失败 → 返回空串，PipelineRun 不绑定 cache workspace
-func (s *Service) ensureCachePVC(ctx context.Context, k8s *tekton.Client, ns string, p *model.CIPipeline, g *dsl.Graph) string {
+// ProjectCacheDir 是依赖缓存在项目工作区盘上的子目录名（与运行工作目录并列，互不影响）。
+// 导出给缓存管理页展示"缓存到底在哪"。
+const ProjectCacheDir = "kc-cache"
+
+// cacheBinding 决定本次运行挂不挂依赖缓存，返回「缓存子目录」+「一句要在界面说的话」。
+//
+// 缓存与运行工作区**同一块盘**（claim 就是那个 workspace PVC）的 subPath：这样
+// 一个 TaskRun 只碰一块 PVC。原来缓存是第二块独立盘，本地盘 RWO 下需要两块盘的
+// TaskRun 必须落到两块盘都能 attach 的节点，选不出来就永久 Pending，原因还只写在
+// Pod 事件里。同盘子目录没有这个问题，跨运行的依赖复用一点没少。
+// 绑定动作在任务级做（bindCacheToSharedWorkspace），PipelineRun 只保留一条
+// workspace 绑定——两条同 claim 绑定会让 Tekton affinity-assistant 的去重与
+// 任务 Pod 的亲和引用不一致，Pod 永远 Unschedulable。
+//
+// 也因此这里不存在"盘建不出来"的失败分支——盘在 workspace 那步已经建好了；
+// 唯一关闭缓存的原因是平台开关，那种情况同样要把话说出来。
+func (s *Service) cacheBinding(p *model.CIPipeline, g *dsl.Graph) (string, string) {
+	nodes := cacheNodes(g)
+	if len(nodes) == 0 {
+		return "", ""
+	}
 	if !s.cfg.CacheEnabled {
-		return ""
+		return "", cutCacheInfo("未启用：平台构建缓存开关 ci.cacheEnabled 处于关闭状态")
 	}
-	used := false
+	claim := ProjectWorkspacePVCName(p.ProjectID)
+	return ProjectCacheDir, cutCacheInfo(fmt.Sprintf("已启用：%s 内 %s/（与工作区同盘），%d 个节点使用：%s", claim, ProjectCacheDir, len(nodes), strings.Join(nodes, ", ")))
+}
+
+// CacheNodesOfGraph 解析图 JSON 并列出勾了「使用缓存」的节点（缓存页要说明这项目里
+// 到底哪些流水线在用缓存）。图坏了/为空返回 nil——坏数据不该让整页打不开。
+func CacheNodesOfGraph(graphJSON string) []string {
+	if strings.TrimSpace(graphJSON) == "" {
+		return nil
+	}
+	g, err := pipelinesvc.ParseGraph(graphJSON)
+	if err != nil {
+		return nil
+	}
+	return cacheNodes(g)
+}
+
+// cacheNodes 图上勾了「使用缓存」的节点名（界面回显用）。
+// 参数值可能是布尔（属性面板）也可能是字符串 "true"（导入的 JSON / 手工编辑）。
+func cacheNodes(g *dsl.Graph) []string {
+	out := []string{}
+	if g == nil {
+		return out
+	}
 	for i := range g.Nodes {
-		if v, ok := g.Nodes[i].Params["cache"].(bool); ok && v {
-			used = true
-			break
+		var on bool
+		switch t := g.Nodes[i].Params["cache"].(type) {
+		case bool:
+			on = t
+		case string:
+			on = strings.EqualFold(strings.TrimSpace(t), "true")
 		}
+		if !on {
+			continue
+		}
+		// 图上节点没有"显示名"字段（画布上的名字在前端），这里用 id(类型) 表达，
+		// 够用户在执行详情里对上号
+		out = append(out, fmt.Sprintf("%s(%s)", g.Nodes[i].ID, g.Nodes[i].Type))
 	}
-	if !used {
-		return ""
+	return out
+}
+
+// cutCacheInfo 按列宽截断：超长文本在 MySQL 严格模式下会让整条写入失败，
+// 那时连"已启用/未启用"这一句都留不下。
+func cutCacheInfo(text string) string {
+	const max = 240
+	r := []rune(text)
+	if len(r) <= max {
+		return text
 	}
-	name := fmt.Sprintf("ci-cache-p%d", p.ProjectID)
-	if err := k8s.EnsurePVC(ctx, ns, name, s.cfg.CacheSize, s.cfg.CacheAccessMode); err != nil {
-		log.Printf("runtime: 缓存 PVC %s 确保失败（本次运行不使用缓存）: %v", name, err)
-		return ""
-	}
-	return name
+	return string(r[:max]) + "…"
 }
 
 // ============ 状态同步 ============
@@ -532,6 +873,10 @@ func (s *Service) StartSyncer(ctx context.Context) {
 // syncOnce 同步进行中的 run：按 (集群, 项目 ns) 分组，每组固定 2 次 API 调用
 // （List PipelineRun 状态 + List 全部 TaskRun），与并发 run 数解耦。
 func (s *Service) syncOnce(ctx context.Context) {
+	// 先放行队列：上一轮刚有 run 进终态时，本轮就该把排队的那个提交出去。
+	// 放在"没有活跃 run 就 return"之前，否则队列一旦清空活跃集就会永久卡住。
+	s.pumpQueue(ctx)
+
 	var runs []model.CIRun
 	if err := s.db.WithContext(ctx).
 		Where("status IN ?", []string{model.CIRunStatusPending, model.CIRunStatusRunning}).
@@ -629,6 +974,105 @@ func (s *Service) syncOnce(ctx context.Context) {
 // finalizeLostRun 流水线/项目行已删除的活跃 run：尽力解析落点取消集群侧
 // PipelineRun，DB 侧收敛为 cancelled。ns 无法解析时只做 DB 收敛（集群资源交
 // reconcile 按孤儿清理；项目 ns 若已随项目删除，PVC/CR 也随之消失）。
+// pumpQueue 放行排队 run：同流水线没有已提交（pending/running）的 run 时，按入队顺序
+// 放行最早的一个。一次只放行一个——它随即变成 pending，下一轮 pipelineSubmittedRuns
+// 就会挡住同流水线的其它候选，这就是「同流水线串行」的全部实现；
+// 不同流水线（同项目）工作区已按流水线分目录，可以同轮各放行一个、真正并行。
+func (s *Service) pumpQueue(ctx context.Context) {
+	var queued []model.CIRun
+	if err := s.db.WithContext(ctx).
+		Where("status = ?", model.CIRunStatusQueued).
+		Order("id asc").Limit(queuePumpLimit).
+		Find(&queued).Error; err != nil {
+		log.Printf("syncer: 读排队 run 失败: %v", err)
+		return
+	}
+	if len(queued) == 0 {
+		return
+	}
+	pipeIDs := make([]uint, 0, len(queued))
+	seen := map[uint]bool{}
+	for i := range queued {
+		if !seen[queued[i].PipelineID] {
+			seen[queued[i].PipelineID] = true
+			pipeIDs = append(pipeIDs, queued[i].PipelineID)
+		}
+	}
+	var pipes []model.CIPipeline
+	if err := s.db.WithContext(ctx).Where("id IN ?", pipeIDs).Find(&pipes).Error; err != nil {
+		log.Printf("syncer: 读排队 run 的流水线失败: %v", err)
+		return
+	}
+	byPipe := map[uint]model.CIPipeline{}
+	for _, p := range pipes {
+		byPipe[p.ID] = p
+	}
+	served := map[uint]bool{} // 本轮每条流水线只放行一个
+	for i := range queued {
+		q := &queued[i]
+		p, ok := byPipe[q.PipelineID]
+		if !ok {
+			// 流水线在排队期间被删了：这条记录已经没有归属，置失败留痕
+			s.failQueuedLaunch(ctx, q, fmt.Errorf("流水线已删除，排队中的执行无法启动"))
+			continue
+		}
+		if served[q.PipelineID] {
+			continue
+		}
+		// 与 StartRun 同一把流水线锁：放行前若有直接启动正持锁进行中（run 行还没落库，
+		// pipelineSubmittedRuns 查不到它），等下一轮再看；查占用也必须在锁内才有意义
+		mu := s.pipelineLaunchLock(q.PipelineID)
+		if !mu.TryLock() {
+			continue
+		}
+		n, err := s.pipelineSubmittedRuns(ctx, q.PipelineID)
+		if err != nil {
+			mu.Unlock()
+			log.Printf("syncer: 查流水线 %d 在跑的 run 失败: %v", q.PipelineID, err)
+			continue
+		}
+		if n > 0 {
+			mu.Unlock()
+			continue // 前一个还没结束，继续排队
+		}
+		served[q.PipelineID] = true
+		local := p
+		s.launchQueued(ctx, q, &local)
+		mu.Unlock()
+	}
+}
+
+// launchQueued 把一条排队记录按原参数提交。集群不可达时保持 queued（下一轮再试），
+// 其余失败写回该行——不能让界面上一条「排队中」永远不动。
+func (s *Service) launchQueued(ctx context.Context, q *model.CIRun, p *model.CIPipeline) {
+	var proj model.CIProject
+	if err := s.db.WithContext(ctx).First(&proj, p.ProjectID).Error; err != nil {
+		s.failQueuedLaunch(ctx, q, fmt.Errorf("项目不存在或已被删除: %w", err))
+		return
+	}
+	var version model.CIPipelineVersion
+	if err := s.db.WithContext(ctx).Where("id = ? AND pipeline_id = ?", q.VersionID, p.ID).
+		First(&version).Error; err != nil {
+		s.failQueuedLaunch(ctx, q, fmt.Errorf("排队记录的版本已不存在: %w", err))
+		return
+	}
+	k8s, err := s.k8sFor(p.ClusterName)
+	if err != nil {
+		log.Printf("syncer: 放行排队 run %d 时集群不可用，保持排队等下一轮: %v", q.ID, err)
+		return
+	}
+	var ov runOverrides
+	if q.QueuePayload != "" {
+		if err := json.Unmarshal([]byte(q.QueuePayload), &ov); err != nil {
+			log.Printf("syncer: 排队 run %d 的启动参数解析失败（按无覆盖启动）: %v", q.ID, err)
+		}
+	}
+	if _, err := s.launchRun(ctx, p, &version, proj.Namespace, k8s,
+		q.StartedBy, q.TriggerType, ov.Branch, ov.Commit, &runOptions{adopt: q}); err != nil {
+		log.Printf("syncer: 放行排队 run %d 失败: %v", q.ID, err)
+	}
+}
+
 func (s *Service) finalizeLostRun(ctx context.Context, run *model.CIRun) {
 	var meta runMeta
 	var k8s *tekton.Client
@@ -763,11 +1207,9 @@ func (s *Service) syncRun(ctx context.Context, k8s *tekton.Client, meta runMeta,
 		} else {
 			changed = true
 		}
-		// PVC 清理仅在本次回写成功时执行；若被并发取消，取消路径已删过
-		if changed && res.Error == nil && run.PVCName != "" {
-			if err := k8s.DeletePVC(ctx, ns, run.PVCName); err != nil {
-				log.Printf("syncer: delete pvc %s: %v（reconcile 会兜底）", run.PVCName, err)
-			}
+		// PVC 释放仅在本次回写成功时执行；若被并发取消，取消路径已处理过
+		if changed && res.Error == nil {
+			s.releaseWorkspace(ctx, k8s, ns, run.PVCName)
 		}
 	} else if newStatus != run.Status {
 		res := s.db.WithContext(ctx).Model(&model.CIRun{}).
@@ -810,9 +1252,7 @@ func (s *Service) finishRun(ctx context.Context, k8s *tekton.Client, meta runMet
 			[]string{model.CIRunStatusPending, model.CIRunStatusRunning}).
 		Updates(map[string]interface{}{"status": status, "finished_at": now}).Error
 	if k8s != nil {
-		if run.PVCName != "" {
-			_ = k8s.DeletePVC(ctx, meta.NS, run.PVCName)
-		}
+		s.releaseWorkspace(ctx, k8s, meta.NS, run.PVCName)
 		if run.TektonPipelineCR != "" {
 			_ = k8s.DeletePipeline(ctx, meta.NS, run.TektonPipelineCR)
 		}
@@ -1049,6 +1489,60 @@ func taskRunAfterSummary(spec *compiler.PipelineSpec) []string {
 		out = append(out, t.Name+"("+strings.Join(t.RunAfter, ",")+")")
 	}
 	return out
+}
+
+// ciScheduling 运行 Pod 的节点固定策略（配置注入；节点选择与容忍都空时返回 nil，
+// PipelineRun 上不写任何调度字段）。容忍转成 corev1 形状的 map 供 Tekton 序列化。
+func ciScheduling(cfg *config.CIConfig) *tekton.RunScheduling {
+	if len(cfg.NodeSelector) == 0 && len(cfg.Tolerations) == 0 {
+		return nil
+	}
+	tols := make([]map[string]any, 0, len(cfg.Tolerations))
+	for _, t := range cfg.Tolerations {
+		b, err := json.Marshal(t)
+		if err != nil {
+			continue
+		}
+		var m map[string]any
+		if json.Unmarshal(b, &m) == nil && len(m) > 0 {
+			tols = append(tols, m)
+		}
+	}
+	if len(cfg.NodeSelector) == 0 && len(tols) == 0 {
+		return nil
+	}
+	return &tekton.RunScheduling{NodeSelector: cfg.NodeSelector, Tolerations: tols}
+}
+
+// PipelineWorkspaceDir 项目工作区 PVC 里单条流水线的工作子目录。
+// 每条流水线一个目录，git-clone 的清盘只清自己的，同项目不同流水线可并行。
+func PipelineWorkspaceDir(pipelineID uint) string {
+	return fmt.Sprintf("pl-%d", pipelineID)
+}
+
+// bindWorkspaceSubPaths 把任务级 workspace 绑定落到具体子目录（subPath 相对 PVC 根）：
+// source → 该流水线自己的工作子目录；启用缓存时 cache → 项目级共享缓存目录 kc-cache
+// （npm/go 等依赖缓存内容寻址，跨流水线共享安全）。未启用缓存时 cache 绑定原样保留，
+// PipelineRun 不绑 cache workspace，optional 语义让任务脚本拿到空路径自动跳过缓存逻辑。
+// 绝不能把 source/cache 的 subPath 提升到 PipelineRun 级（第二条同 claim 绑定）——
+// 那会让 Tekton affinity-assistant 的去重与任务 Pod 的亲和引用不一致，任务 Pod
+// 亲和不到任何节点，永远 Unschedulable 直到 PipelineRunTimeout（线上已踩）。
+func bindWorkspaceSubPaths(spec *compiler.PipelineSpec, pipelineID uint, cacheSub string) {
+	dir := PipelineWorkspaceDir(pipelineID)
+	for i := range spec.Spec.Tasks {
+		ws := spec.Spec.Tasks[i].Workspaces
+		for j := range ws {
+			switch ws[j].Workspace {
+			case "shared":
+				ws[j].SubPath = dir
+			case "cache":
+				if cacheSub != "" {
+					ws[j].Workspace = "shared"
+					ws[j].SubPath = cacheSub
+				}
+			}
+		}
+	}
 }
 
 // specToMap 把 PipelineSpec 转成 unstructured 可用的 map（经 JSON 中转）。

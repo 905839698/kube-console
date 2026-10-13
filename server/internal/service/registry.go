@@ -126,19 +126,19 @@ type RegProject struct {
 
 // RegRepository Harbor 仓库（项目内镜像）
 type RegRepository struct {
-	Name        string `json:"name"` // project/repo
-	ArtifactCount int  `json:"artifact_count"`
-	PullCount   int64  `json:"pull_count"`
-	UpdateTime  string `json:"update_time"`
+	Name          string `json:"name"` // project/repo
+	ArtifactCount int    `json:"artifact_count"`
+	PullCount     int64  `json:"pull_count"`
+	UpdateTime    string `json:"update_time"`
 }
 
 // RegArtifact 制品（tag 列表内嵌）
 type RegArtifact struct {
-	Digest    string `json:"digest"`
-	Size      int64  `json:"size"`
-	PushTime  string `json:"push_time"`
-	PullTime  string `json:"pull_time"`
-	Tags      []struct {
+	Digest   string `json:"digest"`
+	Size     int64  `json:"size"`
+	PushTime string `json:"push_time"`
+	PullTime string `json:"pull_time"`
+	Tags     []struct {
 		Name string `json:"name"`
 	} `json:"tags"`
 }

@@ -122,5 +122,5 @@ watch(() => cfg.clusterName, () => { if (visible.value) onClusterChange() })
 </script>
 
 <style scoped>
-.form-tip { color: #909399; font-size: 12px; line-height: 1.5; }
+.form-tip { color: #909399; font-size: 13px; line-height: 1.5; }
 </style>

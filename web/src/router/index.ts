@@ -14,6 +14,7 @@ const router = createRouter({
       children: [
         { path: 'overview', name: 'overview', component: () => import('../views/Overview.vue'), meta: { title: '集群总览' } },
         { path: 'monitor', name: 'monitor', component: () => import('../views/Monitor.vue'), meta: { title: '监控' } },
+        { path: 'monitor/controlplane', name: 'controlPlane', component: () => import('../views/ControlPlaneMonitor.vue'), meta: { title: '控制平面组件' } },
         { path: 'monitor/alerts', name: 'alerts', component: () => import('../views/AlertList.vue'), meta: { title: '告警' } },
         { path: 'monitor/grafana', name: 'grafana', component: () => import('../views/GrafanaEmbed.vue'), meta: { title: 'Grafana 面板' } },
         { path: 'monitor/namespace/:name', name: 'namespaceMonitor', component: () => import('../views/NamespaceMonitor.vue'), meta: { title: '命名空间监控' } },
@@ -49,6 +50,8 @@ const router = createRouter({
         { path: 'micro/configs', name: 'nacosConfigs', component: () => import('../views/micro/NacosConfigs.vue'), meta: { title: '配置管理' } },
         // 数据库（KubeBlocks）：按引擎分子菜单，列表跟随顶栏命名空间
         { path: 'kb', redirect: '/kb/mysql' },
+        // 备份仓库是集群级资源、不属于任何引擎，故放在 kb/:engine 之前（静态段优先匹配）
+        { path: 'kb/repos', name: 'kbRepos', component: () => import('../views/KBRepos.vue'), meta: { title: '备份仓库' } },
         { path: 'kb/:engine', name: 'kbDatabases', component: () => import('../views/KBDatabases.vue'), meta: { title: '数据库集群' } },
         // 平台管理（platform-admin 全量；标了 platformView 的对 platform-viewer 只读开放）
         { path: 'users', name: 'users', component: () => import('../views/UserList.vue'), meta: { title: '用户管理', admin: true } },

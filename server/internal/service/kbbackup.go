@@ -14,9 +14,9 @@ import (
 	"sort"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kube-console/server/internal/kube"
@@ -42,12 +42,12 @@ type KBBackupMethod struct {
 }
 
 type KBBackupPolicyView struct {
-	Component string           `json:"component"`
-	Name      string           `json:"name"`
-	RepoName  string           `json:"repoName"`
-	Phase     string           `json:"phase,omitempty"`
-	Methods   []KBBackupMethod `json:"methods"`
-	CredSecret string          `json:"credSecret,omitempty"` // 备份用的连接凭据 Secret（只报名字）
+	Component  string           `json:"component"`
+	Name       string           `json:"name"`
+	RepoName   string           `json:"repoName"`
+	Phase      string           `json:"phase,omitempty"`
+	Methods    []KBBackupMethod `json:"methods"`
+	CredSecret string           `json:"credSecret,omitempty"` // 备份用的连接凭据 Secret（只报名字）
 }
 
 type KBScheduleItem struct {
@@ -59,36 +59,36 @@ type KBScheduleItem struct {
 }
 
 type KBScheduleView struct {
-	Component  string          `json:"component"`
-	Name       string          `json:"name"`
-	PolicyName string          `json:"policyName"`
-	Phase      string          `json:"phase,omitempty"`
+	Component  string           `json:"component"`
+	Name       string           `json:"name"`
+	PolicyName string           `json:"policyName"`
+	Phase      string           `json:"phase,omitempty"`
 	Items      []KBScheduleItem `json:"items"`
 }
 
 type KBBackupView struct {
-	Name        string `json:"name"`
-	Namespace   string `json:"namespace"`
-	Method      string `json:"method"`
-	Policy      string `json:"policy"`
-	Phase       string `json:"phase"`
+	Name          string `json:"name"`
+	Namespace     string `json:"namespace"`
+	Method        string `json:"method"`
+	Policy        string `json:"policy"`
+	Phase         string `json:"phase"`
 	FailureReason string `json:"failureReason,omitempty"`
-	Repo        string `json:"repo,omitempty"`
-	TotalSize   string `json:"totalSize,omitempty"`
-	Retention   string `json:"retention,omitempty"`
-	CreatedAt   string `json:"createdAt"`
-	StartedAt   string `json:"startedAt,omitempty"`
-	CompletedAt string `json:"completedAt,omitempty"`
-	Expiration  string `json:"expiration,omitempty"`
+	Repo          string `json:"repo,omitempty"`
+	TotalSize     string `json:"totalSize,omitempty"`
+	Retention     string `json:"retention,omitempty"`
+	CreatedAt     string `json:"createdAt"`
+	StartedAt     string `json:"startedAt,omitempty"`
+	CompletedAt   string `json:"completedAt,omitempty"`
+	Expiration    string `json:"expiration,omitempty"`
 }
 
 type KBBackupAction struct {
-	Name       string `json:"name"`
-	Phase      string `json:"phase,omitempty"`
-	TargetPod  string `json:"targetPod,omitempty"`
-	TotalSize  string `json:"totalSize,omitempty"`
-	StartAt    string `json:"startAt,omitempty"`
-	CompletedAt string `json:"completedAt,omitempty"`
+	Name          string `json:"name"`
+	Phase         string `json:"phase,omitempty"`
+	TargetPod     string `json:"targetPod,omitempty"`
+	TotalSize     string `json:"totalSize,omitempty"`
+	StartAt       string `json:"startAt,omitempty"`
+	CompletedAt   string `json:"completedAt,omitempty"`
 	FailureReason string `json:"failureReason,omitempty"`
 }
 
@@ -100,23 +100,25 @@ type KBBackupDetail struct {
 }
 
 type KBRepoView struct {
-	Name      string `json:"name"`
-	Phase     string `json:"phase"`
-	Default   bool   `json:"default"`
-	Provider  string `json:"provider,omitempty"`
+	Name         string `json:"name"`
+	Phase        string `json:"phase"`
+	Default      bool   `json:"default"`
+	Provider     string `json:"provider,omitempty"`
 	AccessMethod string `json:"accessMethod,omitempty"`
 	PathPrefix   string `json:"pathPrefix,omitempty"`
-	StorageClass  string `json:"storageClass,omitempty"`
-	CreatedAt string `json:"createdAt"`
+	StorageClass string `json:"storageClass,omitempty"`
+	// Config 是 provider 的非敏感参数（bucket/region/endpoint…），凭证不在这里
+	Config    map[string]string `json:"config,omitempty"`
+	CreatedAt string            `json:"createdAt"`
 }
 
 type KBRestoreView struct {
-	Name       string `json:"name"`
-	Backup     string `json:"backup,omitempty"`
-	Phase      string `json:"phase"`
-	Message    string `json:"message,omitempty"`
-	Duration   string `json:"duration,omitempty"`
-	CreatedAt  string `json:"createdAt"`
+	Name        string `json:"name"`
+	Backup      string `json:"backup,omitempty"`
+	Phase       string `json:"phase"`
+	Message     string `json:"message,omitempty"`
+	Duration    string `json:"duration,omitempty"`
+	CreatedAt   string `json:"createdAt"`
 	CompletedAt string `json:"completedAt,omitempty"`
 }
 
@@ -133,18 +135,7 @@ func KBListBackupRepos(ctx context.Context, c *kube.Client) ([]KBRepoView, error
 	}
 	out := make([]KBRepoView, 0, len(list.Items))
 	for i := range list.Items {
-		it := &list.Items[i]
-		v := KBRepoView{Name: it.GetName()}
-		v.Provider, _, _ = unstructured.NestedString(it.Object, "spec", "storageProviderRef")
-		v.AccessMethod, _, _ = unstructured.NestedString(it.Object, "spec", "accessMethod")
-		v.PathPrefix, _, _ = unstructured.NestedString(it.Object, "spec", "pathPrefix")
-		v.Phase, _, _ = unstructured.NestedString(it.Object, "status", "phase")
-		v.Default, _, _ = unstructured.NestedBool(it.Object, "status", "isDefault")
-		v.StorageClass, _, _ = unstructured.NestedString(it.Object, "status", "generatedStorageClassName")
-		if ts := it.GetCreationTimestamp(); !ts.IsZero() {
-			v.CreatedAt = ts.Format("2006-01-02 15:04:05")
-		}
-		out = append(out, v)
+		out = append(out, kbRepoViewOf(&list.Items[i]))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -424,18 +415,18 @@ func KBListBackups(ctx context.Context, c *kube.Client, ns, cluster string) ([]K
 
 func backupView(it *unstructured.Unstructured) KBBackupView {
 	v := KBBackupView{
-		Name:      it.GetName(),
-		Namespace: it.GetNamespace(),
-		Method:    str(it, "spec", "backupMethod"),
-		Policy:    str(it, "spec", "backupPolicyName"),
-		Retention: str(it, "spec", "retentionPeriod"),
-		Phase:     str(it, "status", "phase"),
+		Name:          it.GetName(),
+		Namespace:     it.GetNamespace(),
+		Method:        str(it, "spec", "backupMethod"),
+		Policy:        str(it, "spec", "backupPolicyName"),
+		Retention:     str(it, "spec", "retentionPeriod"),
+		Phase:         str(it, "status", "phase"),
 		FailureReason: str(it, "status", "failureReason"),
-		Repo:      str(it, "status", "backupRepoName"),
-		TotalSize: str(it, "status", "totalSize"),
-		Expiration: str(it, "status", "expiration"),
-		StartedAt: kbTime(str(it, "status", "startTimestamp")),
-		CompletedAt: kbTime(str(it, "status", "completionTimestamp")),
+		Repo:          str(it, "status", "backupRepoName"),
+		TotalSize:     str(it, "status", "totalSize"),
+		Expiration:    str(it, "status", "expiration"),
+		StartedAt:     kbTime(str(it, "status", "startTimestamp")),
+		CompletedAt:   kbTime(str(it, "status", "completionTimestamp")),
 	}
 	if ts := it.GetCreationTimestamp(); !ts.IsZero() {
 		v.CreatedAt = ts.Format("2006-01-02 15:04:05")

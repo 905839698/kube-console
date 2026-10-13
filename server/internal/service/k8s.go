@@ -115,8 +115,8 @@ type OverviewStats struct {
 	DaemonSets   int           `json:"daemonSets"`
 	Services     int           `json:"services"`
 	Ingresses    int           `json:"ingresses"`
-	CPUCapacity  string        `json:"cpuCapacity"`  // 核
-	MemCapacity  string        `json:"memCapacity"`  // Gi
+	CPUCapacity  string        `json:"cpuCapacity"` // 核
+	MemCapacity  string        `json:"memCapacity"` // Gi
 	NodesList    []NodeSummary `json:"nodesList"`
 }
 
@@ -287,10 +287,10 @@ func nodeSummary(n *corev1.Node, runsCPPods bool) NodeSummary {
 	}
 	return NodeSummary{
 		Name: n.Name, Status: ready, Roles: strings.Join(roles, ","), InternalIP: ip,
-		Version: n.Status.NodeInfo.KubeletVersion,
-		KernelVersion: n.Status.NodeInfo.KernelVersion,
+		Version:          n.Status.NodeInfo.KubeletVersion,
+		KernelVersion:    n.Status.NodeInfo.KernelVersion,
 		ContainerRuntime: n.Status.NodeInfo.ContainerRuntimeVersion,
-		CPUCores: cpu, MemGi: mem,
+		CPUCores:         cpu, MemGi: mem,
 		Age: ageOf(n.CreationTimestamp),
 	}
 }
@@ -335,14 +335,14 @@ func (s *K8sService) DeleteNamespace(ctx context.Context, c *kube.Client, name s
 
 type NodeDetail struct {
 	NodeSummary
-	Labels        map[string]string `json:"labels"`
-	Capacity      map[string]string `json:"capacity"`
-	Allocatable   map[string]string `json:"allocatable"`
-	Conditions    []CondItem        `json:"conditions"`
-	Taints        []string          `json:"taints"`
-	TaintItems []TaintItem `json:"taintItems"`
-	Schedulable bool       `json:"schedulable"`
-	Pods        []PodItem  `json:"pods"`
+	Labels      map[string]string `json:"labels"`
+	Capacity    map[string]string `json:"capacity"`
+	Allocatable map[string]string `json:"allocatable"`
+	Conditions  []CondItem        `json:"conditions"`
+	Taints      []string          `json:"taints"`
+	TaintItems  []TaintItem       `json:"taintItems"`
+	Schedulable bool              `json:"schedulable"`
+	Pods        []PodItem         `json:"pods"`
 	// KernelVersion / ContainerRuntime 由内嵌 NodeSummary 提供
 	OSImage string `json:"osImage"`
 }
@@ -597,8 +597,8 @@ func (s *K8sService) listEvents(ctx context.Context, c *kube.Client, namespace, 
 	for _, e := range list.Items {
 		items = append(items, EventItem{
 			Type: e.Type, Reason: e.Reason, Message: e.Message,
-			Object: e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name,
-			Count:  e.Count,
+			Object:    e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name,
+			Count:     e.Count,
 			FirstSeen: e.FirstTimestamp.Format("2006-01-02 15:04:05"),
 			LastSeen:  e.LastTimestamp.Format("2006-01-02 15:04:05"),
 		})
@@ -629,29 +629,29 @@ type WorkloadItem struct {
 }
 
 type WorkloadDetail struct {
-	Kind       string           `json:"kind"`
-	Name       string           `json:"name"`
-	Namespace  string           `json:"namespace"`
+	Kind       string                     `json:"kind"`
+	Name       string                     `json:"name"`
+	Namespace  string                     `json:"namespace"`
 	Replicas   kube.WorkloadReplicaStatus `json:"replicas"`
-	Selector   map[string]string `json:"selector"`
-	Strategy   string           `json:"strategy"`
-	Images     []string         `json:"images"`
-	Labels     map[string]string `json:"labels"`
-	Age        string           `json:"age"`
-	Containers []ContainerInfo  `json:"containers"`
-	Pods       []PodItem        `json:"pods"`
-	Events     []EventItem      `json:"events"`
+	Selector   map[string]string          `json:"selector"`
+	Strategy   string                     `json:"strategy"`
+	Images     []string                   `json:"images"`
+	Labels     map[string]string          `json:"labels"`
+	Age        string                     `json:"age"`
+	Containers []ContainerInfo            `json:"containers"`
+	Pods       []PodItem                  `json:"pods"`
+	Events     []EventItem                `json:"events"`
 }
 
 type ContainerInfo struct {
-	Name         string `json:"name"`
-	Image        string `json:"image"`
-	Command      string `json:"command"`
-	Ports        string `json:"ports"`
-	Requests     string `json:"requests"`
-	Limits       string `json:"limits"`
-	ReadyProbe   string `json:"readyProbe"`
-	LiveProbe    string `json:"liveProbe"`
+	Name       string `json:"name"`
+	Image      string `json:"image"`
+	Command    string `json:"command"`
+	Ports      string `json:"ports"`
+	Requests   string `json:"requests"`
+	Limits     string `json:"limits"`
+	ReadyProbe string `json:"readyProbe"`
+	LiveProbe  string `json:"liveProbe"`
 }
 
 var workloadKinds = map[string]bool{
@@ -1152,7 +1152,7 @@ func (s *K8sService) ListGeneric(ctx context.Context, c *kube.Client, kind, name
 					Kind: kind, Name: name, Namespace: u.GetNamespace(),
 					Summary: s.genericSummary(kind, &u), Age: ageOf(u.GetCreationTimestamp()),
 					Addresses: serviceAddresses(&u),
-					Labels: u.GetLabels(),
+					Labels:    u.GetLabels(),
 				})
 			}
 			break
@@ -1648,6 +1648,8 @@ func (s *K8sService) syncServiceMonitorOne(ctx context.Context, c *kube.Client, 
 		"metadata": map[string]interface{}{
 			"name":      name,
 			"namespace": ns,
+			// 不贴 Prometheus 的 serviceMonitorSelector 标签 = 建出来永远不被抓取（无报错无数据）
+			"labels": KBMergeMonitorLabels(nil, KBMonitorLabelsFor(ctx, c, kbSelServiceMonitor).Labels),
 		},
 		"spec": map[string]interface{}{
 			"selector": map[string]interface{}{"matchLabels": selector},
@@ -1763,6 +1765,7 @@ func (s *K8sService) syncPodMonitorOne(ctx context.Context, c *kube.Client, obj 
 		"metadata": map[string]interface{}{
 			"name":      name,
 			"namespace": ns,
+			"labels":    KBMergeMonitorLabels(nil, KBMonitorLabelsFor(ctx, c, kbSelPodMonitor).Labels),
 		},
 		"spec": map[string]interface{}{
 			"selector": map[string]interface{}{"matchLabels": selector},
@@ -2345,17 +2348,17 @@ func dataKeys(u *unstructured.Unstructured) []string {
 
 // RolloutItem Deployment 的一个历史版本（由 ReplicaSet 呈现）
 type RolloutItem struct {
-	Revision int    `json:"revision"`
-	Name     string `json:"name"`
-	Image    string `json:"image"`
-	Replicas int32  `json:"replicas"`
-	Age      string `json:"age"`
-	Current  bool   `json:"current"` // 模板与 Deployment 当前一致
+	Revision    int    `json:"revision"`
+	Name        string `json:"name"`
+	Image       string `json:"image"`
+	Replicas    int32  `json:"replicas"`
+	Age         string `json:"age"`
+	Current     bool   `json:"current"` // 模板与 Deployment 当前一致
 	ChangeCause string `json:"changeCause"`
 }
 
 const (
-	revisionAnn  = "deployment.kubernetes.io/revision"
+	revisionAnn    = "deployment.kubernetes.io/revision"
 	changeCauseAnn = "deployment.kubernetes.io/change-cause"
 )
 

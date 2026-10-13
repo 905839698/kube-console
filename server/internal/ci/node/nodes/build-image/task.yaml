@@ -1,6 +1,6 @@
 # build-image Tekton Task 模板（BuildKit buildctl + buildkitd，非 DinD）
-# 构建并推送：buildctl 连集群内 buildkitd（deployments/buildkit.yaml），
-# buildkitd 兼容自签名 Harbor（buildkitd.toml insecure），基础镜像拉取与产物推送都走它。
+# 构建并推送：buildctl 连集群内 buildkitd（deploy/06-ci/buildkitd.yaml），
+# buildkitd 兼容自签名 registry（buildkitd.toml insecure），基础镜像拉取与产物推送都走它。
 # 镜像漏洞扫描由 Harbor 内置 Trivy 扫描器承担（推送后自动扫描），本节点不含扫描 step。
 name: build-image
 description: "BuildKit build {{registry}}/{{repository}}:{{tag}}"
@@ -53,36 +53,17 @@ steps:
       {{preShell}}
       # 自签名仓库：registry token 获取由 buildctl 客户端发起（buildkitd 经
       # session Auth.FetchToken 委托给客户端），客户端进程信任库也须含内网 CA
-      # （Go TLS 读 SSL_CERT_FILE）；证书续期后同步更新此处与 deployments/buildkit.yaml
+      # （Go TLS 读 SSL_CERT_FILE）。CA 不写死在模板里，由平台配置注入：
+      # ci.registryCAFile / KC_CI_REGISTRY_CA_FILE 渲染为下方 heredoc 的内容。
+      # 未配置时注入空串，下面按文件为空跳过，退回系统信任库（registry 用公共证书）。
       mkdir -p /tmp/bk-ca
-      cat > /tmp/bk-ca/harbor-ca.pem <<'CAEOF'
-      -----BEGIN CERTIFICATE-----
-      MIID/TCCAuWgAwIBAgIUTEtMvUvJU0hfcphNntzlNoxXQ48wDQYJKoZIhvcNAQEL
-      BQAwZDELMAkGA1UEBhMCQ04xETAPBgNVBAgTCEhhbmdaaG91MQswCQYDVQQHEwJY
-      UzEMMAoGA1UEChMDazhzMQ8wDQYDVQQLEwZTeXN0ZW0xFjAUBgNVBAMTDWt1YmVy
-      bmV0ZXMtY2EwIBcNMjUwOTI4MDkzODAwWhgPMjA3NTA5MTYwOTM4MDBaMF0xCzAJ
-      BgNVBAYTAkNOMREwDwYDVQQIEwhIYW5nWmhvdTELMAkGA1UEBxMCWFMxDDAKBgNV
-      BAoTA2s4czEPMA0GA1UECxMGU3lzdGVtMQ8wDQYDVQQDEwZoYXJib3IwggEiMA0G
-      CSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC40EueoftxTW0jBVLUaXGzoAuLYz1L
-      SWK/l3fBxouirp4bigjGB9ihiVEGDPW9M5c4ib4j4srQc+mKv32fsCFpSjV6/wuH
-      Otarqw3GycLsFRS1T4rBzjbDLuv6v4YP9bkF4MlW3aiX/W0jbTCTT9RrzoquvMJs
-      YVB3bLAwiSVkvysHxh0f5i3Jfdoflm1zK88R0guUsRo9NML/yoEE0V4ubdrB8geY
-      VuAJsGQkx2i8gvV2nJsdaf0Etag+nPl9ltpyoPTS84nbo+KBua3itCPq52E2I0HK
-      WBt69smYSIEgzdmW16bZBzsOuoSYx2FH5SgMd0PYEnKMIdF8sh+BSbpZAgMBAAGj
-      gaswgagwDgYDVR0PAQH/BAQDAgWgMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEF
-      BQcDAjAMBgNVHRMBAf8EAjAAMB0GA1UdDgQWBBR8uWjTKzsAknl/dQN6/ZbkI4+y
-      WzAfBgNVHSMEGDAWgBTtpEBTNBrySTjGhYQBMlIRrFuuiDApBgNVHREEIjAgghJo
-      YXJib3IuY3F5eHB0LnNpdGWHBH8AAAGHBAprCGswDQYJKoZIhvcNAQELBQADggEB
-      AAaI3ARmk2PlalTCpdg9BREHbKo92TDRAYttuL1Mg/ooquP09KkudguosXiBrJRD
-      E/XRmHM5nCE0MYO+vTyo45QebfYbs1ZLh3iJ1gso/fSwNCJKaMfqwAX46wET+mJK
-      Y0PbeK960ViR7baJtR8uV4/LfGzNUFnqF4Pg4pH9paGH22b/0sl4GHH8f9H8pfi7
-      j1wcmvDKCmscDeQYN4hSo0mcDboOxctxTrNMKe5HoVvj9p5MaQkJ/7lO4TogcPbh
-      CMZg6Uf4SRDzhg+OjbpCq3Pm2ThTKxztDBGlfNELhfNC75XeCDkIxRv0qrqgNcoP
-      4UOaClVZkbJBAW0l5SiCJiw=
-      -----END CERTIFICATE-----
+      cat > /tmp/bk-ca/registry-ca.pem <<'CAEOF'
+      {{registryCA}}
       CAEOF
-      cat /etc/ssl/certs/ca-certificates.crt /tmp/bk-ca/harbor-ca.pem > /tmp/bk-ca/bundle.pem
-      export SSL_CERT_FILE=/tmp/bk-ca/bundle.pem
+      if [ -s /tmp/bk-ca/registry-ca.pem ]; then
+        cat /etc/ssl/certs/ca-certificates.crt /tmp/bk-ca/registry-ca.pem > /tmp/bk-ca/bundle.pem
+        export SSL_CERT_FILE=/tmp/bk-ca/bundle.pem
+      fi
       IMAGE=$(printf '%s' "$IMAGE" | tr -d '[:space:]')
       # Registry 认证：优先 dockerconfig 凭证文件（runtime 挂载 $DOCKER_CONFIG/config.json，
       # buildctl 经 session 把凭证传给 buildkitd），回退 basic username/password 拼临时 config
@@ -188,7 +169,7 @@ steps:
   - name: generate-sbom
     # 官方 syft 镜像是 distroless（无 /bin/sh），Tekton 脚本 shebang 执行会
     # ENOENT；用 busybox+syft 静态二进制的包装镜像。sh2 版修正 USER：
-    # harbor busybox 默认 65532，而 Tekton 结果文件由 init 以 root 0444
+    # busybox 默认 65532，而 Tekton 结果文件由 init 以 root 0444
     # 预创建，非 root step 截断写入会 Permission denied
     image: {{imageRegistry}}/syft:1.0.0-sh2
     env:

@@ -378,10 +378,10 @@ onMounted(() => {
 
 <style scoped>
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
-.hint { color: #909399; font-size: 12px; }
+.hint { color: #909399; font-size: 13px; }
 .sec-title { margin: 6px 0 8px; font-size: 13px; color: #303133; }
 .level-group, .role-group { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .level-radio, .role-radio { height: auto; align-items: flex-start; padding: 6px 0; white-space: normal; }
 .level-radio :deep(.el-radio__label), .role-radio :deep(.el-radio__label) { line-height: 1.5; }
-.sub { color: #909399; font-size: 12px; font-weight: 400; }
+.sub { color: #909399; font-size: 13px; font-weight: 400; }
 </style>

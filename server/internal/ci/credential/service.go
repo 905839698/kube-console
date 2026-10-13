@@ -56,6 +56,14 @@ func (s *Service) secretNamespaces(ctx context.Context, cluster string, projectI
 
 // syncSecret 把 Secret 同步到该凭证的目标 ns。
 func (s *Service) syncSecret(ctx context.Context, k8s *tekton.Client, cluster, name string, projectID *uint, data map[string][]byte) error {
+	// 平台 ns 是权威副本落点、属平台自有设施：新环境没预建时自动建一次
+	// （幂等）。否则首次保存凭证只会看到 "写入 K8s Secret 失败:
+	// namespaces ci-platform not found"——明明选对项目了却报错，无从下手。
+	if err := k8s.EnsureNamespace(ctx, s.cfg.PlatformNS); err != nil {
+		return errcode.Newf(errcode.DepUnavailable,
+			"准备平台凭据命名空间 %s 失败: %v（若平台账号无建 ns 权限，先手动创建它，或把 ci.platformNamespace 指到已存在 ns）",
+			s.cfg.PlatformNS, err)
+	}
 	var lastErr error
 	for _, ns := range s.secretNamespaces(ctx, cluster, projectID) {
 		if err := k8s.EnsureSecret(ctx, ns, name, data); err != nil {

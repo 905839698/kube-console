@@ -208,5 +208,5 @@ onMounted(load)
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .header-right { display: flex; align-items: center; gap: 10px; }
 .muted { color: #909399; }
-.mono { font-family: Consolas, monospace; font-size: 12px; }
+.mono { font-family: Consolas, monospace; font-size: 13px; }
 </style>

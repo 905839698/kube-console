@@ -55,10 +55,39 @@
             </el-select>
             <el-input v-if="e.sourceType === 'value'" v-model="e.value" placeholder="值" size="small" style="flex: 1" />
             <template v-else-if="e.sourceType === 'configMapKeyRef' || e.sourceType === 'secretKeyRef'">
-              <el-input v-model="e.refName" :placeholder="e.sourceType === 'configMapKeyRef' ? 'ConfigMap 名' : 'Secret 名'" size="small" style="flex: 1" />
-              <el-input v-model="e.key" placeholder="键" size="small" style="flex: 1" />
+              <el-select
+                v-model="e.refName"
+                filterable
+                allow-create
+                default-first-option
+                clearable
+                size="small"
+                style="flex: 1"
+                :loading="refNamesBusy(envRefKind(e))"
+                :placeholder="e.sourceType === 'configMapKeyRef' ? 'ConfigMap 名（展开自动列出）' : 'Secret 名（展开自动列出）'"
+                @visible-change="(v: boolean) => v && loadRefNames(envRefKind(e))"
+                @change="() => { e.key = ''; if (e.refName) loadRefKeys(envRefKind(e), e.refName) }"
+              >
+                <el-option v-for="n in refNamesOf(envRefKind(e))" :key="n" :label="n" :value="n" />
+              </el-select>
+              <el-select
+                v-model="e.key"
+                filterable
+                allow-create
+                default-first-option
+                clearable
+                size="small"
+                style="flex: 1"
+                :loading="refKeysBusy(envRefKind(e), e.refName)"
+                placeholder="键（展开自动列出）"
+                @visible-change="(v: boolean) => v && e.refName && loadRefKeys(envRefKind(e), e.refName)"
+              >
+                <el-option v-for="k in refKeysOf(envRefKind(e), e.refName)" :key="k" :label="k" :value="k" />
+              </el-select>
             </template>
-            <el-input v-else-if="e.sourceType === 'fieldRef'" v-model="e.fieldPath" placeholder="如 metadata.namespace / status.podIP" size="small" style="flex: 1" />
+            <el-select v-else-if="e.sourceType === 'fieldRef'" v-model="e.fieldPath" filterable allow-create default-first-option size="small" style="flex: 1" placeholder="如 metadata.namespace">
+              <el-option v-for="f in FIELD_PATHS" :key="f" :label="f" :value="f" />
+            </el-select>
             <el-button size="small" type="danger" text @click="c.envList.splice(ei, 1)"><el-icon><Delete /></el-icon></el-button>
           </div>
           <el-button size="small" type="primary" plain @click="addEnv"><el-icon><Plus /></el-icon>添加变量</el-button>
@@ -154,12 +183,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ProbeEditor from './ProbeEditor.vue'
-import { registryApi } from '../../api'
+import { k8sApi, registryApi } from '../../api'
 import { quantityError } from '../../utils/kube-validators'
+import { load as yamlLoad } from 'js-yaml'
 
-const props = defineProps<{ c: any; volumes: any[]; init?: boolean }>()
+const props = defineProps<{ c: any; volumes: any[]; init?: boolean; namespace?: string }>()
 
 const qtyErr = (v: any, kind: 'cpu' | 'memory' | 'storage') => quantityError(v, kind)
 
@@ -232,7 +262,88 @@ function onSourceType(e: any) {
   e.refName = ''
   e.key = ''
   e.fieldPath = ''
+  if (e.sourceType === 'secretKeyRef' || e.sourceType === 'configMapKeyRef') loadRefNames(envRefKind(e))
 }
+
+// ---- 环境变量引用下拉：Secret/ConfigMap 名称与键自动列出，Pod 字段给常用 fieldPath ----
+const FIELD_PATHS = [
+  'metadata.name', 'metadata.namespace', 'metadata.uid', 'metadata.generateName',
+  'metadata.labels', 'metadata.annotations',
+  'spec.nodeName', 'spec.serviceAccountName',
+  'status.hostIP', 'status.podIP', 'status.podIPs',
+]
+
+// 列表按 命名空间/kind 缓存、键按 命名空间/kind/名称 缓存。
+// busy 必须是响应式：loading prop 若读普通对象，请求完成后不会有渲染重算它，
+// 下拉会永久停在「加载中」（真机复现过）。失败不写缓存，下次展开可重试。
+const refNames = ref<Record<string, string[]>>({})
+const refKeys = ref<Record<string, string[]>>({})
+const refBusy = ref<Record<string, boolean>>({})
+function setRefBusy(ck: string, v: boolean) {
+  refBusy.value = { ...refBusy.value, [ck]: v }
+}
+
+function envRefKind(e: any) {
+  return e.sourceType === 'secretKeyRef' ? 'secrets' : 'configmaps'
+}
+function refNamesOf(kind: string) {
+  return refNames.value[`${props.namespace || ''}/${kind}`] || []
+}
+function refKeysOf(kind: string, name: string) {
+  return refKeys.value[`${props.namespace || ''}/${kind}/${name}`] || []
+}
+function refNamesBusy(kind: string) {
+  return !!refBusy.value[`${props.namespace || ''}/${kind}`]
+}
+function refKeysBusy(kind: string, name: string) {
+  return !!refBusy.value[`${props.namespace || ''}/${kind}/${name}`]
+}
+
+async function loadRefNames(kind: string) {
+  const ns = props.namespace || ''
+  const ck = `${ns}/${kind}`
+  if (!ns || refNames.value[ck] || refBusy.value[ck]) return
+  setRefBusy(ck, true)
+  try {
+    const list = await k8sApi.resources(kind, ns)
+    refNames.value = { ...refNames.value, [ck]: list.map((x) => x.name) }
+  } catch {
+    /* 失败不缓存：保持可重试 */
+  } finally {
+    setRefBusy(ck, false)
+  }
+}
+
+async function loadRefKeys(kind: string, name: string) {
+  const ns = props.namespace || ''
+  const ck = `${ns}/${kind}/${name}`
+  if (!ns || !name || refKeys.value[ck] || refBusy.value[ck]) return
+  setRefBusy(ck, true)
+  try {
+    const r = await k8sApi.resourceYaml(kind, ns, name)
+    const obj: any = yamlLoad(r.yaml) || {}
+    const keys = [
+      ...Object.keys(obj.data || {}),
+      ...Object.keys(obj.binaryData || {}),
+      ...Object.keys(obj.stringData || {}),
+    ]
+    refKeys.value = { ...refKeys.value, [ck]: [...new Set(keys)] }
+  } catch {
+    /* 失败不缓存：保持可重试 */
+  } finally {
+    setRefBusy(ck, false)
+  }
+}
+
+// 打开编辑时预取已有引用行的名称/键，下拉展开即有选项
+onMounted(() => {
+  for (const e of props.c.envList || []) {
+    if (e.sourceType === 'secretKeyRef' || e.sourceType === 'configMapKeyRef') {
+      loadRefNames(envRefKind(e))
+      if (e.refName) loadRefKeys(envRefKind(e), e.refName)
+    }
+  }
+})
 </script>
 
 <style scoped>
@@ -245,7 +356,7 @@ function onSourceType(e: any) {
 .res-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; width: 100%; }
 .sec-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; width: 100%; align-items: center; }
 .res-item { display: flex; flex-direction: column; gap: 2px; }
-.res-item > span { font-size: 12px; color: #909399; }
+.res-item > span { font-size: 13px; color: #909399; }
 .qty-err :deep(.el-input__inner) { color: #f56c6c; }
-.qty-msg { color: #f56c6c; font-size: 11px; font-style: normal; line-height: 1.4; }
+.qty-msg { color: #f56c6c; font-size: 12px; font-style: normal; line-height: 1.4; }
 </style>

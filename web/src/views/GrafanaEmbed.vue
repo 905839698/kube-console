@@ -190,10 +190,10 @@ onMounted(loadFavs)
 .grafana-page { display: flex; flex-direction: column; height: 100%; }
 .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .label { font-weight: 600; }
-.hint { color: #909399; font-size: 12px; word-break: break-all; }
+.hint { color: #909399; font-size: 13px; word-break: break-all; }
 .frame-wrap { flex: 1; min-height: 60vh; }
 .grafana-frame { width: 100%; height: calc(100vh - 180px); min-height: 560px; border: 1px solid var(--kc-border, #dcdfe6); border-radius: 4px; background: #fff; }
 .guide { text-align: left; max-width: 560px; color: #606266; font-size: 13px; line-height: 1.9; }
-.guide pre { background: #f5f7fa; padding: 10px 14px; border-radius: 6px; font-size: 12px; line-height: 1.6; }
-.cfg-tip { color: #909399; font-size: 12px; line-height: 1.5; margin-top: 4px; }
+.guide pre { background: #f5f7fa; padding: 10px 14px; border-radius: 6px; font-size: 13px; line-height: 1.6; }
+.cfg-tip { color: #909399; font-size: 13px; line-height: 1.5; margin-top: 4px; }
 </style>

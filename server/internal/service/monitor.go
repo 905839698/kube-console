@@ -567,22 +567,21 @@ func series(result []PromResult) [][]float64 {
 
 // ClusterMonitor 集群级监控数据
 type ClusterMonitor struct {
-	CPUCores         int                `json:"cpuCores"`
-	MemTotalGi       float64            `json:"memTotalGi"`
-	CPUUsagePct      float64            `json:"cpuUsagePct"`
-	MemUsagePct      float64            `json:"memUsagePct"`
-	DiskUsagePct     float64            `json:"diskUsagePct"`
-	NetRxMBs         float64            `json:"netRxMBs"`
-	NetTxMBs         float64            `json:"netTxMBs"`
-	CPUUsageTrend    [][]float64        `json:"cpuUsageTrend"`
-	MemUsageTrend    [][]float64        `json:"memUsageTrend"`
-	DiskUsageTrend   [][]float64        `json:"diskUsageTrend"`
-	NetRxTrend       [][]float64        `json:"netRxTrend"`
-	NetTxTrend       [][]float64        `json:"netTxTrend"`
-	NodeCPURank      []RankItem         `json:"nodeCpuRank"`
-	NodeMemRank      []RankItem         `json:"nodeMemRank"`
-	NamespaceCPURank []RankItem         `json:"namespaceCpuRank"`
-	ControlPlane     []ControlPlaneItem `json:"controlPlane"`
+	CPUCores         int         `json:"cpuCores"`
+	MemTotalGi       float64     `json:"memTotalGi"`
+	CPUUsagePct      float64     `json:"cpuUsagePct"`
+	MemUsagePct      float64     `json:"memUsagePct"`
+	DiskUsagePct     float64     `json:"diskUsagePct"`
+	NetRxMBs         float64     `json:"netRxMBs"`
+	NetTxMBs         float64     `json:"netTxMBs"`
+	CPUUsageTrend    [][]float64 `json:"cpuUsageTrend"`
+	MemUsageTrend    [][]float64 `json:"memUsageTrend"`
+	DiskUsageTrend   [][]float64 `json:"diskUsageTrend"`
+	NetRxTrend       [][]float64 `json:"netRxTrend"`
+	NetTxTrend       [][]float64 `json:"netTxTrend"`
+	NodeCPURank      []RankItem  `json:"nodeCpuRank"`
+	NodeMemRank      []RankItem  `json:"nodeMemRank"`
+	NamespaceCPURank []RankItem  `json:"namespaceCpuRank"`
 	// Request/Limit 配额视角（kube-state-metrics；对全集群可调度资源的分配情况）
 	CPURequestsCores    float64 `json:"cpuRequestsCores"`
 	CPULimitsCores      float64 `json:"cpuLimitsCores"`
@@ -590,15 +589,12 @@ type ClusterMonitor struct {
 	MemRequestsGi       float64 `json:"memRequestsGi"`
 	MemLimitsGi         float64 `json:"memLimitsGi"`
 	MemAllocatableGi    float64 `json:"memAllocatableGi"`
-	// PV 存储用量（kubelet_volume_stats；部分环境未采集时为 0）
+	// PV 存储用量。数量/总容量 = kube-state-metrics 的 PV 容量（spec.capacity 口径）；
+	// 已用率与 PVC Top = kubelet volume stats（挂载点文件系统口径，部分环境未采集时为 0）
 	PvCount   int        `json:"pvCount"`
 	PvTotalGi float64    `json:"pvTotalGi"`
 	PvUsedPct float64    `json:"pvUsedPct"`
 	PvTopUsed []RankItem `json:"pvTopUsed"` // PVC 使用率 Top（name = ns/pvc）
-	// 控制面趋势
-	ApiserverQpsTrend [][]float64 `json:"apiserverQpsTrend"`
-	CoreDnsQpsTrend   [][]float64 `json:"coreDnsQpsTrend"`
-	EtcdDbSizeTrend   [][]float64 `json:"etcdDbSizeTrend"` // Gi
 }
 
 type RankItem struct {
@@ -606,151 +602,12 @@ type RankItem struct {
 	Value float64 `json:"value"` // 百分比
 }
 
-// ControlPlaneItem 控制面组件监控（kube-apiserver/controller-manager/scheduler 等）
-type ControlPlaneItem struct {
-	Name  string        `json:"name"`
-	Ready int           `json:"ready"`
-	Total int           `json:"total"`
-	Cards []ControlCard `json:"cards"`
-}
-
+// ControlCard 控制面指标卡（列表/详情共用）
 type ControlCard struct {
 	Label string  `json:"label"`
 	Value float64 `json:"value"`
 	Unit  string  `json:"unit"`
 	Dec   int     `json:"dec"` // 小数位数
-}
-
-// controlCardDef 组件关键指标定义
-type controlCardDef struct {
-	label string
-	unit  string
-	dec   int
-	ql    string
-}
-
-// controlPlane 采集控制面组件监控数据（up 状态 + 关键指标，缺失时静默降级）
-// 组件 job 名随监控栈发行版而异（如 apiserver vs kube-apiserver、kube-dns vs coredns），用候选列表匹配
-func (m *MonitorService) controlPlane(ctx context.Context, c *kube.Client, cfg PromConfig) []ControlPlaneItem {
-	// 组件 up 状态：按 job 统计就绪/总数
-	upByJob := map[string][2]int{}
-	// up 查询本身能返回 = 该 Prometheus 可达（「已接入」的最直接证据，
-	// 用于自监控 job 名猜不中时的 prometheus 组件兜底判定）
-	promReachable := false
-	if res, err := m.Query(ctx, c, cfg, `up{job=~"kube-apiserver|apiserver|kube-controller-manager|kube-scheduler|kube-proxy|coredns|kube-dns|etcd|kube-etcd|prometheus|prometheus-k8s"}`); err == nil {
-		promReachable = true
-		for _, r := range res {
-			job := r.Metric["job"]
-			v, _ := strconv.ParseFloat(fmt.Sprintf("%v", r.Value[1]), 64)
-			stat := upByJob[job]
-			stat[1]++
-			if v == 1 {
-				stat[0]++
-			}
-			upByJob[job] = stat
-		}
-	}
-
-	comps := []struct {
-		name  string
-		jobs  []string
-		cards []controlCardDef
-	}{
-		{"kube-apiserver", []string{"kube-apiserver", "apiserver"}, []controlCardDef{
-			{"请求 QPS", "req/s", 0, `sum(rate(apiserver_request_total[5m]))`},
-			{"错误率", "%", 2, `sum(rate(apiserver_request_total{code=~"5.."}[5m])) / clamp_min(sum(rate(apiserver_request_total[5m])), 0.001) * 100`},
-			{"P99 延迟", "ms", 1, `histogram_quantile(0.99, sum by (le) (rate(apiserver_request_sli_duration_seconds_bucket[5m]))) * 1000`},
-			{"工作队列深度", "条", 0, `sum(workqueue_depth{job=~"kube-apiserver|apiserver"})`},
-		}},
-		{"kube-controller-manager", []string{"kube-controller-manager"}, []controlCardDef{
-			{"工作队列深度", "条", 0, `sum(workqueue_depth{job=~"kube-controller-manager"})`},
-			{"任务处理率", "次/s", 1, `sum(rate(workqueue_adds_total{job=~"kube-controller-manager"}[5m]))`},
-		}},
-		{"kube-scheduler", []string{"kube-scheduler"}, []controlCardDef{
-			{"待调度 Pod", "个", 0, `sum(scheduler_pending_pods)`},
-			{"P99 调度尝试延迟", "ms", 1, `histogram_quantile(0.99, sum by (le) (rate(scheduler_scheduling_attempt_duration_seconds_bucket[5m]))) * 1000`},
-		}},
-		{"kube-proxy", []string{"kube-proxy"}, []controlCardDef{
-			{"P99 网络编程延迟", "ms", 1, `histogram_quantile(0.99, sum by (le) (rate(kubeproxy_network_programming_duration_seconds_bucket[5m]))) * 1000`},
-			{"无本地端点", "次/s", 1, `sum(rate(kubeproxy_sync_proxy_rules_no_local_endpoints_total[5m]))`},
-		}},
-		{"coredns", []string{"coredns", "kube-dns"}, []controlCardDef{
-			{"DNS QPS", "req/s", 0, `sum(rate(coredns_dns_requests_total[5m]))`},
-			{"SERVFAIL 错误率", "%", 2, `sum(rate(coredns_dns_responses_total{rcode="SERVFAIL"}[5m])) / clamp_min(sum(rate(coredns_dns_requests_total[5m])), 0.001) * 100`},
-		}},
-		{"etcd", []string{"etcd", "kube-etcd"}, []controlCardDef{
-			{"Leader", "", 0, `etcd_server_has_leader{job=~"etcd|kube-etcd"}`},
-			{"WAL fsync P99", "ms", 1, `histogram_quantile(0.99, sum by (le) (rate(etcd_disk_wal_fsync_duration_seconds_bucket{job=~"etcd|kube-etcd"}[5m]))) * 1000`},
-			{"DB 大小", "Mi", 1, `etcd_mvcc_db_total_size_in_bytes{job=~"etcd|kube-etcd"} / 1024 / 1024`},
-		}},
-		// Prometheus 自监控（抓取健康 / TSDB 写入压力）
-		{"prometheus", []string{"prometheus"}, []controlCardDef{
-			{"存活目标", "个", 0, `sum(up == 1)`},
-			{"抓取失败", "个", 0, `sum(up == 0)`},
-			{"样本写入/s", "条/s", 0, `sum(rate(prometheus_tsdb_head_samples_appended_total[5m]))`},
-			{"Head 序列数", "条", 0, `prometheus_tsdb_head_series`},
-		}},
-	}
-
-	// 收集所有待查询的指标（组件 + 卡片），统一并行执行
-	type cardRef struct {
-		cpIdx int
-		card  controlCardDef
-	}
-	var refs []cardRef
-	for i, cp := range comps {
-		for _, card := range cp.cards {
-			refs = append(refs, cardRef{cpIdx: i, card: card})
-		}
-	}
-	resByRef := make([][]PromResult, len(refs))
-	{
-		const workers = 8
-		sem := make(chan struct{}, workers)
-		var wg sync.WaitGroup
-		for i := range refs {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				if res, err := m.Query(ctx, c, cfg, refs[i].card.ql); err == nil && len(res) > 0 {
-					resByRef[i] = res
-				}
-			}(i)
-		}
-		wg.Wait()
-	}
-
-	out := make([]ControlPlaneItem, 0, len(comps))
-	for i, cp := range comps {
-		item := ControlPlaneItem{Name: cp.name}
-		for _, job := range cp.jobs {
-			if stat, ok := upByJob[job]; ok {
-				item.Total += stat[1]
-				item.Ready += stat[0]
-			}
-		}
-		// prometheus 组件：自监控 job 名随发行版/手工配置而变（monitoring/self/kuboard-… 等），
-		// 候选列表猜不中时 Total 恒 0 → 前端误显「未接入」（而指标卡全部正常出数）。
-		// 兜底：job 没匹配到但 up 查询可达 = 已接入且健康，按 1/1 计
-		if item.Name == "prometheus" && item.Total == 0 && promReachable {
-			item.Total = 1
-			item.Ready = 1
-		}
-		// 回填指标卡片（保持原始顺序，组件未采集时静默跳过）
-		for j := range refs {
-			if refs[j].cpIdx != i {
-				continue
-			}
-			if res := resByRef[j]; res != nil {
-				v := parsePromFloat(res[0].Value[1])
-				item.Cards = append(item.Cards, ControlCard{Label: refs[j].card.label, Value: v, Unit: refs[j].card.unit, Dec: refs[j].card.dec})
-			}
-		}
-		out = append(out, item)
-	}
-	return out
 }
 
 // parsePromFloat 解析 Prometheus 值，NaN/Inf 归一为 0（JSON 不支持）
@@ -896,16 +753,20 @@ func (m *MonitorService) Overview(ctx context.Context, c *kube.Client, cluster *
 			}
 		})
 	}
-	// PV 存储用量（kubelet_volume_stats）
+	// PV 存储用量。数量与总容量走 kube-state-metrics 的 PV 口径（就是 spec.capacity 之和）；
+	// 只有已用率用 kubelet 的 volume stats，因为没有第二个来源。
+	// 早先数量与总容量也用 kubelet_volume_stats_capacity_bytes，那是**挂载点文件系统**的容量而不是
+	// 卷的容量：local-path / 共享盘场景下每个 PVC 都上报整块节点盘，实测某集群 17 个卷各报 187 Gi，
+	// 加起来 3178 Gi，而 `kubectl get pv` 真值只有 464 Gi（同一个集群 KSM 报的正是 464 Gi）。
 	tasks = append(tasks,
 		func() {
-			if res, err := m.Query(ctx, c, cfg, `count(kubelet_volume_stats_capacity_bytes)`); err == nil && len(res) > 0 {
+			if res, err := m.Query(ctx, c, cfg, `count(kube_persistentvolume_capacity_bytes)`); err == nil && len(res) > 0 {
 				v, _ := strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
 				out.PvCount = int(v)
 			}
 		},
 		func() {
-			if res, err := m.Query(ctx, c, cfg, `sum(kubelet_volume_stats_capacity_bytes) / 1024 / 1024 / 1024`); err == nil && len(res) > 0 {
+			if res, err := m.Query(ctx, c, cfg, `sum(kube_persistentvolume_capacity_bytes) / 1024 / 1024 / 1024`); err == nil && len(res) > 0 {
 				v, _ := strconv.ParseFloat(fmt.Sprintf("%v", res[0].Value[1]), 64)
 				out.PvTotalGi = v
 			}
@@ -929,24 +790,8 @@ func (m *MonitorService) Overview(ctx context.Context, c *kube.Client, cluster *
 			sort.Slice(out.PvTopUsed, func(i, j int) bool { return out.PvTopUsed[i].Value > out.PvTopUsed[j].Value })
 		},
 	)
-	// 控制面趋势（apiserver / CoreDNS QPS、etcd DB 大小）
-	tasks = append(tasks,
-		func() {
-			if res, err := m.QueryRange(ctx, c, cfg, `sum(rate(apiserver_request_total[5m]))`, rs.Start, rs.End, rs.Step); err == nil {
-				out.ApiserverQpsTrend = series(res)
-			}
-		},
-		func() {
-			if res, err := m.QueryRange(ctx, c, cfg, `sum(rate(coredns_dns_requests_total[5m]))`, rs.Start, rs.End, rs.Step); err == nil {
-				out.CoreDnsQpsTrend = series(res)
-			}
-		},
-		func() {
-			if res, err := m.QueryRange(ctx, c, cfg, `max(etcd_mvcc_db_total_size_in_bytes{job=~"etcd|kube-etcd"}) / 1024 / 1024 / 1024`, rs.Start, rs.End, rs.Step); err == nil {
-				out.EtcdDbSizeTrend = series(res)
-			}
-		},
-	)
+
+	// 控制面趋势已迁至「可观测性 → 控制平面组件」详情页（按点开哪个组件才查）
 
 	// 有界 worker 池：限制并发（避免压垮单实例 Prometheus）。
 	// 单实例 Prometheus 对并发 range 查询会互相拖慢，过高并发反而更慢，取折中值 4。
@@ -964,17 +809,17 @@ func (m *MonitorService) Overview(ctx context.Context, c *kube.Client, cluster *
 	}
 	wg.Wait()
 
-	// 控制面组件监控（内部也并行查询各组件指标）
-	out.ControlPlane = m.controlPlane(ctx, c, cfg)
+	// 控制面组件监控已迁至「可观测性 → 控制平面组件」(/monitor/controlplane)：
+	// 列表/详情按需查询，总览每次刷新不再背着 ~18 个控制面 instant 查询
 	return out, nil
 }
 
 // KubeletMonitor 节点 Kubelet 运行时指标（部分环境无 node 标签时整块降级为 nil）
 type KubeletMonitor struct {
-	RunningPods        int     `json:"runningPods"`
-	RunningContainers  int     `json:"runningContainers"`
-	RelistRate         float64 `json:"relistRate"`         // PLEG relist 次/s
-	RuntimeErrorsRate  float64 `json:"runtimeErrorsRate"`  // 容器运行时操作错误 次/s
+	RunningPods       int     `json:"runningPods"`
+	RunningContainers int     `json:"runningContainers"`
+	RelistRate        float64 `json:"relistRate"`        // PLEG relist 次/s
+	RuntimeErrorsRate float64 `json:"runtimeErrorsRate"` // 容器运行时操作错误 次/s
 }
 
 // NodeMonitor 节点级监控
@@ -990,22 +835,22 @@ type NodeMonitor struct {
 	NetRxTrend     [][]float64 `json:"netRxTrend"`
 	NetTxTrend     [][]float64 `json:"netTxTrend"`
 	// Node Exporter 深度指标（对齐 Grafana Node Exporter / Nodes 仪表盘的核心面板）
-	Load1               float64     `json:"load1"`
-	Load5               float64     `json:"load5"`
-	Load15              float64     `json:"load15"`
-	Load1Trend          [][]float64 `json:"load1Trend"`
-	SwapUsagePct        *float64    `json:"swapUsagePct"` // nil = 未启用 swap 或无指标
-	DiskReadIops        float64     `json:"diskReadIops"`
-	DiskWriteIops       float64     `json:"diskWriteIops"`
-	DiskIopsTrend       [][]float64 `json:"diskIopsTrend"` // 读+写 IOPS 趋势
-	DiskReadMBs         float64     `json:"diskReadMBs"`
-	DiskWriteMBs        float64     `json:"diskWriteMBs"`
-	DiskThroughputTrend [][]float64 `json:"diskThroughputTrend"` // 读+写 MB/s 趋势
-	IoUtilPct           float64     `json:"ioUtilPct"`
-	IoUtilTrend         [][]float64 `json:"ioUtilTrend"`
-	NetDropRate         float64     `json:"netDropRate"` // 丢包 次/s（收+发）
-	NetDropTrend        [][]float64 `json:"netDropTrend"`
-	TcpEstablished      float64     `json:"tcpEstablished"`
+	Load1               float64         `json:"load1"`
+	Load5               float64         `json:"load5"`
+	Load15              float64         `json:"load15"`
+	Load1Trend          [][]float64     `json:"load1Trend"`
+	SwapUsagePct        *float64        `json:"swapUsagePct"` // nil = 未启用 swap 或无指标
+	DiskReadIops        float64         `json:"diskReadIops"`
+	DiskWriteIops       float64         `json:"diskWriteIops"`
+	DiskIopsTrend       [][]float64     `json:"diskIopsTrend"` // 读+写 IOPS 趋势
+	DiskReadMBs         float64         `json:"diskReadMBs"`
+	DiskWriteMBs        float64         `json:"diskWriteMBs"`
+	DiskThroughputTrend [][]float64     `json:"diskThroughputTrend"` // 读+写 MB/s 趋势
+	IoUtilPct           float64         `json:"ioUtilPct"`
+	IoUtilTrend         [][]float64     `json:"ioUtilTrend"`
+	NetDropRate         float64         `json:"netDropRate"` // 丢包 次/s（收+发）
+	NetDropTrend        [][]float64     `json:"netDropTrend"`
+	TcpEstablished      float64         `json:"tcpEstablished"`
 	Kubelet             *KubeletMonitor `json:"kubelet,omitempty"`
 }
 
@@ -1118,10 +963,10 @@ type NamespaceMonitor struct {
 	NetRxTrend     [][]float64 `json:"netRxTrend"`
 	NetTxTrend     [][]float64 `json:"netTxTrend"`
 	// Request/Limit 配额视角（kube-state-metrics；未设置 limit 的 ns 数值为 0）
-	CPURequests  float64  `json:"cpuRequests"`  // 核
-	CPULimits    float64  `json:"cpuLimits"`    // 核
-	MemRequestsMi float64 `json:"memRequestsMi"`
-	MemLimitsMi   float64 `json:"memLimitsMi"`
+	CPURequests        float64  `json:"cpuRequests"` // 核
+	CPULimits          float64  `json:"cpuLimits"`   // 核
+	MemRequestsMi      float64  `json:"memRequestsMi"`
+	MemLimitsMi        float64  `json:"memLimitsMi"`
 	CPUUsagePctOfLimit *float64 `json:"cpuUsagePctOfLimit"` // 用量 / Limit %
 	MemUsagePctOfLimit *float64 `json:"memUsagePctOfLimit"`
 }
@@ -1375,14 +1220,14 @@ func (m *MonitorService) Workload(ctx context.Context, c *kube.Client, cluster *
 // PodMonitor Pod 监控（CPU/内存一律绝对值：核数 / Mi——
 // 百分比依赖 limit 全覆盖，覆盖不全时分母被低估、百分比虚高或恒 0，无参考价值）
 type PodMonitor struct {
-	CPUUsage       float64     `json:"cpuUsage"` // 核
+	CPUUsage       float64     `json:"cpuUsage"`   // 核
 	MemUsageMi     float64     `json:"memUsageMi"` // Mi
 	NetRxMBs       float64     `json:"netRxMBs"`
 	NetTxMBs       float64     `json:"netTxMBs"`
 	DiskWriteMBs   float64     `json:"diskWriteMBs"`
 	FsUsageMi      float64     `json:"fsUsageMi,omitempty"`
-	CPUUsageTrend  [][]float64 `json:"cpuUsageTrend"`  // 核
-	MemUsageTrend  [][]float64 `json:"memUsageTrend"`  // Mi
+	CPUUsageTrend  [][]float64 `json:"cpuUsageTrend"` // 核
+	MemUsageTrend  [][]float64 `json:"memUsageTrend"` // Mi
 	NetRxTrend     [][]float64 `json:"netRxTrend"`
 	NetTxTrend     [][]float64 `json:"netTxTrend"`
 	DiskWriteTrend [][]float64 `json:"diskWriteTrend"`
@@ -1453,4 +1298,3 @@ func convertTrend(points [][]float64, fn func(float64) float64) [][]float64 {
 	}
 	return out
 }
-

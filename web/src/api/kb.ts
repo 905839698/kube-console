@@ -4,11 +4,15 @@ import { request } from './http'
 export interface KBVolume {
   name: string; accessModes?: string[]; optional?: boolean; snapshotable?: boolean
 }
-export interface KBCompOption { compDef: string; serviceVersion: string }
+// 选项里的 ownsDataVolume：该模板自己就带来了名为 data 的卷（mongo-mongos 的 data 是
+// emptyDir）。这种组件不能再配存储——同名卷一起下发会让 KB 合成 InstanceSet 失败，
+// 集群永久停在 Creating 且一个 Pod 都没有（后端 kbCheckOwnVolume 也会挡）。
+export interface KBCompOption { compDef: string; serviceVersion: string; ownsDataVolume?: boolean }
 export interface KBTemplateComponent {
   name: string; compDef: string; compDefPattern?: string; compDefs?: KBCompOption[]
   replicasMin: number; replicasMax: number
   serviceVersion: string; volumes: KBVolume[]; hasExporter: boolean
+  ownsDataVolume?: boolean
   configs?: string[]; highAvailability?: boolean
 }
 // 分片型拓扑（redis cluster / mongodb sharding）：模板在 ShardingDefinition 里，
@@ -35,6 +39,8 @@ export interface KBCluster {
   components: KBComponent[]
   conditions?: KBCondition[]
   shardings?: KBSharding[]
+  // 集群级调度设置摘要（spec.schedulingPolicy：节点标签 / 容忍污点 / 亲和 / 打散）
+  scheduling?: string
 }
 export interface KBOps {
   name: string; type: string; component: string
@@ -111,6 +117,29 @@ export interface KBRepoView {
   name: string; phase: string; default: boolean; provider?: string
   accessMethod?: string; pathPrefix?: string; storageClass?: string; createdAt: string
 }
+
+// ---- BackupRepo 管理（集群级；字段清单由 StorageProvider 的 schema 驱动，前端不写死 s3 参数）----
+export interface KBProviderParam {
+  name: string; type: string; description?: string; default?: string
+  required: boolean; credential: boolean
+}
+export interface KBProviderView {
+  name: string; phase: string; csiDriver?: string; reason?: string
+  params: KBProviderParam[]
+}
+export interface KBRepoDetail extends KBRepoView {
+  pvReclaimPolicy: string; volumeCapacity?: string
+  secretName?: string; secretNamespace?: string
+  config?: Record<string, string>
+  conditions?: { type: string; status: string; reason?: string; message?: string }[]
+}
+export interface KBRepoInput {
+  name: string; provider: string; accessMethod: string; pvReclaimPolicy: string
+  pathPrefix?: string; volumeCapacity?: string
+  secretName?: string; secretNamespace?: string
+  config: Record<string, string>
+}
+export interface KBRepoSecret { name: string; namespace: string }
 export interface KBRestoreView {
   name: string; backup?: string; phase: string; message?: string
   duration?: string; createdAt: string; completedAt?: string
@@ -178,6 +207,14 @@ export const kbApi = {
 
   // ---- 备份恢复（dataprotection.kubeblocks.io）----
   backupRepos: () => request<KBRepoView[]>({ url: '/kb/repos' }),
+  repo: (name: string) => request<KBRepoDetail>({ url: `/kb/repos/${encodeURIComponent(name)}` }),
+  createRepo: (body: KBRepoInput) => request<{ name: string }>({ url: '/kb/repos', method: 'post', data: body }),
+  updateRepo: (name: string, body: KBRepoInput) =>
+    request<{ name: string }>({ url: `/kb/repos/${encodeURIComponent(name)}`, method: 'put', data: body }),
+  deleteRepo: (name: string) => request<{ deleted: string }>({ url: `/kb/repos/${encodeURIComponent(name)}`, method: 'delete' }),
+  storageProviders: () => request<KBProviderView[]>({ url: '/kb/storage-providers' }),
+  repoSecrets: (namespace: string, provider: string) =>
+    request<KBRepoSecret[]>({ url: '/kb/repo-secrets', params: { namespace, provider } }),
   backupPolicies: (namespace: string, name: string) =>
     request<KBBackupPolicyView[]>({ url: `/kb/clusters/${namespace}/${name}/backup/policies` }),
   backupSchedule: (namespace: string, name: string) =>
@@ -199,7 +236,7 @@ export const kbApi = {
   rebuild: (namespace: string, name: string, body: { component: string; backupName: string; inPlace: boolean }) =>
     request<{ name: string }>({ url: `/kb/clusters/${namespace}/${name}/backup/rebuild`, method: 'post', data: body }),
   monitorAccess: (namespace: string, name: string) =>
-    request<{ created: string[] }>({ url: `/kb/clusters/${namespace}/${name}/monitor-access`, method: 'post' }),
+    request<{ created: string[]; note?: string; warning?: string }>({ url: `/kb/clusters/${namespace}/${name}/monitor-access`, method: 'post' }),
   configMaps: (namespace: string, name: string) =>
     request<KBConfigMapRef[]>({ url: `/kb/clusters/${namespace}/${name}/configmaps` }),
   getConfigMap: (namespace: string, name: string, cm: string) =>

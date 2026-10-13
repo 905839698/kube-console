@@ -31,10 +31,10 @@ type KBParam struct {
 	Min         string   `json:"min,omitempty"`
 	Max         string   `json:"max,omitempty"`
 	Description string   `json:"description,omitempty"`
-	Dynamic     bool     `json:"dynamic"`    // 动态参数：改完热载，不用重启
-	Immutable   bool     `json:"immutable"`  // 不可修改（提交前直接拦）
-	Current     string   `json:"current"`    // 当前生效值（ComponentParameter）
-	InSchema    bool     `json:"inSchema"`   // false = 当前值里有但 schema 没声明的键
+	Dynamic     bool     `json:"dynamic"`   // 动态参数：改完热载，不用重启
+	Immutable   bool     `json:"immutable"` // 不可修改（提交前直接拦）
+	Current     string   `json:"current"`   // 当前生效值（ComponentParameter）
+	InSchema    bool     `json:"inSchema"`  // false = 当前值里有但 schema 没声明的键
 }
 
 type KBConfigFile struct {
@@ -45,11 +45,11 @@ type KBConfigFile struct {
 }
 
 type KBConfigSchema struct {
-	Cluster   string          `json:"cluster"`
-	Component string          `json:"component"`
-	CompDef   string          `json:"compDef"`
-	Files     []KBConfigFile  `json:"files"`
-	Note      string          `json:"note,omitempty"`
+	Cluster   string         `json:"cluster"`
+	Component string         `json:"component"`
+	CompDef   string         `json:"compDef"`
+	Files     []KBConfigFile `json:"files"`
+	Note      string         `json:"note,omitempty"`
 }
 
 // KBGetComponentConfig 组件的参数表单数据源：schema（ParametersDefinition）+ 当前值（ComponentParameter）

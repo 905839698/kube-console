@@ -226,17 +226,17 @@ onMounted(async () => {
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .result-layout { display: flex; gap: 12px; margin-top: 8px; }
 .facet { width: 240px; flex-shrink: 0; border-right: 1px solid var(--kc-border); padding-right: 10px; max-height: 60vh; overflow: auto; }
-.facet-title { font-size: 12px; color: #909399; margin-bottom: 6px; }
-.facet-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.facet-title { font-size: 13px; color: #909399; margin-bottom: 6px; }
+.facet-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 13px; }
 .facet-row:hover { background: #f5f7fa; }
 .facet-row.active { background: var(--el-color-primary-light-9); }
 .facet-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .logs { flex: 1; min-width: 0; }
-.logs-meta { color: #909399; font-size: 12px; margin-bottom: 8px; display: flex; gap: 10px; align-items: center; }
+.logs-meta { color: #909399; font-size: 13px; margin-bottom: 8px; display: flex; gap: 10px; align-items: center; }
 .log-list { max-height: 62vh; overflow: auto; }
 .log-row { display: flex; gap: 8px; align-items: flex-start; padding: 4px 6px; border-bottom: 1px solid #f2f3f5; font: 12px/1.5 ui-monospace, Consolas, monospace; }
 .log-time { color: #909399; flex-shrink: 0; }
 .log-pod { color: #606266; flex-shrink: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .log-msg { margin: 0; white-space: pre-wrap; word-break: break-all; flex: 1; font: inherit; }
-.form-tip { color: #909399; font-size: 12px; line-height: 1.5; margin-top: 4px; }
+.form-tip { color: #909399; font-size: 13px; line-height: 1.5; margin-top: 4px; }
 </style>

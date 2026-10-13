@@ -1,0 +1,115 @@
+{
+  "name": "kube-console-bootstrap",
+  "version": 1,
+  "nodes": [
+    {
+      "id": "git-clone",
+      "type": "git-clone",
+      "params": {
+        "url": "https://git.example.com/YOUR_GROUP/kube-console.git",
+        "branch": "master",
+        "shallow": true,
+        "submodules": false
+      },
+      "position": { "x": 0, "y": 0 }
+    },
+    {
+      "id": "web-test",
+      "type": "npm-build",
+      "params": {
+        "nodeVersion": "20",
+        "script": "cd web\nnpm config set registry http://10.107.2.251:8081/repository/npm-group/\nnpm config set audit false\nnpm ci\nnpm run test\nnpm run build",
+        "outputDir": "web/dist",
+        "cache": true
+      },
+      "position": { "x": 200, "y": 0 }
+    },
+    {
+      "id": "server-test",
+      "type": "go-build",
+      "params": {
+        "goVersion": "1.25",
+        "goproxy": "http://10.107.2.251:8081/repository/goproxy/",
+        "command": "-C server test ./... -count=1",
+        "binaryName": "kube-console-server",
+        "runTest": false,
+        "cache": true
+      },
+      "position": { "x": 400, "y": 0 }
+    },
+    {
+      "id": "web-image",
+      "type": "build-image",
+      "params": {
+        "dockerfile": "web/Dockerfile",
+        "context": ".",
+        "registry": "harbor.cqyxpt.site:8443",
+        "repository": "library/kube-console-web",
+        "tag": "$(tasks.git-clone.results.build_tag)",
+        "credential": "REPLACE_WITH_HARBOR_CREDENTIAL_ID",
+        "generateSBOM": true
+      },
+      "position": { "x": 600, "y": 0 }
+    },
+    {
+      "id": "server-image",
+      "type": "build-image",
+      "params": {
+        "dockerfile": "server/Dockerfile",
+        "context": ".",
+        "registry": "harbor.cqyxpt.site:8443",
+        "repository": "library/kube-console-server",
+        "tag": "$(tasks.git-clone.results.build_tag)",
+        "credential": "REPLACE_WITH_HARBOR_CREDENTIAL_ID",
+        "generateSBOM": true
+      },
+      "position": { "x": 800, "y": 0 }
+    },
+    {
+      "id": "deploy-gate",
+      "type": "condition",
+      "params": {
+        "source": "param",
+        "param": "GIT_BRANCH",
+        "op": "==",
+        "value": "master"
+      },
+      "position": { "x": 1000, "y": 0 }
+    },
+    {
+      "id": "deploy-web",
+      "type": "k8s-deploy",
+      "params": {
+        "namespace": "kube-console",
+        "deployTargetKind": "deployment",
+        "deployTarget": "kube-console-web",
+        "container": "web",
+        "image": "$(tasks.web-image.results.imageRef)",
+        "waitFor": ""
+      },
+      "position": { "x": 1200, "y": 0 }
+    },
+    {
+      "id": "deploy-server",
+      "type": "k8s-deploy",
+      "params": {
+        "namespace": "kube-console",
+        "deployTargetKind": "deployment",
+        "deployTarget": "kube-console-server",
+        "container": "server",
+        "image": "$(tasks.server-image.results.imageRef)",
+        "waitFor": ""
+      },
+      "position": { "x": 1400, "y": 0 }
+    }
+  ],
+  "edges": [
+    { "source": "git-clone", "target": "web-test" },
+    { "source": "web-test", "target": "server-test" },
+    { "source": "server-test", "target": "web-image" },
+    { "source": "web-image", "target": "server-image" },
+    { "source": "server-image", "target": "deploy-gate" },
+    { "source": "deploy-gate", "target": "deploy-web", "branch": "yes" },
+    { "source": "deploy-web", "target": "deploy-server" }
+  ]
+}

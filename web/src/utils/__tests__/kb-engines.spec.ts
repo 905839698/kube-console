@@ -1,15 +1,15 @@
 import * as icons from '@element-plus/icons-vue'
 import { describe, expect, it } from 'vitest'
-import { KB_ENGINES, KB_GROUP_ICON, kbEngineMeta, kbMatchesEngine } from '../kb-engines'
+import { KB_ENGINES, KB_GROUP_ICON, KB_REPO_ICON, kbEngineMeta, kbMatchesEngine } from '../kb-engines'
 
 describe('数据库子菜单定义', () => {
   it('六个引擎与 KubeBlocks ClusterDefinition 同名', () => {
     expect(KB_ENGINES.map((e) => e.key)).toEqual(['mysql', 'redis', 'kafka', 'mongodb', 'elasticsearch', 'postgresql'])
   })
 
-  it('图标不能重复（父菜单也不能与任一项重复）', () => {
-    const set = new Set([...KB_ENGINES.map((e) => e.icon), KB_GROUP_ICON])
-    expect(set.size).toBe(KB_ENGINES.length + 1)
+  it('图标不能重复（父菜单与备份仓库项也不能与任一项重复）', () => {
+    const set = new Set([...KB_ENGINES.map((e) => e.icon), KB_GROUP_ICON, KB_REPO_ICON])
+    expect(set.size).toBe(KB_ENGINES.length + 2)
   })
 
   it('图标名必须是 Element Plus 里真实存在的组件', () => {
@@ -17,6 +17,7 @@ describe('数据库子菜单定义', () => {
     const missing = KB_ENGINES.filter((e) => !names.includes(e.icon)).map((e) => `${e.key}:${e.icon}`)
     expect(missing, `不存在的图标: ${missing.join(', ')}`).toEqual([])
     expect(names).toContain(KB_GROUP_ICON)
+    expect(names).toContain(KB_REPO_ICON)
   })
 
   it('未知引擎也有兜底名字与图标', () => {

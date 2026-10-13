@@ -7,6 +7,11 @@
     <template v-if="node">
       <div class="title">{{ meta?.name ?? node.type }}</div>
       <div class="hint">节点 ID：{{ node.id }}</div>
+      <div class="field enable-row">
+        <span class="field-label" style="margin-bottom: 0">启用节点</span>
+        <el-switch v-model="enabled" size="small" @change="(v: boolean) => emit('disabled', !v)" />
+      </div>
+      <div v-if="!enabled" class="hint" style="color: #e6a23c">已关闭：保存后编译与运行都会跳过此节点（依赖自动桥接）</div>
       <div v-for="p in visibleProps" :key="p.name" class="field">
         <div class="field-label">{{ p.name }}<span v-if="p.required" class="req">*</span></div>
 
@@ -47,11 +52,15 @@ import { useNodeTypes } from '../nodes'
 
 interface Props { node: CIPNode | null; graph?: CIGraph }
 const props = withDefaults(defineProps<Props>(), { graph: undefined })
-const emit = defineEmits<{ (e: 'params', params: Record<string, unknown>): void }>()
+const emit = defineEmits<{ (e: 'params', params: Record<string, unknown>): void; (e: 'disabled', disabled: boolean): void }>()
 
 const { types } = useNodeTypes()
 const clusterStore = useClusterStore()
 const meta = computed(() => types.value.find((t) => t.type === props.node?.type))
+
+// 节点开关：切换选中节点时同步；关闭动作即时上报（无需点"应用"）
+const enabled = ref(true)
+watch(() => props.node?.id, () => { enabled.value = !props.node?.disabled }, { immediate: true })
 
 // 表单模型：切换节点时按 node.params 重建（避免上一节点残留值）
 const form = reactive<Record<string, unknown>>({})
@@ -300,11 +309,12 @@ function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)) }
   padding: 16px; overflow-y: auto; flex-shrink: 0; background: #fff;
 }
 .title { font-weight: 600; margin-bottom: 4px; }
-.hint { font-size: 12px; color: #909399; margin-bottom: 12px; }
+.hint { font-size: 13px; color: #909399; margin-bottom: 12px; }
 .placeholder { color: #909399; padding: 8px 0; }
 .field { margin-bottom: 10px; }
-.field-label { font-size: 12px; color: #606266; margin-bottom: 4px; }
+.enable-row { display: flex; justify-content: space-between; align-items: center; }
+.field-label { font-size: 13px; color: #606266; margin-bottom: 4px; }
 .req { color: #f56c6c; margin-left: 2px; }
-.err { font-size: 11px; color: #e6a23c; margin-top: 2px; }
-.desc { font-size: 11px; color: #c0c4cc; margin-top: 2px; }
+.err { font-size: 12px; color: #e6a23c; margin-top: 2px; }
+.desc { font-size: 12px; color: #c0c4cc; margin-top: 2px; }
 </style>

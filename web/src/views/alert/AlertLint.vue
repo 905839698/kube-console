@@ -129,8 +129,8 @@ function sevLabel(s: string) {
 
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
-.sub { margin-left: 10px; font-size: 12px; }
-.sub2 { font-size: 12px; margin-top: 2px; }
+.sub { margin-left: 10px; font-size: 13px; }
+.sub2 { font-size: 13px; margin-top: 2px; }
 .muted { color: #c0c4cc; }
 .rule-name { font-weight: 600; font-family: monospace; font-size: 13px; }
 
@@ -138,7 +138,7 @@ function sevLabel(s: string) {
 .issue-card { text-align: center; }
 .issue-num { font-size: 26px; font-weight: 700; color: #67c23a; }
 .issue-card.warn .issue-num { color: #f56c6c; }
-.issue-label { color: #909399; font-size: 12px; margin-top: 4px; }
+.issue-label { color: #909399; font-size: 13px; margin-top: 4px; }
 
 .ok { color: #67c23a; }
 .link { color: var(--el-color-primary); }

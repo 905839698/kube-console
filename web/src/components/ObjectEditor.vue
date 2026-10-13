@@ -269,6 +269,6 @@ function kindTitle(kind: string): string {
 /* YAML 编辑器高度自适应（随视口） */
 .yaml-pane { height: calc(100vh - 360px); min-height: 320px; }
 .editor-footer { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
-.yaml-error { color: #f56c6c; font-size: 12px; }
+.yaml-error { color: #f56c6c; font-size: 13px; }
 .empty-hint { color: #909399; font-size: 13px; padding: 20px 0; text-align: center; }
 </style>

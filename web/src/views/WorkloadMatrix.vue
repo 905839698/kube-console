@@ -103,7 +103,7 @@ function goList(ns: string, kind: string) {
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .ns-name { font-weight: 600; color: #1f2937; }
-.ns-total { margin-left: 8px; font-size: 12px; color: #9ca3af; }
+.ns-total { margin-left: 8px; font-size: 13px; color: #9ca3af; }
 .cell {
   display: inline-flex;
   align-items: center;

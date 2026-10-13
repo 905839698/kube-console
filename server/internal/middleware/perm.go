@@ -151,3 +151,39 @@ func resolveNamespace(c *gin.Context) string {
 	}
 	return strings.TrimSpace(probe.Namespace)
 }
+
+// MenuGuard 按"菜单能力"收口接口（配置 rbac.enforceMenus 打开才生效）。
+//
+// 判定与侧边栏用的是同一张表（service.menuCaps）：菜单藏起来的模块，接口也 403，
+// 否则"藏菜单"只是遮眼——前端绕过就行。关掉时本中间件什么都不做（保持
+// "资源读取登录即可浏览"的既有口径），便于按环境灰度。
+func MenuGuard(perm *service.PermissionService, enforce bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !enforce || perm == nil {
+			c.Next()
+			return
+		}
+		path := c.Request.URL.Path
+		cap, need := service.APICapFor(path)
+		if !need {
+			c.Next()
+			return
+		}
+		cluster := ClusterName(c)
+		if cluster == "" {
+			// 没有集群上下文就无从判断资源可读性（权限快照是按集群算的）。
+			// 这类请求在后续 handler 里会以"缺少 X-Cluster 请求头"失败，比误判 403 好。
+			c.Next()
+			return
+		}
+		acc := perm.Access(c.Request.Context(), cluster, CurrentUser(c))
+		if acc.Meets(cap) {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"code":    http.StatusForbidden,
+			"message": fmt.Sprintf("没有该模块的读取权限（%s）：请在「授权」页授予对应资源或命名空间的 view 及以上角色", path),
+		})
+	}
+}

@@ -7,17 +7,20 @@ package ci
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"log"
+	"os"
 	"sync"
 
 	"gorm.io/gorm"
 
+	"kube-console/server/internal/ci/artifact"
+	"kube-console/server/internal/ci/builder"
 	"kube-console/server/internal/ci/credential"
+	"kube-console/server/internal/ci/deploy"
 	"kube-console/server/internal/ci/gitrepo"
 	"kube-console/server/internal/ci/node"
-	"kube-console/server/internal/ci/artifact"
-	"kube-console/server/internal/ci/deploy"
 	"kube-console/server/internal/ci/nodetype"
 	"kube-console/server/internal/ci/pipeline"
 	"kube-console/server/internal/ci/runtime"
@@ -29,18 +32,21 @@ import (
 
 // Deps CI 融合层的全部依赖（由 main 装配，handler 引用）。
 type Deps struct {
-	Cfg  *config.CIConfig
-	DB   *gorm.DB
-	Nodes nodetype.Registry
-	Pipe  *pipeline.Service
-	Store *pipeline.Store
-	Creds *credential.Service
+	Cfg     *config.CIConfig
+	DB      *gorm.DB
+	Nodes   nodetype.Registry
+	Pipe    *pipeline.Service
+	Store   *pipeline.Store
+	Creds   *credential.Service
 	RT      *runtime.Service
 	Sched   *runtime.Scheduler
 	Webhook *runtime.Webhook
 	Art     *artifact.Service
 	Deploy  *deploy.Service
 	Hub     *websocket.Hub
+
+	// Builders 镜像构建器（上传制品 → 约定 Dockerfile → 托管流水线构建推送）
+	Builders *builder.Service
 
 	clusters *service.ClusterManager
 
@@ -64,12 +70,27 @@ func NewDeps(db *gorm.DB, cfg *config.CIConfig, clusters *service.ClusterManager
 	if cfg.ImageRegistry == "" {
 		cfg.ImageRegistry = "harbor.cqyxpt.site:8443/library"
 	}
+	// registryCA：自签名仓库的根证书内容（ci.registryCAFile / KC_CI_REGISTRY_CA_FILE），
+	// 节点模板里以 {{registryCA}} 引用。配置了路径就必须读到——读不到是部署错误，
+	// 静默留空会让 build-image 在拉取基础镜像时以 TLS 错误暴露，定位成本高得多。
+	registryCA := ""
+	if f := cfg.RegistryCAFile; f != "" {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("读取 ci.registryCAFile（%s）失败: %w", f, err)
+		}
+		registryCA = string(b)
+	}
 	if err := node.NewLoader(reg).WithGlobals(map[string]interface{}{
 		"imageRegistry": cfg.ImageRegistry,
+		"registryCA":    registryCA,
 	}).LoadEmbedded(nodesFS); err != nil {
 		return nil, err
 	}
 	log.Printf("ci: 加载节点插件 %d 个（镜像仓库前缀 %s）", len(reg.List()), cfg.ImageRegistry)
+	if cfg.RegistryCAFile != "" {
+		log.Printf("ci: 已加载镜像仓库根证书 %s（%d 字节）", cfg.RegistryCAFile, len(registryCA))
+	}
 
 	d := &Deps{
 		Cfg:      cfg,
@@ -86,6 +107,7 @@ func NewDeps(db *gorm.DB, cfg *config.CIConfig, clusters *service.ClusterManager
 	d.RT = runtime.NewService(cfg, db, d.Pipe, d.Store, d.Hub, d.Creds, d.K8sFor)
 	d.Art = artifact.NewService(db, cfg)
 	d.Deploy = deploy.NewService(db, d.K8sFor)
+	d.Builders = builder.New(db, cfg, d.Pipe, d.Store, d.RT)
 	d.RT.SetNotifier(NewNotifier(db)) // 执行事件 → kube-console 通知渠道（无渠道时空转）
 	d.RT.SetArtifactRegistrar(d.Art.Registrar())
 	d.RT.SetDeployService(d.Deploy)

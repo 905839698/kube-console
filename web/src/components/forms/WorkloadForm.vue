@@ -96,6 +96,7 @@
           :key="'init-' + ci"
           :c="c"
           :volumes="d.volumes"
+          :namespace="d.namespace"
           :init="true"
         >
           <template #remove>
@@ -116,6 +117,7 @@
           :key="'c-' + ci"
           :c="c"
           :volumes="d.volumes"
+          :namespace="d.namespace"
         >
           <template #remove>
             <el-button size="small" type="danger" text @click="removeContainer(ci)">
@@ -495,6 +497,6 @@ function addVolume() {
 .kv-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; width: 100%; }
 .kv-row-column { width: 100%; }
 .vct-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; width: 100%; }
-.monitor-hint { color: #909399; font-size: 12px; margin-left: 10px; }
-.hint { color: #909399; font-size: 12px; }
+.monitor-hint { color: #909399; font-size: 13px; margin-left: 10px; }
+.hint { color: #909399; font-size: 13px; }
 </style>

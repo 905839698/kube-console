@@ -5,13 +5,11 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -258,112 +256,39 @@ func ensureVolume(spec *corev1.PodSpec, name string, src corev1.VolumeSource) {
 	spec.Volumes = append(spec.Volumes, corev1.Volume{Name: name, VolumeSource: src})
 }
 
-// EnableLogCollection 注入/更新 fluent-bit Sidecar（幂等，覆盖旧配置），触发 Pod 模板滚动更新
-func (s *K8sService) EnableLogCollection(ctx context.Context, c *kube.Client, kind, ns, name string, in *LogCollectionInput, src *model.LogSource) error {
-	if in.Container == "" || in.LogPath == "" {
-		return fmt.Errorf("目标容器与日志路径不能为空")
-	}
-	if in.Format == "" {
-		in.Format = "text"
-	}
-	if in.Format != "text" && in.Format != "json" {
-		return fmt.Errorf("日志格式仅支持 text / json")
-	}
-	if in.Image == "" {
-		in.Image = defaultFluentImage
-	}
-	if in.Container == LogSidecarName {
-		return fmt.Errorf("目标容器不能叫 %s", LogSidecarName)
-	}
-	dir, err := logMountDir(in.LogPath)
-	if err != nil {
-		return err
-	}
+// buildFluentBitCM 工作负载专属的 fluent-bit 配置 CM（Sidecar 以卷挂载）
+func buildFluentBitCM(in *LogCollectionInput, ns, workload string, src *model.LogSource) (*corev1.ConfigMap, error) {
 	host, port, tlsOn, index, err := esCollectTarget(src, ns, in.Format)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	tpl, ownerKind, uid, update, err := logCollectionOwner(ctx, c, kind, ns, name)
-	if err != nil {
-		return err
-	}
-	spec := &tpl.Spec
-
-	appIdx := -1
-	for i, ct := range spec.Containers {
-		if ct.Name == in.Container {
-			appIdx = i
-		}
-	}
-	if appIdx < 0 {
-		return fmt.Errorf("容器 %s 不存在于该工作负载", in.Container)
-	}
-	app := &spec.Containers[appIdx]
-	for _, m := range app.VolumeMounts {
-		if m.MountPath == dir && m.Name != LogShareVolumeName {
-			return fmt.Errorf("目录 %s 已被卷 %s 挂载，无法再共享给采集 Sidecar；请把日志写到未挂载卷的目录或调整日志路径", dir, m.Name)
-		}
-	}
-	app.VolumeMounts = append(stripMounts(app.VolumeMounts), corev1.VolumeMount{Name: LogShareVolumeName, MountPath: dir})
-	ensureVolume(spec, LogShareVolumeName, corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}})
-
-	cmName := name + "-fluent-bit"
-	legacySecretName := name + LegacyESSecretSuffix // 旧版遗留（本次保存顺手清掉）
-	ensureVolume(spec, LogConfVolumeName, corev1.VolumeSource{
-		ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: cmName}},
-	})
-
-	meta, _ := json.Marshal(in)
-	if tpl.Annotations == nil {
-		tpl.Annotations = map[string]string{}
-	}
-	tpl.Annotations[logCollectionAnn] = string(meta)
-
-	ownerRefs := []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: ownerKind, Name: name, UID: uid}}
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: cmName, Namespace: ns, OwnerReferences: ownerRefs,
-			Labels: map[string]string{"app.kubernetes.io/managed-by": "kube-console"}},
-		Data: map[string]string{"fluent-bit.conf": fluentBitConf(in, ns, name, index, host, port, tlsOn, src.Username != "")},
+		Data: map[string]string{
+			"fluent-bit.conf": fluentBitConf(in, ns, workload, index, host, port, tlsOn, src.Username != ""),
+			// Parsers_File 声明了就必须存在，text 格式也带上（json-parser 闲置无害）
+			"parsers.conf": "[PARSER]\n    Name      json-parser\n    Format    json\n",
+		},
 	}
-	// Parsers_File 声明了就必须存在，text 格式也带上（json-parser 闲置无害）
-	cm.Data["parsers.conf"] = "[PARSER]\n    Name      json-parser\n    Format    json\n"
-	cmCli := c.Clientset.CoreV1().ConfigMaps(ns)
-	if _, err = cmCli.Get(ctx, cmName, metav1.GetOptions{}); err == nil {
-		_, err = cmCli.Update(ctx, cm, metav1.UpdateOptions{})
-	} else if apierrors.IsNotFound(err) {
-		_, err = cmCli.Create(ctx, cm, metav1.CreateOptions{})
-	}
-	if err != nil {
-		return fmt.Errorf("写入 fluent-bit 配置失败: %w", err)
-	}
+	return cm, nil
+}
 
-	// ES 密码只落 Secret 并经 env 注入（配置里 ${KC_ES_PASS} 插值）。
-	// Secret 按命名空间共享一份：同 ns 的多个采集 Sidecar 都引用它，
-	// 密码不再随工作负载数量复制成 N 份；无账号时清理。
-	sec := &corev1.Secret{
+// buildLogESSecret 命名空间共享的 ES 凭据 Secret；无账号时返回 nil（调用方删除遗留）
+func buildLogESSecret(src *model.LogSource, ns string) *corev1.Secret {
+	if src.Username == "" {
+		return nil
+	}
+	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: LogESSecretName, Namespace: ns,
-			Labels: map[string]string{"app.kubernetes.io/managed-by": "kube-console"},
+			Name:      LogESSecretName,
+			Namespace: ns,
+			Labels:    map[string]string{"app.kubernetes.io/managed-by": "kube-console"},
 		},
 		StringData: map[string]string{logESKey: src.Password},
 	}
-	secCli := c.Clientset.CoreV1().Secrets(ns)
-	if src.Username == "" {
-		_ = secCli.Delete(ctx, LogESSecretName, metav1.DeleteOptions{})
-	} else {
-		if _, err = secCli.Get(ctx, LogESSecretName, metav1.GetOptions{}); err == nil {
-			_, err = secCli.Update(ctx, sec, metav1.UpdateOptions{})
-		} else if apierrors.IsNotFound(err) {
-			_, err = secCli.Create(ctx, sec, metav1.CreateOptions{})
-		}
-		if err != nil {
-			return fmt.Errorf("写入 ES 凭证 Secret 失败: %w", err)
-		}
-	}
-	// 旧版按工作负载建的凭据 Secret 顺手回收，避免密码副本长期留存
-	_ = secCli.Delete(ctx, legacySecretName, metav1.DeleteOptions{})
+}
 
+// buildLogSidecar 采集 Sidecar 容器（admission 注入与配置共用同一份构造）
+func buildLogSidecar(in *LogCollectionInput, dir string, esUser string) corev1.Container {
 	sidecar := corev1.Container{
 		Name:    LogSidecarName,
 		Image:   in.Image,
@@ -373,7 +298,7 @@ func (s *K8sService) EnableLogCollection(ctx context.Context, c *kube.Client, ki
 			{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
 				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
 			}},
-			{Name: "KC_ES_USER", Value: src.Username},
+			{Name: "KC_ES_USER", Value: esUser},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: LogShareVolumeName, MountPath: dir, ReadOnly: true},
@@ -384,77 +309,25 @@ func (s *K8sService) EnableLogCollection(ctx context.Context, c *kube.Client, ki
 			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("300m"), corev1.ResourceMemory: resource.MustParse("256Mi")},
 		},
 	}
-	if src.Username != "" {
-		sidecar.Env = append(sidecar.Env, corev1.EnvVar{Name: "KC_ES_PASS", ValueFrom: &corev1.EnvVarSource{
-			SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: LogESSecretName}, Key: logESKey},
-		}})
-	}
-	replaced := false
-	for i, ct := range spec.Containers {
-		if ct.Name == LogSidecarName {
-			spec.Containers[i] = sidecar
-			replaced = true
-		}
-	}
-	if !replaced {
-		spec.Containers = append(spec.Containers, sidecar)
-	}
-	return update(ctx)
+	return sidecar
 }
 
-// GetLogCollection 查询采集状态（Sidecar 容器存在即视为开启）
-func (s *K8sService) GetLogCollection(ctx context.Context, c *kube.Client, kind, ns, name string) (*LogCollectionStatus, error) {
-	tpl, _, _, _, err := logCollectionOwner(ctx, c, kind, ns, name)
-	if err != nil {
-		return nil, err
-	}
-	out := &LogCollectionStatus{}
-	for _, ct := range tpl.Spec.Containers {
-		if ct.Name == LogSidecarName {
-			out.Enabled = true
-		}
-	}
-	if raw := tpl.Annotations[logCollectionAnn]; raw != "" {
-		var in LogCollectionInput
-		if json.Unmarshal([]byte(raw), &in) == nil {
-			out.Config = &in
-		}
-	}
-	return out, nil
-}
-
-// RemoveLogCollection 摘除 Sidecar、共享卷与配置资源（保留应用其他卷）
-func (s *K8sService) RemoveLogCollection(ctx context.Context, c *kube.Client, kind, ns, name string) error {
-	tpl, _, _, update, err := logCollectionOwner(ctx, c, kind, ns, name)
-	if err != nil {
-		return err
-	}
-	spec := &tpl.Spec
-	filterContainers := spec.Containers[:0]
+// stripLogSidecarFromSpec 摘除模板模式注入的 Sidecar、共享卷与配置卷（旧模式迁移/关闭用）
+func stripLogSidecarFromSpec(spec *corev1.PodSpec) {
+	filtered := spec.Containers[:0]
 	for _, ct := range spec.Containers {
 		if ct.Name != LogSidecarName {
-			filterContainers = append(filterContainers, ct)
+			filtered = append(filtered, ct)
 		}
 	}
-	spec.Containers = filterContainers
+	spec.Containers = filtered
 	for i := range spec.Containers {
 		spec.Containers[i].VolumeMounts = stripMounts(spec.Containers[i].VolumeMounts)
 	}
 	spec.Volumes = filterVolumes(spec.Volumes)
-	delete(tpl.Annotations, logCollectionAnn)
-
-	_ = c.Clientset.CoreV1().ConfigMaps(ns).Delete(ctx, name+"-fluent-bit", metav1.DeleteOptions{})
-	_ = c.Clientset.CoreV1().Secrets(ns).Delete(ctx, name+LegacyESSecretSuffix, metav1.DeleteOptions{})
-	if err = update(ctx); err != nil {
-		return err
-	}
-	// 共享凭据 Secret 只在**该 ns 再无采集者**时回收（在 update 之后判定，避免把自己算进去）
-	if left, e := collectorsLeftIn(ctx, c, ns); e == nil && !left {
-		_ = c.Clientset.CoreV1().Secrets(ns).Delete(ctx, LogESSecretName, metav1.DeleteOptions{})
-	}
-	return nil
 }
 
+// GetLogCollection 查询采集状态（Sidecar 容器存在即视为开启）
 // collectorsLeftIn 命名空间内是否仍有带 fluent-bit Sidecar 的工作负载。
 // 任一类负载查询失败一律按"还有"处理（fail-safe）——误删会让其它 Sidecar 起不来。
 func collectorsLeftIn(ctx context.Context, c *kube.Client, ns string) (bool, error) {

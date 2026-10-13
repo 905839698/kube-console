@@ -7,6 +7,8 @@
       <el-button size="small" :disabled="!writable" @click="openRebuild">重建实例</el-button>
       <el-button size="small" :loading="loading" @click="loadAll">刷新</el-button>
       <span class="tip">{{ repoNote }}</span>
+      <!-- 没仓库时备份一定失败，直接给到配置入口，别让人去猜是谁的锅 -->
+      <el-button v-if="!repos.length" size="small" text type="primary" @click="gotoRepos">配置备份仓库</el-button>
     </div>
 
     <!-- 备份计划概览 -->
@@ -208,7 +210,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { confirmDelete } from '../../utils/confirm'
 import {
   kbApi,
   type KBCluster,
@@ -222,6 +226,8 @@ import {
 } from '../../api/kb'
 
 const props = defineProps<{ cluster: KBCluster; writable: boolean }>()
+const router = useRouter()
+const gotoRepos = () => router.push('/kb/repos')
 const emit = defineEmits<{ (e: 'changed'): void }>()
 
 const loading = ref(false)
@@ -367,8 +373,12 @@ async function showDetail(row: KBBackupView) {
   } catch { /* 拦截器已提示 */ }
 }
 async function delBackup(row: KBBackupView) {
+  // 备份是出事时的最后一道保险，删错一次就少一个恢复点：要求完整输入备份名
   try {
-    await ElMessageBox.confirm(`删除备份 ${row.name}？`, '删除备份', { type: 'warning' })
+    await confirmDelete(row.name, {
+      title: '删除备份',
+      warning: `删除 ${row.name}（${row.component || '-'}，${row.totalSize || row.phase}）后该恢复点永久失效`,
+    })
   } catch { return }
   await kbApi.deleteBackup(props.cluster.namespace, props.cluster.name, row.name)
   ElMessage.success('已删除')
@@ -378,9 +388,9 @@ async function delBackup(row: KBBackupView) {
 
 <style scoped>
 .ops-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.tip { font-size: 12px; color: #909399; }
-.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.tip { font-size: 13px; color: #909399; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
 .sec-title { font-weight: 600; margin: 14px 0 6px; font-size: 13px; }
 .sched-line { display: flex; align-items: center; gap: 6px; line-height: 22px; }
-.err-box { background: #fef0f0; color: #c45656; padding: 8px 10px; border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
+.err-box { background: #fef0f0; color: #c45656; padding: 8px 10px; border-radius: 4px; font-size: 13px; white-space: pre-wrap; }
 </style>

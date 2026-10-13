@@ -121,7 +121,8 @@
 
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { confirmDelete } from '../../utils/confirm'
 import { kbApi, kbMatchesEngine, type KBKafkaGroup, type KBKafkaTopic, type KBCluster } from '../../api/kb'
 import KvEditor from '../forms/KvEditor.vue'
 
@@ -221,7 +222,7 @@ async function saveConfig() {
 
 async function drop(row: KBKafkaTopic) {
   try {
-    await ElMessageBox.confirm(`删除 topic ${row.name}？消息与消费位点一并丢弃，不可撤销。`, '删除 topic', { type: 'warning', confirmButtonText: '确认删除' })
+    await confirmDelete(row.name, { title: '删除 topic', warning: '消息与消费位点一并丢弃，不可撤销' })
   } catch { return }
   try {
     await kbApi.kafkaDeleteTopic(props.cluster.namespace, props.cluster.name, row.name)
@@ -248,9 +249,9 @@ async function runConsume() {
 
 <style scoped>
 .ops-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.tip { font-size: 12px; color: #9ca3af; }
-.err-box { margin-top: 8px; padding: 8px 10px; background: #fef2f2; color: #b91c1c; font-size: 12px; white-space: pre-wrap; border-radius: 4px; }
+.tip { font-size: 13px; color: #9ca3af; }
+.err-box { margin-top: 8px; padding: 8px 10px; background: #fef2f2; color: #b91c1c; font-size: 13px; white-space: pre-wrap; border-radius: 4px; }
 .cfg-tag { margin: 0 6px 4px 0; }
 .sub-table { margin: 6px 12px; width: calc(100% - 24px); }
-.out-box { margin-top: 10px; max-height: 320px; overflow: auto; background: #f8fafc; border: 1px solid #e5e7eb; padding: 8px; font-size: 12px; white-space: pre-wrap; }
+.out-box { margin-top: 10px; max-height: 320px; overflow: auto; background: #f8fafc; border: 1px solid #e5e7eb; padding: 8px; font-size: 13px; white-space: pre-wrap; }
 </style>

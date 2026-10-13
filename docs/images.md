@@ -6,18 +6,19 @@
 
 | 变量 | 配置项 | 环境变量 | 默认值 | 作用范围 |
 | --- | --- | --- | --- | --- |
-| CI 任务镜像仓库前缀 | `ci.imageRegistry` | `KC_CI_IMAGE_REGISTRY` | `harbor.cqyxpt.site:8443/library` | A 节全部 19 类 CI 节点模板里的 `{{imageRegistry}}` 占位 |
+| CI 任务镜像仓库前缀 | `ci.imageRegistry` | `KC_CI_IMAGE_REGISTRY` | `harbor.cqyxpt.site:8443/library` | A 节全部 20 类 CI 节点模板里的 `{{imageRegistry}}` 占位 |
 | 终端调试容器镜像 | `k8s.debugImage` | `KC_K8S_DEBUG_IMAGE` | `busybox:1.36` | B 节 |
 
 - `imageRegistry` 在 CI 编译期注入节点模板（`node.Loader.WithGlobals`），**优先于节点参数**——流水线里误填同名参数不会改坏镜像仓库
 - 镜像**版本**不是全局变量，是各节点自己的参数（`{{goVersion}}`/`{{jdk}}`/`{{nodeVersion}}`/`{{pythonVersion}}`/`{{mavenVersion}}`，默认值见下表，可在设计器属性面板按节点调整）
 - CI 拉取私有镜像用 `ci.imagePullSecret`（默认 `harbor`），与镜像地址是两个概念
 
-## A. CI 节点任务镜像（21 处，前缀均为 `{{imageRegistry}}`）
+## A. CI 节点任务镜像（22 处，前缀均为 `{{imageRegistry}}`）
 
 | 节点 | 镜像（前缀省略） | 版本参数（默认值） | 用途 |
 | --- | --- | --- | --- |
 | git-clone | `git:2.43.4` | — | 克隆 GitLab 仓库 |
+| artifact-fetch | `curl:8.5.0` | — | 镜像构建器：凭令牌回平台下载上传的构建产物（含 busybox tar 解包） |
 | gitops-bump | `git:2.43.4` | — | 拉清单仓库、改写镜像 Tag |
 | harbor-scan | `git:2.43.4` | — | 仓库拉取（配合 Harbor API 扫描） |
 | go-build | `golang:{{goVersion}}` | goVersion=1.22 | Go 编译 |
@@ -48,6 +49,19 @@ curl:8.5.0  mc:RELEASE.2024-06-12T14-34-03Z
 golang:<goVersion>  gradle:8-jdk<jdk>  maven:<mavenVersion>-eclipse-temurin-<jdk>
 node:<nodeVersion>  python:<pythonVersion>
 ```
+
+**镜像构建器约定基础镜像**（CI → 镜像构建器：上传 jar/二进制/前端静态包（tar.gz 或 zip，zip 由平台归一成 tar.gz）后，平台按应用类型生成的
+Dockerfile 的 `FROM`——它不是节点任务镜像，但同样由 buildkitd 从 `{{imageRegistry}}` 下预推；
+构建器表单填了「基础镜像」则不在此列）：
+
+| 应用类型 | 默认 `FROM`（imageRegistry 前缀） | 说明 |
+| --- | --- | --- |
+| java | `eclipse-temurin:17-jre` | jar 直接 `java -jar`，JVM 参数走 `JAVA_OPTS` |
+| go | `alpine:3.19` | 已在 A 节推送清单；静态二进制 + USER 65534 |
+| web | `nginx:1.27-alpine` | tar.gz/zip 解包即站点根（COPY upload/dist/ → /usr/share/nginx/html/） |
+
+未预推不挡平台运行——只有真正发起对应类型的构建才需要；buildkitd 拉不到 `FROM` 时构建当场失败，
+错误在 build-image 日志里可见。
 
 ## B. 平台运行时镜像（非 CI）
 

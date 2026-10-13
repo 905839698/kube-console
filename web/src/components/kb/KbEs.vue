@@ -71,7 +71,8 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { confirmDelete } from '../../utils/confirm'
 import { kbApi, kbMatchesEngine, type KBCluster, type KBESHealth, type KBESIndex, type KBESIndexDetail, type KBESHits } from '../../api/kb'
 
 const props = defineProps<{ cluster: KBCluster; writable: boolean }>()
@@ -154,7 +155,10 @@ function cell(v: any) {
 
 async function drop(row: KBESIndex) {
   try {
-    await ElMessageBox.confirm(`删除索引 ${row.index}（${row.docsCount} 条文档、${row.storeSize}）？数据不可恢复。`, '删除索引', { type: 'warning', confirmButtonText: '确认删除' })
+    await confirmDelete(row.index, {
+      title: '删除索引',
+      warning: `${row.docsCount} 条文档、${row.storeSize}，数据不可恢复`,
+    })
   } catch { return }
   try {
     await kbApi.esDeleteIndex(props.cluster.namespace, props.cluster.name, row.index)
@@ -190,10 +194,10 @@ function pretty(s: string) {
 
 <style scoped>
 .ops-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.tip { font-size: 12px; color: #9ca3af; }
-.meta { font-size: 12px; color: #6b7280; }
+.tip { font-size: 13px; color: #9ca3af; }
+.meta { font-size: 13px; color: #6b7280; }
 .warn { color: #b45309; }
 .head { font-weight: 600; }
-.err-box { margin-top: 8px; padding: 8px 10px; background: #fef2f2; color: #b91c1c; font-size: 12px; white-space: pre-wrap; border-radius: 4px; }
-.out-box { margin-top: 10px; max-height: 340px; overflow: auto; background: #f8fafc; border: 1px solid #e5e7eb; padding: 8px; font-size: 12px; white-space: pre-wrap; }
+.err-box { margin-top: 8px; padding: 8px 10px; background: #fef2f2; color: #b91c1c; font-size: 13px; white-space: pre-wrap; border-radius: 4px; }
+.out-box { margin-top: 10px; max-height: 340px; overflow: auto; background: #f8fafc; border: 1px solid #e5e7eb; padding: 8px; font-size: 13px; white-space: pre-wrap; }
 </style>

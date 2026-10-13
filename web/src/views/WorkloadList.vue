@@ -1,21 +1,27 @@
 <template>
-  <el-card shadow="never">
-    <template #header>
-      <div class="card-header">
-        <span>{{ kindTitle }} ({{ items.length }})</span>
-        <div class="header-right">
-          <el-button v-if="selected.length && !isPod" size="small" type="warning" plain :disabled="kind === 'cronjobs' || kind === 'jobs' || !canWriteSelected" @click="batchRestart">重启选中 ({{ selected.length }})</el-button>
-          <el-button v-if="selected.length" size="small" type="danger" plain :disabled="!canWriteSelected" @click="batchDelete">删除选中 ({{ selected.length }})</el-button>
-          <el-input v-model="search" placeholder="搜索..." :prefix-icon="Search" clearable style="width: 200px" @input="load" />
-          <el-button :icon="Refresh" circle @click="load" />
-          <el-button size="default" @click="exportVisible = true">导出</el-button>
-          <el-button size="default" @click="importDlg?.pick()">导入</el-button>
-          <el-button v-if="!isPod" type="primary" size="default" :disabled="!perm.canWriteNS(createNs)" @click="openCreate">
-            <el-icon><Plus /></el-icon>&nbsp;新建
-          </el-button>
-        </div>
+  <div class="kc-list">
+    <div class="kc-list-head">
+      <span class="kc-section-title"><el-icon><Box /></el-icon>{{ kindTitle }}</span>
+      <span class="kc-count">共 {{ items.length }} 条</span>
+      <span class="spacer"></span>
+      <el-button v-if="!isPod" type="primary" :disabled="!perm.canWriteNS(createNs)" @click="openCreate">
+        <el-icon><Plus /></el-icon>&nbsp;新增
+      </el-button>
+      <el-button @click="exportVisible = true">导出</el-button>
+      <el-button @click="importDlg?.pick()">导入</el-button>
+      <el-button :icon="Refresh" circle @click="load" />
+    </div>
+
+    <el-card shadow="never">
+      <div class="kc-filter-bar">
+        <span class="kc-filter-label">名称:</span>
+        <el-input v-model="search" placeholder="请输入名称" :prefix-icon="Search" clearable style="width: 260px" @input="load" />
+        <span class="spacer"></span>
+        <template v-if="selected.length">
+          <el-button v-if="selected.length && !isPod" type="warning" :disabled="kind === 'cronjobs' || kind === 'jobs' || !canWriteSelected" @click="batchRestart">重启选中 ({{ selected.length }})</el-button>
+          <el-button v-if="selected.length" type="danger" :disabled="!canWriteSelected" @click="batchDelete">删除选中 ({{ selected.length }})</el-button>
+        </template>
       </div>
-    </template>
 
     <el-table border :data="paged" v-loading="loading" stripe @selection-change="(rows: WorkloadItem[]) => (selected = rows)">
       <el-table-column type="selection" width="42" />
@@ -141,7 +147,8 @@
     <ResourceExportDialog v-model="exportVisible" />
     <!-- 导入（多文档 YAML 预览 + 逐个应用） -->
     <ResourceImportDialog ref="importDlg" @done="load" />
-  </el-card>
+    </el-card>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -423,9 +430,13 @@ function onCreated() {
 </script>
 
 <style scoped>
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.header-right { display: flex; gap: 8px; align-items: center; }
-.ready-ok { color: #67c23a; font-weight: 600; }
+.kc-list { display: flex; flex-direction: column; gap: 12px; }
+.kc-list-head { display: flex; align-items: center; gap: 10px; }
+.kc-list-head .spacer { flex: 1; }
+.kc-count { color: #8a94a6; font-size: 13px; }
+.kc-filter-bar { margin-bottom: 12px; background: transparent; border: none; padding: 0; }
+.kc-filter-bar .spacer { flex: 1; }
+.ready-ok { color: #2ba471; font-weight: 600; }
 .ready-warn { color: #e6a23c; font-weight: 600; }
 .pager { margin-top: 12px; display: flex; justify-content: flex-end; }
 </style>

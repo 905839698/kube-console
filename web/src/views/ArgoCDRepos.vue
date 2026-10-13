@@ -289,6 +289,6 @@ onMounted(load)
 
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
-.muted { color: #909399; font-size: 12px; }
-.form-tip { color: #909399; font-size: 12px; line-height: 1.5; margin-top: 4px; }
+.muted { color: #909399; font-size: 13px; }
+.form-tip { color: #909399; font-size: 13px; line-height: 1.5; margin-top: 4px; }
 </style>

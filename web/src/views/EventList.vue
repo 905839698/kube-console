@@ -180,7 +180,7 @@ onMounted(load)
 
 <style scoped>
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
-.updated { color: #909399; font-size: 12px; }
+.updated { color: #909399; font-size: 13px; }
 .empty { text-align: center; color: #909399; padding: 40px 0; }
 .pager { margin-top: 12px; display: flex; justify-content: flex-end; }
 </style>

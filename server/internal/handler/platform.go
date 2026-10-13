@@ -12,7 +12,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"net/http"
 
 	"kube-console/server/internal/ci/errcode"
@@ -487,25 +486,7 @@ func (h *PlatformHandler) ClusterCerts(c *gin.Context) {
 	response.OK(c, out)
 }
 
-// ------------------- 备份概览（Velero 只读） -------------------
-
-// Backups GET /backups —— 读取 velero 备份/计划（未安装则返回空并提示）
-func (h *PlatformHandler) Backups(c *gin.Context) {
-	client := h.kubeClient(c)
-	if client == nil {
-		return
-	}
-	k8s := service.NewK8sService(h.debugImage)
-	gvrBackups := schema.GroupVersionResource{Group: "velero.io", Version: "v1", Resource: "backups"}
-	backups, err := k8s.ListGenericGVR(c.Request.Context(), client, gvrBackups, "", "", "")
-	if err != nil {
-		response.OK(c, gin.H{"installed": false, "items": []any{}})
-		return
-	}
-	gvrSchedules := schema.GroupVersionResource{Group: "velero.io", Version: "v1", Resource: "schedules"}
-	schedules, _ := k8s.ListGenericGVR(c.Request.Context(), client, gvrSchedules, "", "", "")
-	response.OK(c, gin.H{"installed": true, "items": backups, "schedules": schedules})
-}
+// ------------------- 备份概览（Velero）：接口见 handler/velero.go、service/velero.go -------------------
 
 func atoiDefault(s string, def int) int {
 	n := 0

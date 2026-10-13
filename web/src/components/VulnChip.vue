@@ -125,6 +125,6 @@ onMounted(fetchReport)
 
 <style scoped>
 .vchip { display: inline-block; }
-.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
-.scan-meta { color: #909399; font-size: 12px; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+.scan-meta { color: #909399; font-size: 13px; }
 </style>

@@ -36,6 +36,31 @@ type Access struct {
 	NSRead    map[string]bool `json:"namespacesRead"`
 	AllNSRead bool            `json:"allNsRead"`
 	Roles     []RoleBrief     `json:"roles,omitempty"`
+	// Menus 该用户可见的菜单键（后端按资源能力算，见 menu.go）。前端据此渲染侧边栏，
+	// 同一份能力集合也用于接口拦截——菜单藏起来的同时接口真的挡住。
+	Menus []string `json:"menus"`
+	// readRes / allRead：生效规则里的"可读资源"集合，不单独出 JSON（Menus 是它的结论）
+	readRes map[string]bool
+	allRead bool
+}
+
+// CanReadAPI 是否可读某 API 资源（菜单推导与接口拦截共用同一判定）。
+// apiGroup 传空串表示核心组。通配按三种形式匹配：apiGroups=*、resources=*、两者都 *。
+// 之前把"apiGroups=* 且 resources=pods"这类规则当成全读，会让只授权了单个资源的
+// 自定义角色把整个侧边栏都点亮——收口就等于没做。
+func (a *Access) CanReadAPI(apiGroup, resource string) bool {
+	if a == nil {
+		return false
+	}
+	if a.PlatformAdmin || a.allRead {
+		return true
+	}
+	for _, key := range []string{permResKey(apiGroup, resource), "*/" + resource, permResKey(apiGroup, "*")} {
+		if a.readRes[key] {
+			return true
+		}
+	}
+	return false
 }
 
 // RoleBrief 用户生效角色的简要快照（前端菜单/用户菜单展示层级角色）
@@ -105,30 +130,56 @@ func (a *Access) CanWriteCluster() bool {
 type rolePerm struct {
 	Write        bool // 含任一写动词（create/update/patch/delete/*）
 	ClusterWrite bool // 含集群级资源写（nodes 或 *）
+	// readRes 归一化成 "apiGroup/resource" 的可读资源集合，菜单显隐按它推导（见 menu.go）；
+	// 通配按 */res 与 group/* 原样登记。allRead 只表示命中 */*。
+	readRes map[string]bool
+	allRead bool
 }
 
-// rolePermOf 从角色规则提炼写权限。只看动词与资源，不看角色名——自定义 ClusterRole、
+// permResKey 归一化资源标识：apiGroup 空串换成 core，避免"核心组"与"未填"两种写法判不平等。
+func permResKey(apiGroup, resource string) string {
+	if apiGroup == "" {
+		apiGroup = "core"
+	}
+	return apiGroup + "/" + resource
+}
+
+// rolePermOf 从角色规则提炼权限。只看动词与资源，不看角色名——自定义 ClusterRole、
 // 名字叫 admin 的只读 Role 都能被正确归类。
 func rolePermOf(rules []rbacv1.PolicyRule) rolePerm {
-	var rp rolePerm
+	rp := rolePerm{readRes: map[string]bool{}}
 	for _, r := range rules {
-		write := false
+		canRead, canWrite := false, false
 		for _, v := range r.Verbs {
 			switch v {
-			case "*", "create", "update", "patch", "delete", "deletecollection":
-				write = true
-			}
-			if write {
-				break
+			case "*":
+				canRead, canWrite = true, true
+			case "get", "list", "watch":
+				canRead = true
+			case "create", "update", "patch", "delete", "deletecollection":
+				canWrite = true
 			}
 		}
-		if !write {
-			continue
+		// 读能力集合：菜单推导用（写角色天然可读，否则"能改却看不见"）。
+		// 通配按原样登记成 */res、group/* 这样的键，由 CanReadAPI 去匹配；
+		// 只有 */* 才直接记 allRead。
+		if canRead || canWrite {
+			for _, g := range r.APIGroups {
+				for _, res := range r.Resources {
+					if g == "*" && res == "*" {
+						rp.allRead = true
+					}
+					rp.readRes[permResKey(g, res)] = true
+				}
+			}
 		}
-		rp.Write = true
-		for _, res := range r.Resources {
-			if res == "*" || res == "nodes" {
-				rp.ClusterWrite = true
+		// 写能力：原口径不变（任一写动词即 Write；nodes 或 * 另算集群级写）
+		if canWrite {
+			rp.Write = true
+			for _, res := range r.Resources {
+				if res == "*" || res == "nodes" {
+					rp.ClusterWrite = true
+				}
 			}
 		}
 	}
@@ -141,11 +192,22 @@ func buildAccess(crbs []rbacv1.ClusterRoleBinding, rbs []rbacv1.RoleBinding,
 	username string, groups []string, platformAdmin bool,
 	resolve func(ref rbacv1.RoleRef, ns string) rolePerm) *Access {
 
-	acc := &Access{PlatformAdmin: platformAdmin, NS: map[string]bool{}, NSRead: map[string]bool{}}
+	acc := &Access{PlatformAdmin: platformAdmin, NS: map[string]bool{}, NSRead: map[string]bool{}, readRes: map[string]bool{}}
 	if platformAdmin {
 		acc.AllNSWrite = true
 		acc.ClusterWrite = true
+		acc.allRead = true
+		acc.Menus = VisibleMenus(acc)
 		return acc
+	}
+	// takeRead 累计命中绑定的可读资源集合：菜单能力是整个集群的，不分 ns
+	takeRead := func(rp rolePerm) {
+		if rp.allRead {
+			acc.allRead = true
+		}
+		for k := range rp.readRes {
+			acc.readRes[k] = true
+		}
 	}
 	match := func(subjects []rbacv1.Subject) bool {
 		for _, s := range subjects {
@@ -169,7 +231,9 @@ func buildAccess(crbs []rbacv1.ClusterRoleBinding, rbs []rbacv1.RoleBinding,
 		}
 		// 命中集群层绑定：无论读写都算"全 ns 可见"
 		acc.AllNSRead = true
-		if rp := resolve(b.RoleRef, ""); rp.Write {
+		rp := resolve(b.RoleRef, "")
+		takeRead(rp)
+		if rp.Write {
 			acc.AllNSWrite = true
 			if rp.ClusterWrite {
 				acc.ClusterWrite = true
@@ -182,10 +246,13 @@ func buildAccess(crbs []rbacv1.ClusterRoleBinding, rbs []rbacv1.RoleBinding,
 			continue
 		}
 		acc.NSRead[b.Namespace] = true
-		if resolve(b.RoleRef, b.Namespace).Write {
+		rp := resolve(b.RoleRef, b.Namespace)
+		takeRead(rp)
+		if rp.Write {
 			acc.NS[b.Namespace] = true
 		}
 	}
+	acc.Menus = VisibleMenus(acc)
 	return acc
 }
 
@@ -446,19 +513,41 @@ func (s *PermissionService) load(ctx context.Context, cluster, username string) 
 		log.Printf("perm: 集群 %s 不可用，K8s 侧绑定不再参与判定: %v", cluster, err)
 		return acc
 	}
-	kacc := s.fromK8sRBAC(ctx, client, cluster, username)
+	mergeAccess(acc, s.fromK8sRBAC(ctx, client, cluster, username))
+	return acc
+}
+
+// mergeAccess 把 K8s 侧反推的权限并进 DB 侧结果，并在并集完成后重算菜单。
+// 单独成函数是为了钉住"两边都并完才算完"：读能力集合（readRes/allRead）漏并一边，
+// 只靠运维手工创建的 K8s RBAC 授权的用户就会被判成"什么都读不到"，菜单全空。
+func mergeAccess(acc, kacc *Access) {
 	acc.PlatformAdmin = acc.PlatformAdmin || kacc.PlatformAdmin
 	acc.PlatformViewer = acc.PlatformViewer || kacc.PlatformViewer
 	acc.AllNSWrite = acc.AllNSWrite || kacc.AllNSWrite
 	acc.ClusterWrite = acc.ClusterWrite || kacc.ClusterWrite
 	acc.AllNSRead = acc.AllNSRead || kacc.AllNSRead
+	acc.allRead = acc.allRead || kacc.allRead
+	if acc.readRes == nil {
+		acc.readRes = map[string]bool{}
+	}
+	for k, v := range kacc.readRes {
+		if v {
+			acc.readRes[k] = true
+		}
+	}
+	if acc.NS == nil {
+		acc.NS = map[string]bool{}
+	}
 	for ns, v := range kacc.NS {
 		if v {
 			acc.NS[ns] = true
 		}
 	}
+	if acc.NSRead == nil {
+		acc.NSRead = map[string]bool{}
+	}
 	for ns, v := range kacc.NSRead {
-		if v && acc.NSRead != nil {
+		if v {
 			acc.NSRead[ns] = true
 		}
 	}
@@ -466,7 +555,8 @@ func (s *PermissionService) load(ctx context.Context, cluster, username string) 
 		acc.AllNSWrite = true
 		acc.ClusterWrite = true
 	}
-	return acc
+	// buildAccess 里算好的 Menus 只看到单一来源，这里按并集重算一次
+	acc.Menus = VisibleMenus(acc)
 }
 
 // fromK8sRBAC 从集群 RBAC 绑定反推权限（读失败按无权限降级）

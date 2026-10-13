@@ -33,6 +33,6 @@ defineProps<{
 .metric-label { font-size: 13px; color: #909399; margin-bottom: 6px; }
 .metric-value { font-size: 26px; font-weight: 600; }
 .metric-unit { font-size: 13px; font-weight: 400; color: #909399; margin-left: 2px; }
-.metric-sub { font-size: 12px; color: #c0c4cc; margin-top: 4px; }
+.metric-sub { font-size: 13px; color: #c0c4cc; margin-top: 4px; }
 .metric-trend { margin-top: 8px; }
 </style>

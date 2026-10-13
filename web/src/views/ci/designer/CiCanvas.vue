@@ -18,21 +18,21 @@
     >
       <!-- 普通节点：左 target / 右 source -->
       <template #node-ci="{ data, selected }">
-        <div class="ci-node" :class="{ sel: selected }">
+        <div class="ci-node" :class="{ sel: selected, off: data.disabled }">
           <span class="del" title="删除节点" @mousedown.stop @click.stop="data.onDelete?.(idOf(data))">×</span>
           <Handle :type="target" :position="Position.Left" class="dot" />
           <div class="lbl">{{ data.label }}</div>
-          <div class="sub">{{ data.type }}</div>
+          <div class="sub">{{ data.disabled ? '已跳过' : data.type }}</div>
           <Handle :type="source" :position="Position.Right" class="dot" />
         </div>
       </template>
       <!-- 条件节点：右出口 yes / no 双句柄 -->
       <template #node-cond="{ data, selected }">
-        <div class="cond-node" :class="{ sel: selected }">
+        <div class="cond-node" :class="{ sel: selected, off: data.disabled }">
           <span class="del red" title="删除节点" @mousedown.stop @click.stop="data.onDelete?.(idOf(data))">×</span>
           <Handle :type="target" :position="Position.Left" class="dot" />
           <div class="lbl">◆ 条件：{{ data.label }}</div>
-          <div class="sub">{{ data.expr || 'IF / ELSE' }}</div>
+          <div class="sub">{{ data.disabled ? '已跳过（分支约束失效）' : data.expr || 'IF / ELSE' }}</div>
           <Handle id="yes" :type="source" :position="Position.Right" class="dot green" style="top: 16px" />
           <Handle id="no" :type="source" :position="Position.Right" class="dot red" style="top: 38px" />
           <span class="branch yes">是</span>
@@ -72,6 +72,7 @@ interface CanvasData {
   type: string
   expr: string
   params: Record<string, unknown>
+  disabled?: boolean
   onDelete?: (id: string) => void
   // 内部记录节点自身 id（slot 作用域拿不到 node.id 时用 data 兜底）
   selfId?: string
@@ -104,7 +105,7 @@ function toVNodes(nodes: CIPNode[]): VNode[] {
       id: n.id,
       type: isCond ? 'cond' : 'ci',
       position: n.position ?? { x: 0, y: 0 },
-      data: { label: typeLabel(n.type), type: n.type, expr, params: n.params ?? {}, onDelete: deleteById, selfId: n.id },
+      data: { label: typeLabel(n.type), type: n.type, expr, params: n.params ?? {}, disabled: !!n.disabled, onDelete: deleteById, selfId: n.id },
       ...(isCond ? {} : { sourcePosition: Position.Right }),
       targetPosition: Position.Left,
     }
@@ -124,7 +125,7 @@ function toVEs(edges: CIPEdge[]): Edge[] {
         strokeWidth: isBranch ? 2 : 1.5,
       },
       label: isBranch ? (e.branch === 'yes' ? '是' : '否') : undefined,
-      labelStyle: { fontSize: 10, fill: e.branch === 'yes' ? '#52c41a' : '#ff4d4f' },
+      labelStyle: { fontSize: 12, fill: e.branch === 'yes' ? '#52c41a' : '#ff4d4f' },
       labelBgStyle: { fill: '#fff' },
     }
   })
@@ -134,6 +135,7 @@ function toDSLNodes(ns: VNode[]): CIPNode[] {
     id: n.id,
     type: n.data?.type ?? n.id,
     params: n.data?.params ?? {},
+    ...(n.data?.disabled ? { disabled: true } : {}),
     position: { x: n.position.x, y: n.position.y },
   }))
 }
@@ -232,7 +234,7 @@ function onDrop(e: DragEvent) {
     id,
     type: type === 'condition' ? 'cond' : 'ci',
     position: { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 },
-    data: { label: meta?.name ?? type, type, expr: '', params, onDelete: deleteById, selfId: id },
+    data: { label: meta?.name ?? type, type, expr: '', params, disabled: false, onDelete: deleteById, selfId: id },
     ...(type === 'condition' ? {} : { sourcePosition: Position.Right }),
     targetPosition: Position.Left,
   }]
@@ -271,6 +273,7 @@ function onNodeClick({ node: n }: { event: unknown; node: VNode }) {
     id: n.id,
     type: n.data?.type ?? n.id,
     params: n.data?.params ?? {},
+    disabled: !!n.data?.disabled,
     position: { x: n.position.x, y: n.position.y },
   })
 }
@@ -284,7 +287,7 @@ function idOf(d: CanvasData) { return d.selfId ?? '' }
 .layout-btn {
   position: absolute; top: 8px; right: 8px; z-index: 10;
   padding: 4px 10px; border-radius: 6px; border: 1px solid #d9d9d9;
-  background: #fff; cursor: pointer; font-size: 12px;
+  background: #fff; cursor: pointer; font-size: 13px;
 }
 .ci-node, .cond-node {
   position: relative; padding: 8px 12px; border-radius: 8px;
@@ -293,17 +296,21 @@ function idOf(d: CanvasData) { return d.selfId ?? '' }
 .ci-node.sel { border-color: #1677ff; background: #bae0ff; }
 .cond-node { min-width: 140px; background: #fff7e6; border-color: #ffd591; }
 .cond-node.sel { border-color: #fa8c16; background: #ffe7ba; }
+/* 关闭的节点：置灰 + 虚线，一眼可见编译时会被跳过 */
+.ci-node.off, .cond-node.off { opacity: 0.55; border-style: dashed; border-color: #bfbfbf; background: #f5f5f5; filter: grayscale(0.9); }
+.ci-node.off .lbl, .cond-node.off .lbl { color: #8c8c8c; text-decoration: line-through; }
+.ci-node.off .sub, .cond-node.off .sub { color: #fa8c16; }
 .lbl { font-weight: 600; }
-.sub { color: #999; font-size: 11px; }
+.sub { color: #999; font-size: 12px; }
 .del {
   position: absolute; top: -9px; right: -9px; width: 18px; height: 18px; border-radius: 50%;
-  background: #fff; border: 1px solid #ff4d4f; color: #ff4d4f; font-size: 12px;
+  background: #fff; border: 1px solid #ff4d4f; color: #ff4d4f; font-size: 13px;
   line-height: 15px; text-align: center; cursor: pointer; z-index: 2;
 }
 .dot { background: #1677ff; }
 .dot.green { background: #52c41a; }
 .dot.red { background: #ff4d4f; }
-.branch { position: absolute; right: -26px; font-size: 10px; }
+.branch { position: absolute; right: -26px; font-size: 12px; }
 .branch.yes { top: 8px; color: #52c41a; }
 .branch.no { top: 30px; color: #ff4d4f; }
 </style>

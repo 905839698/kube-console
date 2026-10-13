@@ -1,207 +1,273 @@
 <template>
-  <div v-loading="loading">
+  <div v-loading="loading" class="kc-page">
+    <!-- 顶部：标题 + 操作 + 发布进度 -->
     <el-card shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="title">
-            <el-page-header :content="`${kindTitle} / ${name}`" @back="goBack" />
-          </div>
-          <div class="actions">
-            <el-button size="small" @click="refresh">刷新</el-button>
-            <el-button size="small" type="primary" @click="openFormEdit">可视化编辑</el-button>
-            <el-button size="small" plain @click="openYaml">编辑 YAML</el-button>
-            <el-button size="small" :disabled="noWrite" @click="openScale" v-if="kind !== 'cronjobs' && kind !== 'jobs'">缩放</el-button>
-            <el-button size="small" type="warning" plain :disabled="noWrite" @click="openRollouts" v-if="kind === 'deployments'">历史版本/回滚</el-button>
-            <el-button size="small" plain @click="imageVisible = true" v-if="kind !== 'pods'">调整镜像</el-button>
-            <el-button size="small" type="success" plain @click="collectVisible = true" v-if="['deployments', 'statefulsets', 'daemonsets'].includes(kind)">日志采集</el-button>
-            <el-button size="small" type="warning" plain :disabled="noWrite" @click="doRestart" v-if="kind !== 'cronjobs' && kind !== 'jobs'">重启</el-button>
-            <el-button size="small" type="danger" plain :disabled="noWrite" @click="doDelete">删除</el-button>
-          </div>
+      <div class="kc-top-head">
+        <span class="kc-section-title"><el-icon><Box /></el-icon>{{ kindTitle }}详情 / <span class="mono">{{ name }}</span></span>
+        <div class="actions">
+          <el-button size="small" @click="refresh">刷新</el-button>
+          <el-button size="small" type="primary" @click="openFormEdit">编辑</el-button>
+          <el-button size="small" @click="openYaml">YAML</el-button>
+          <el-button size="small" v-if="kind !== 'cronjobs' && kind !== 'jobs'" :disabled="noWrite" @click="openScale">缩放</el-button>
+          <el-button size="small" type="warning" v-if="kind !== 'pods'" @click="imageVisible = true">调整镜像版本</el-button>
+          <el-button size="small" type="success" v-if="['deployments', 'statefulsets', 'daemonsets'].includes(kind)" @click="collectVisible = true">日志采集</el-button>
+          <el-button size="small" type="warning" v-if="kind !== 'cronjobs' && kind !== 'jobs'" :disabled="noWrite" @click="doRestart">重启</el-button>
+          <el-button size="small" type="danger" :disabled="noWrite" @click="doDelete">删除</el-button>
         </div>
-      </template>
+      </div>
 
-      <div class="detail-layout">
-        <!-- 左侧资源树 -->
-        <aside class="detail-side">
-          <div class="side-title">资源导航</div>
-          <el-tree
-            :data="treeData"
-            node-key="id"
-            :props="{ label: 'label', children: 'children' }"
-            highlight-current
-            default-expand-all
-            @node-click="onTreeClick"
-          >
-            <template #default="{ data }">
-              <span class="tree-node">
-                <span v-if="data.type === 'pod'" class="status-dot" :class="'dot-' + data.status"></span>
-                <el-icon v-else-if="data.type === 'container'" size="12"><Box /></el-icon>
-                <el-icon v-else size="14"><Odometer /></el-icon>
-                <span class="tree-label">{{ data.label }}</span>
-                <!-- Pod 节点 hover 显示"进入 Pod 详情" -->
-                <el-tooltip v-if="data.type === 'pod'" content="进入 Pod 详情" placement="right">
-                  <el-icon class="tree-enter" @click.stop="goPod(data.pod!)"><Right /></el-icon>
-                </el-tooltip>
-              </span>
-            </template>
-          </el-tree>
-        </aside>
-
-        <!-- 右侧面板 -->
-        <section class="detail-main">
-          <!-- 工作负载视图 -->
-          <template v-if="selectedType === 'workload'">
-            <el-descriptions :column="4" border size="small">
-              <el-descriptions-item label="命名空间">{{ detail?.namespace }}</el-descriptions-item>
-              <el-descriptions-item label="副本">
-                <span :class="{ 'ready-ok': detail?.replicas.readyReplicas === detail?.replicas.replicas }">
-                  {{ detail?.replicas.readyReplicas }}/{{ detail?.replicas.replicas }}
-                </span>
-              </el-descriptions-item>
-              <el-descriptions-item label="更新策略">{{ detail?.strategy }}</el-descriptions-item>
-              <el-descriptions-item v-if="kind === 'cronjobs'" label="调度">
-                {{ detail?.schedule }}<span v-if="nextRun" class="next-run"> · 下次执行 {{ nextRun }}</span>
-              </el-descriptions-item>
-              <el-descriptions-item label="运行时长">{{ detail?.age }}</el-descriptions-item>
-              <el-descriptions-item label="选择器" :span="2">
-                <el-tag v-for="(v, k) in detail?.selector" :key="k" size="small" style="margin-right: 4px">{{ k }}={{ v }}</el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="镜像" :span="2">{{ detail?.images.join(', ') }}</el-descriptions-item>
-            </el-descriptions>
-
-            <el-tabs v-model="tab" style="margin-top: 12px">
-              <el-tab-pane label="容器" name="containers">
-                <el-table border :data="detail?.containers || []" size="small" stripe>
-                  <el-table-column prop="name" label="名称" min-width="150" />
-                  <el-table-column prop="image" label="镜像" min-width="220" show-overflow-tooltip />
-                  <el-table-column prop="command" label="启动命令" min-width="160" show-overflow-tooltip />
-                  <el-table-column prop="ports" label="端口" width="130" />
-                  <el-table-column prop="requests" label="请求" width="130" />
-                  <el-table-column prop="limits" label="限制" width="130" />
-                  <el-table-column prop="readyProbe" label="就绪探针" min-width="140" />
-                  <el-table-column prop="liveProbe" label="存活探针" min-width="140" />
-                </el-table>
-              </el-tab-pane>
-              <el-tab-pane label="事件" name="events">
-                <EventTable :events="detail?.events || []" />
-              </el-tab-pane>
-              <el-tab-pane label="YAML" name="yaml">
-                <div class="yaml-pane">
-                  <YamlEditor v-model="detailYaml" readonly />
-                </div>
-              </el-tab-pane>
-              <el-tab-pane label="监控" name="monitor" lazy>
-                <div class="monitor-toolbar">
-                  <RangeSwitch v-model="range" @change="loadMonitor" />
-                </div>
-                <MetricPanel :cards="monitorCards" :charts="monitorCharts" :loading="monitorLoading" />
-              </el-tab-pane>
-            </el-tabs>
-          </template>
-
-          <!-- Pod 视图 -->
-          <template v-else-if="selectedType === 'pod'">
-            <div v-loading="podLoading" class="pod-view">
-              <div class="view-header">
-                <span class="view-title">
-                  <span class="status-dot" :class="'dot-' + selectedPod?.status"></span>
-                  {{ selectedPod?.name }}
-                </span>
-                <div>
-                  <el-button size="small" type="success" plain @click="openTerminal(selectedPod!)">终端</el-button>
-                  <el-button size="small" @click="openPodLogs(selectedPod!)">日志</el-button>
-                  <el-button size="small" type="primary" @click="goPod(selectedPod!)">进入 Pod 详情</el-button>
-                </div>
-              </div>
-              <el-descriptions :column="4" border size="small">
-                <el-descriptions-item label="状态"><StatusTag :status="selectedPod?.status || ''" /></el-descriptions-item>
-                <el-descriptions-item label="就绪">{{ selectedPod?.ready }}</el-descriptions-item>
-                <el-descriptions-item label="重启">{{ selectedPod?.restarts }}</el-descriptions-item>
-                <el-descriptions-item label="IP">{{ selectedPod?.ip || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="节点">{{ selectedPod?.nodeName || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="运行时长">{{ selectedPod?.age }}</el-descriptions-item>
-              </el-descriptions>
-
-              <div class="sub-title">容器</div>
-              <el-table border :data="podDetail?.containers || []" size="small" stripe>
-                <el-table-column prop="name" label="名称" min-width="140" />
-                <el-table-column label="状态" width="120">
-                  <template #default="{ row }"><StatusTag :status="row.state" :text="row.reason || row.state" /></template>
-                </el-table-column>
-                <el-table-column prop="ready" label="就绪" width="70" align="center" />
-                <el-table-column prop="restartCount" label="重启" width="70" align="center" />
-                <el-table-column prop="message" label="信息" min-width="220" show-overflow-tooltip />
-              </el-table>
-
-              <div class="sub-title">事件</div>
-              <EventTable :events="podDetail?.events || []" />
-            </div>
-          </template>
-
-          <!-- 容器视图 -->
-          <template v-else-if="selectedType === 'container'">
-            <div class="pod-view">
-              <div class="view-header">
-                <span class="view-title">
-                  <el-icon><Box /></el-icon>
-                  {{ selectedContainer?.name }}
-                  <span class="view-sub">{{ selectedPod?.name }}</span>
-                </span>
-                <div>
-                  <el-button size="small" type="success" plain @click="openTerminal(selectedPod!, selectedContainer?.name)">终端</el-button>
-                  <el-button size="small" @click="openPodLogs(selectedPod!, selectedContainer?.name)">查看日志</el-button>
-                </div>
-              </div>
-              <el-descriptions :column="2" border size="small">
-                <el-descriptions-item label="镜像">{{ containerConfig?.image || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="状态">
-                  <template v-if="containerStatus">
-                    <StatusTag :status="containerStatus.state" :text="containerStatus.reason || containerStatus.state" />
-                  </template>
-                  <span v-else>-</span>
-                </el-descriptions-item>
-                <el-descriptions-item label="启动命令">{{ containerConfig?.command || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="端口">{{ containerConfig?.ports || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="资源请求">{{ containerConfig?.requests || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="资源限制">{{ containerConfig?.limits || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="就绪探针">{{ containerConfig?.readyProbe || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="存活探针">{{ containerConfig?.liveProbe || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="重启次数">{{ containerStatus?.restartCount ?? '-' }}</el-descriptions-item>
-                <el-descriptions-item label="就绪">{{ containerStatus?.ready ?? '-' }}</el-descriptions-item>
-              </el-descriptions>
-            </div>
-          </template>
-        </section>
+      <div class="kc-status-strip">
+        <StatusTag :status="replicasOk ? 'Ready' : 'Pending'" :text="replicasOk ? '已完成' : '进行中'" />
+        <span class="kc-strip-label">发布进度</span>
+        <div class="kc-progress-mini">
+          <span class="kc-progress-track"><i :style="{ width: replicasPct + '%' }" /></span>
+          <span class="kc-progress-text">{{ detail?.replicas.readyReplicas }} / {{ detail?.replicas.replicas }}</span>
+        </div>
+        <span class="kc-strip-item">期望 <b>{{ detail?.replicas.replicas ?? '-' }}</b></span>
+        <span class="kc-strip-item">就绪 <b>{{ detail?.replicas.readyReplicas ?? '-' }}</b></span>
+        <span class="kc-strip-item">可用 <b>{{ detail?.replicas.available ?? '-' }}</b></span>
+        <span class="kc-strip-item">最新 <b>{{ detail?.replicas.updated ?? '-' }}</b></span>
+        <span class="kc-strip-item">不可用 <b>{{ (detail?.replicas.replicas ?? 0) - (detail?.replicas.available ?? 0) }}</b></span>
       </div>
     </el-card>
 
+    <div class="kc-two-col">
+      <!-- 基本信息 -->
+      <el-card shadow="never">
+        <div class="kc-info-grid" style="margin-top: 2px">
+          <div class="kc-info-item"><span class="kc-info-label">集群:</span><span class="kc-info-value">{{ clusterStore.current }}</span></div>
+          <div class="kc-info-item"><span class="kc-info-label">名称空间:</span><span class="kc-info-value mono">{{ detail?.namespace }}</span></div>
+          <div class="kc-info-item"><span class="kc-info-label">名称:</span><span class="kc-info-value mono">{{ detail?.name }}</span></div>
+          <div class="kc-info-item"><span class="kc-info-label">创建时间:</span><span class="kc-info-value">{{ detail?.age || '-' }} 前</span></div>
+          <div class="kc-info-item"><span class="kc-info-label">类型:</span><span class="kc-info-value">{{ kindTitle }} <el-tag size="small" type="info" effect="plain">{{ kind }}</el-tag></span></div>
+        </div>
+        <el-collapse v-model="moreOpen" class="kc-more">
+          <el-collapse-item name="more">
+            <template #title><span class="kc-more-title">更多细节</span></template>
+            <div class="kc-info-grid" style="margin-top: 0">
+              <div class="kc-info-item"><span class="kc-info-label">更新策略:</span><span class="kc-info-value">{{ detail?.strategy || '-' }}</span></div>
+              <div class="kc-info-item" v-if="kind === 'cronjobs'"><span class="kc-info-label">调度:</span><span class="kc-info-value">{{ detail?.schedule }}<span v-if="nextRun" class="next-run"> · 下次执行 {{ nextRun }}</span></span></div>
+              <div class="kc-info-item" style="grid-column: 1 / -1"><span class="kc-info-label">选择器:</span><span class="kc-info-value"><el-tag v-for="(v, k) in detail?.selector" :key="k" size="small" style="margin-right: 4px">{{ k }}={{ v }}</el-tag></span></div>
+              <div class="kc-info-item" style="grid-column: 1 / -1"><span class="kc-info-label">镜像:</span><span class="kc-info-value mono img">{{ detail?.images.join(', ') || '-' }}</span></div>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+      </el-card>
+
+      <!-- 关联事件 -->
+      <el-card shadow="never">
+        <template #header><span class="kc-section-title">关联事件</span></template>
+        <el-table v-if="detail?.events?.length" border :data="detail.events" size="small" max-height="260">
+          <el-table-column prop="reason" label="原因" width="140" />
+          <el-table-column prop="lastSeen" label="时间" width="170" />
+          <el-table-column prop="count" label="次数" width="70" align="center" />
+          <el-table-column prop="message" label="信息" min-width="220" show-overflow-tooltip />
+        </el-table>
+        <el-empty v-else :image-size="56" :description="`没有与 ${name} 关联的事件`" />
+      </el-card>
+    </div>
+
+    <!-- 三栏主体：历史版本 | 容器组列表 | 选中容器组详情 -->
+    <div class="kc-three-col">
+      <!-- 列 1：Deployment 历史版本时间线；其他类型显示资源导航 -->
+      <el-card shadow="never" class="kc-rs-col">
+        <template #header>
+          <div class="rs-head">
+            <span class="kc-section-title">{{ kind === 'deployments' ? '历史版本' : '资源导航' }}</span>
+            <el-tag v-if="kind === 'deployments'" size="small" type="info" effect="plain">共 {{ rollouts.length }} 个版本</el-tag>
+          </div>
+        </template>
+        <el-scrollbar max-height="620px">
+          <div v-loading="rolloutsLoading">
+            <template v-if="kind === 'deployments'">
+              <div
+                v-for="r in rollouts" :key="r.revision"
+                class="rs-item" :class="{ 'rs-current': r.current }"
+                @click="selectedRs = r.revision"
+              >
+                <div class="rs-top">
+                  <span>已创建: {{ r.age }}前</span>
+                  <span class="rs-rev">#{{ r.revision }}</span>
+                </div>
+                <div class="rs-name mono">{{ r.name }}</div>
+                <div class="rs-meta">
+                  期望: {{ r.replicas }}
+                  <el-tag v-if="r.current" size="small" type="success" effect="dark">正常</el-tag>
+                  <el-tag v-else size="small" type="info" effect="plain">非当前版本</el-tag>
+                  <el-tag v-if="!r.current && r.replicas === 0" size="small" type="info" effect="plain">已缩容</el-tag>
+                </div>
+                <div class="rs-img mono" :title="r.image">{{ r.image }}</div>
+                <div class="rs-actions" v-if="selectedRs === r.revision">
+                  <el-button size="small" type="warning" :disabled="r.current || noWrite" @click.stop="doRollback(r)">回滚</el-button>
+                  <el-button size="small" @click.stop="showRsYaml(r)">YAML</el-button>
+                  <el-button size="small" type="danger" :disabled="r.current || noWrite" @click.stop="deleteRs(r)">删除</el-button>
+                </div>
+              </div>
+              <el-empty v-if="!rolloutsLoading && !rollouts.length" description="无历史版本" :image-size="48" />
+            </template>
+            <el-tree
+              v-else
+              :data="treeData" node-key="id"
+              :props="{ label: 'label', children: 'children' }"
+              highlight-current default-expand-all
+              @node-click="onTreeClick"
+            >
+              <template #default="{ data }">
+                <span class="tree-node">
+                  <span v-if="data.type === 'pod'" class="status-dot" :class="'dot-' + data.status"></span>
+                  <el-icon v-else-if="data.type === 'container'" size="12"><Box /></el-icon>
+                  <el-icon v-else size="14"><Odometer /></el-icon>
+                  <span class="tree-label">{{ data.label }}</span>
+                </span>
+              </template>
+            </el-tree>
+          </div>
+        </el-scrollbar>
+      </el-card>
+
+      <!-- 列 2：容器组列表 -->
+      <el-card shadow="never" class="kc-pod-col">
+        <template #header>
+          <div class="rs-head">
+            <span class="kc-section-title">容器组</span>
+            <el-button size="small" text type="danger" :disabled="noWrite || !detail?.pods?.length" @click="deleteAllPods">删除容器组</el-button>
+          </div>
+        </template>
+        <el-scrollbar max-height="620px">
+          <div
+            v-for="p in detail?.pods || []" :key="p.name"
+            class="pod-item" :class="{ 'pod-active': selectedPod?.name === p.name }"
+            @click="selectPod(p)"
+          >
+            <div class="pod-item-head">
+              <span class="mono pod-item-name" :title="p.name">{{ p.name }}</span>
+              <StatusTag :status="p.status" :text="p.status === 'Running' ? 'Ready' : p.status" />
+            </div>
+            <div class="pod-item-meta">{{ p.age }}前 · 容器组IP {{ p.ip || '-' }}</div>
+            <div class="pod-item-meta">节点 {{ p.nodeName || '-' }} · 重启 {{ p.restarts }}</div>
+          </div>
+          <el-empty v-if="!detail?.pods?.length" description="无容器组" :image-size="48" />
+        </el-scrollbar>
+      </el-card>
+
+      <!-- 列 3：选中容器组详情 -->
+      <el-card shadow="never" class="kc-pod-detail" v-loading="podLoading">
+        <template v-if="selectedPod">
+          <!-- CPU / 内存趋势 -->
+          <div class="pd-charts">
+            <div class="pd-chart">
+              <div class="pd-chart-title"><el-tag size="small" type="success" effect="plain">Prometheus</el-tag> CPU（核）</div>
+              <MetricChart :series="[{ name: 'CPU', data: podMonitor?.cpuUsageTrend || [], color: '#2ba471', unit: '核' }]" height="150px" y-axis-name="核" />
+            </div>
+            <div class="pd-chart">
+              <div class="pd-chart-title"><el-tag size="small" type="success" effect="plain">Prometheus</el-tag> 内存（Mi）</div>
+              <MetricChart :series="[{ name: '内存', data: podMonitor?.memUsageTrend || [], color: '#2b4b83', unit: 'Mi' }]" height="150px" y-axis-name="Mi" />
+            </div>
+          </div>
+
+          <!-- 容器组事件 -->
+          <el-table v-if="podDetail?.events?.length" border :data="podDetail.events" size="small" max-height="200" style="margin: 10px 0 14px">
+            <el-table-column prop="reason" label="原因" width="130" />
+            <el-table-column prop="lastSeen" label="时间" width="160" />
+            <el-table-column prop="count" label="次数" width="64" align="center" />
+            <el-table-column prop="message" label="信息" min-width="220" show-overflow-tooltip />
+          </el-table>
+
+          <!-- 容器组标题栏（深蓝条） -->
+          <div class="pod-bar">
+            <span class="pod-bar-label">容器组:</span>
+            <span class="pod-bar-name mono">{{ selectedPod.name }}</span>
+            <span class="pod-bar-age">{{ selectedPod.age }} 前</span>
+            <span class="spacer"></span>
+            <el-button size="small" text @click="showPodYaml">YAML</el-button>
+            <el-button size="small" text type="danger" :disabled="noWrite" @click="doDeletePod">删除</el-button>
+            <el-dropdown trigger="click" @command="onPodMore">
+              <el-button size="small" text>更多<el-icon><ArrowDown /></el-icon></el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="logs">日志</el-dropdown-item>
+                  <el-dropdown-item command="terminal">终端</el-dropdown-item>
+                  <el-dropdown-item command="files">文件</el-dropdown-item>
+                  <el-dropdown-item command="full">进入 Pod 完整详情</el-dropdown-item>
+                  <el-dropdown-item command="evict" divided :disabled="noWrite">驱除（尊重 PDB）</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+
+          <!-- 所在节点 / IP / 状态 -->
+          <div class="pd-info-row">
+            <span>所在节点: <span class="mono">{{ selectedPod.nodeName || '-' }}</span></span>
+            <span>容器组IP: <span class="mono">{{ selectedPod.ip || '-' }}</span></span>
+            <span>状态: <b>{{ podDetail?.phase || selectedPod.status }}</b></span>
+            <span>重启次数: <b>{{ selectedPod.restarts }}</b></span>
+          </div>
+
+          <!-- 条件时间线 -->
+          <div class="pd-timeline">
+            <span v-for="t in podTimeline" :key="t.label" class="pd-tl-item" :class="{ 'pd-tl-bad': !t.ok }">
+              <span class="pd-tl-dot"></span>{{ t.label }}
+              <small v-if="t.time">{{ t.time }}</small>
+            </span>
+          </div>
+
+          <!-- 容器卡片 -->
+          <div v-for="c in podDetail?.containers || []" :key="c.name" class="ctr-card">
+            <div class="ctr-head">
+              <el-icon><Box /></el-icon>
+              <span class="ctr-name">容器 <b>{{ c.name }}</b></span>
+              <span class="spacer"></span>
+              <StatusTag :status="c.state" :text="c.reason || c.state" />
+            </div>
+            <div class="ctr-line"><span class="ctr-label">镜像</span><span class="mono ctr-img">{{ configOf(c.name)?.image || '-' }}</span></div>
+            <div class="ctr-line">
+              <span class="ctr-label">当前状态</span>
+              <el-tag size="small" :type="c.state === 'Running' ? 'success' : 'info'" effect="plain">{{ c.state === 'Running' ? 'Started' : c.state }}</el-tag>
+              <el-tag size="small" :type="c.ready ? 'success' : 'warning'" effect="plain">{{ c.ready ? 'Ready' : 'NotReady' }}</el-tag>
+              <el-tag size="small" type="info" effect="plain">{{ c.state }}</el-tag>
+              <el-tag size="small" type="info" effect="plain">重启 {{ c.restartCount }} 次</el-tag>
+            </div>
+            <div class="ctr-line">
+              <span class="ctr-label">端口</span>
+              <el-tag v-for="pt in portsOf(c.name)" :key="pt" size="small" class="port-chip">{{ pt }}</el-tag>
+              <span v-if="!portsOf(c.name).length" class="ctr-label">-</span>
+              <span class="spacer"></span>
+              <el-button size="small" type="primary" @click="openPodLogs(selectedPod, c.name)">下载日志</el-button>
+              <el-button size="small" @click="openPodLogs(selectedPod, c.name)">追踪日志</el-button>
+              <el-button size="small" type="success" :disabled="noWrite" @click="openTerminal(selectedPod, c.name)">bash</el-button>
+              <el-button size="small" @click="openFiles(c.name)">文件</el-button>
+            </div>
+            <div v-if="c.message" class="ctr-msg">{{ c.message }}</div>
+          </div>
+          <div v-if="podDetail?.initContainers?.length" class="pd-init">
+            Init 容器:
+            <el-tag v-for="ic in podDetail.initContainers" :key="ic.name" size="small" :type="ic.state === 'Completed' || ic.ready ? 'success' : 'info'" effect="plain" style="margin-right: 4px">{{ ic.name }} ({{ ic.state }})</el-tag>
+          </div>
+        </template>
+        <el-empty v-else :image-size="64" description="从左侧选择一个容器组查看详情" />
+      </el-card>
+    </div>
+
+    <!-- 工作负载级监控 -->
+    <el-card shadow="never">
+      <template #header>
+        <div class="rs-head">
+          <span class="kc-section-title">资源监控</span>
+          <span class="spacer"></span>
+          <RangeSwitch v-model="range" @change="loadMonitor" />
+        </div>
+      </template>
+      <MetricPanel :cards="monitorCards" :charts="monitorCharts" :loading="monitorLoading" />
+    </el-card>
+
     <YamlDialog v-model="editVisible" :yaml="editYaml" :readonly="false" @applied="load" />
+    <!-- 只读 YAML 查看（RS / Pod） -->
+    <YamlDialog v-model="viewVisible" :yaml="viewYaml" :readonly="true" />
 
     <!-- 可视化编辑（表单|YAML 双视图） -->
     <el-drawer v-model="formEditVisible" :title="`可视化编辑 - ${kindTitle} / ${name}`" size="70%" destroy-on-close>
       <ObjectEditor v-if="formEditYaml !== null" :kind="kind" :yaml="formEditYaml" :namespace="namespace" @saved="onFormSaved" @cancel="formEditVisible = false" />
     </el-drawer>
-
-    <!-- Deployment 历史版本回滚 -->
-    <el-dialog v-model="rolloutsVisible" title="Deployment 历史版本（回滚）" width="780px">
-      <el-table border :data="rollouts" v-loading="rolloutsLoading" size="small">
-        <el-table-column prop="revision" label="版本" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag v-if="row.current" type="success" size="small">当前 {{ row.revision }}</el-tag>
-            <span v-else>{{ row.revision }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="image" label="镜像" min-width="240" show-overflow-tooltip />
-        <el-table-column prop="replicas" label="副本" width="70" align="center" />
-        <el-table-column prop="age" label="创建于" width="90" />
-        <el-table-column prop="changeCause" label="变更说明" min-width="140" show-overflow-tooltip />
-        <el-table-column label="操作" width="130" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" type="warning" plain :disabled="row.current || noWrite" @click="doRollback(row)">回滚到此版本</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-dialog>
 
     <el-dialog v-model="scaleVisible" title="调整副本数" width="420px">
       <el-form label-width="90px">
@@ -229,7 +295,7 @@
       @saved="load"
     />
 
-    <!-- Pod 日志抽屉 -->
+    <!-- Pod 日志抽屉 / 终端 / 文件 -->
     <PodLogsDrawer v-model="logsVisible" :pod="logsPod" :container="logsContainer" />
     <WebTerminal
       v-if="terminalPod"
@@ -238,6 +304,9 @@
       :pod="terminalPod.name"
       :container="terminalContainer || undefined"
     />
+    <el-dialog v-model="filesVisible" title="容器文件" width="900px">
+      <FileBrowser :namespace="namespace" :pod="selectedPod?.name || ''" :containers="(podDetail?.containers || []).map((c) => c.name)" />
+    </el-dialog>
   </div>
 </template>
 
@@ -245,19 +314,19 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Box, Odometer, Right } from '@element-plus/icons-vue'
-import { k8sApi, type PodDetail, type PodItem, type RolloutItem, type WorkloadDetail, type WorkloadMonitor } from '../api'
+import { Box, Odometer, ArrowDown } from '@element-plus/icons-vue'
+import { k8sApi, type PodDetail, type PodItem, type PodMonitor, type RolloutItem, type WorkloadDetail, type WorkloadMonitor } from '../api'
 import { cronNextRun } from '../utils/kube-validators'
 import StatusTag from '../components/StatusTag.vue'
-import YamlEditor from '../components/YamlEditor.vue'
 import YamlDialog from '../components/YamlDialog.vue'
 import ObjectEditor from '../components/ObjectEditor.vue'
-import EventTable from '../components/EventTable.vue'
 import PodLogsDrawer from '../components/PodLogsDrawer.vue'
 import WebTerminal from '../components/WebTerminal.vue'
+import FileBrowser from '../components/FileBrowser.vue'
 import ImageUpdateDialog from '../components/ImageUpdateDialog.vue'
 import LogCollectionDialog from '../components/LogCollectionDialog.vue'
 import MetricPanel, { type MetricCardDef, type MetricChartDef } from '../components/MetricPanel.vue'
+import MetricChart from '../components/MetricChart.vue'
 import RangeSwitch from '../components/RangeSwitch.vue'
 import { useClusterStore } from '../store/cluster'
 import { usePerm } from '../store/perm'
@@ -273,7 +342,12 @@ const noWrite = computed(() => !perm.canWriteNS(namespace.value))
 
 const kind = computed(() => String(route.params.kind))
 
-// ------------------- Deployment 回滚 + CronJob 下次执行 -------------------
+const rolloutsLoading = ref(false)
+const rollouts = ref<RolloutItem[]>([])
+const selectedRs = ref<number>()
+const nextRun = computed(() => (kind.value === 'cronjobs' ? fmtNextRun(detail.value) : ''))
+const moreOpen = ref<string[]>([])
+
 function fmtNextRun(d: any): string {
   const schedule = d?.schedule || d?.spec?.schedule
   if (!schedule) return ''
@@ -281,16 +355,13 @@ function fmtNextRun(d: any): string {
   return next ? next.toLocaleString() : ''
 }
 
-const rolloutsVisible = ref(false)
-const rolloutsLoading = ref(false)
-const rollouts = ref<RolloutItem[]>([])
-const nextRun = computed(() => (kind.value === 'cronjobs' ? fmtNextRun(detail.value) : ''))
-
-async function openRollouts() {
-  rolloutsVisible.value = true
+async function loadRollouts() {
+  if (kind.value !== 'deployments') return
   rolloutsLoading.value = true
   try {
     rollouts.value = await k8sApi.rollouts(kind.value, namespace.value, name.value)
+    const cur = rollouts.value.find((r) => r.current)
+    if (cur && selectedRs.value == null) selectedRs.value = cur.revision
   } finally {
     rolloutsLoading.value = false
   }
@@ -304,22 +375,41 @@ async function doRollback(row: RolloutItem) {
   }
   await k8sApi.rollback(namespace.value, name.value, row.revision)
   ElMessage.success(`已回滚到版本 ${row.revision}`)
-  rolloutsVisible.value = false
   await refresh()
 }
+
+async function deleteRs(row: RolloutItem) {
+  await confirmDelete(row.name, { title: '删除 ReplicaSet' })
+  await k8sApi.deleteWorkload('replicasets', namespace.value, row.name)
+  ElMessage.success('已删除')
+  await loadRollouts()
+}
+
+const viewVisible = ref(false)
+const viewYaml = ref('')
+async function showRsYaml(row: RolloutItem) {
+  const { yaml } = await k8sApi.getYaml('replicasets', namespace.value, row.name)
+  viewYaml.value = yaml
+  viewVisible.value = true
+}
+async function showPodYaml() {
+  if (!selectedPod.value) return
+  const { yaml } = await k8sApi.getYaml('pods', selectedPod.value.namespace, selectedPod.value.name)
+  viewYaml.value = yaml
+  viewVisible.value = true
+}
+
 const name = computed(() => String(route.params.name))
 const namespace = computed(() => String(route.query.namespace || 'default'))
 const kindTitle = computed(() => {
   const titles: Record<string, string> = {
-    deployments: 'Deployment', statefulsets: 'StatefulSet', daemonsets: 'DaemonSet',
-    cronjobs: 'CronJob', jobs: 'Job', replicasets: 'ReplicaSet', replicationcontrollers: 'ReplicationController',
+    deployments: '部署', statefulsets: '有状态副本集', daemonsets: '守护进程集',
+    cronjobs: '定时任务', jobs: '任务', replicasets: '副本集', replicationcontrollers: '复制控制器',
   }
   return titles[kind.value] || kind.value
 })
 
 const detail = ref<WorkloadDetail>()
-const detailYaml = ref('')
-const tab = ref('containers')
 const loading = ref(false)
 const editVisible = ref(false)
 const editYaml = ref('')
@@ -332,64 +422,129 @@ const logsVisible = ref(false)
 const logsPod = ref<PodItem>()
 const logsContainer = ref('')
 
-// 左侧树选择状态
-const selectedType = ref<'workload' | 'pod' | 'container'>('workload')
+const replicasOk = computed(() => {
+  const r = detail.value?.replicas
+  return !!r && r.readyReplicas === r.replicas
+})
+const replicasPct = computed(() => {
+  const r = detail.value?.replicas
+  if (!r) return 0
+  if (!r.replicas) return 100
+  return (r.readyReplicas / r.replicas) * 100
+})
+
+// ---------- 选中容器组 ----------
 const selectedPod = ref<PodItem>()
-const selectedContainer = ref<{ name: string }>()
 const podDetail = ref<PodDetail>()
 const podLoading = ref(false)
+const podMonitor = ref<PodMonitor>()
 
-// 监控
-const range = ref('6h')
-const monitor = ref<WorkloadMonitor>()
-const monitorLoading = ref(false)
+async function selectPod(p: PodItem) {
+  selectedPod.value = p
+  podLoading.value = true
+  podDetail.value = undefined
+  podMonitor.value = undefined
+  try {
+    podDetail.value = await k8sApi.podDetail(p.namespace || namespace.value, p.name)
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    podLoading.value = false
+  }
+  loadPodMonitor(p)
+}
 
-const monitorCards = computed<MetricCardDef[]>(() => {
-  const m = monitor.value
-  // 有 limit 时显示使用率（%）；无 limit（覆盖不全）时显示绝对值（核 / Mi），避免「使用率为空」
-  const cpuPct = m?.cpuUsagePct ?? null
-  const memPct = m?.memUsagePct ?? null
-  return [
-    cpuPct != null
-      ? { label: 'CPU 使用率', value: cpuPct, unit: '%', color: '#00aa55' }
-      : { label: 'CPU 用量', value: m?.cpuUsage ?? null, unit: '核', decimals: 2, color: '#00aa55' },
-    memPct != null
-      ? { label: '内存使用率', value: memPct, unit: '%', color: '#67c23a' }
-      : { label: '内存用量', value: m?.memUsageMi ?? null, unit: 'Mi', decimals: 0, color: '#67c23a' },
-    { label: 'Pod 数量', value: m?.podCount ?? null, unit: '个', decimals: 0, color: '#e6a23c' },
-    { label: '磁盘写', value: m?.diskWriteMBs ?? null, unit: 'MB/s', decimals: 2, color: '#909399' },
-    { label: '网络接收', value: m?.netRxMBs ?? null, unit: 'MB/s', decimals: 2, color: '#f56c6c' },
-    { label: '网络发送', value: m?.netTxMBs ?? null, unit: 'MB/s', decimals: 2, color: '#9254de' },
-  ]
-})
+async function loadPodMonitor(p: PodItem) {
+  try {
+    podMonitor.value = await k8sApi.monitorPod(p.namespace || namespace.value, p.name, '1h')
+  } catch {
+    podMonitor.value = undefined
+  }
+}
 
-const monitorCharts = computed<MetricChartDef[]>(() => {
-  const cpuIsPct = monitor.value?.cpuTrendIsPct ?? false
-  const memIsPct = monitor.value?.memTrendIsPct ?? false
-  const cpuUnit = cpuIsPct ? '%' : '核'
-  const memUnit = memIsPct ? '%' : 'Mi'
-  return [
-    { title: cpuIsPct ? 'CPU 使用率趋势' : 'CPU 用量趋势', series: [{ name: 'CPU', data: monitor.value?.cpuUsageTrend || [], color: '#00aa55', unit: cpuUnit }], yAxisName: cpuUnit },
-    { title: memIsPct ? '内存使用率趋势' : '内存用量趋势', series: [{ name: '内存', data: monitor.value?.memUsageTrend || [], color: '#67c23a', unit: memUnit }], yAxisName: memUnit },
-    { title: '磁盘写趋势', series: [{ name: '磁盘写', data: monitor.value?.diskWriteTrend || [], color: '#909399', unit: 'MB/s' }], yAxisName: 'MB/s' },
-    {
-      title: '网络流量',
-      series: [
-        { name: '接收', data: monitor.value?.netRxTrend || [], color: '#f56c6c', unit: 'MB/s' },
-        { name: '发送', data: monitor.value?.netTxTrend || [], color: '#9254de', unit: 'MB/s' },
-      ],
-      yAxisName: 'MB/s',
-    },
-  ]
-})
+const condLabelMap: Record<string, string> = {
+  Initialized: '已初始化',
+  PodScheduled: '已调度',
+  ContainersReady: '可启动容器',
+  Ready: '容器组已就绪',
+}
+const podTimeline = computed(() =>
+  (podDetail.value?.conditions || [])
+    .filter((c) => condLabelMap[c.type])
+    .map((c) => ({
+      label: condLabelMap[c.type],
+      ok: c.status === 'True',
+      time: (c.updated || '').replace('T', ' ').slice(0, 19),
+    })),
+)
 
-// ---------- 左侧树 ----------
+const configOf = (cname: string) => (detail.value?.containers || []).find((c) => c.name === cname)
+function portsOf(cname: string): string[] {
+  const raw = configOf(cname)?.ports || ''
+  return raw.split(/[,，;]\s*|\s+/).filter(Boolean)
+}
+
+// ---------- 容器组操作 ----------
+async function doDeletePod() {
+  if (!selectedPod.value) return
+  await confirmDelete(selectedPod.value.name, { title: '删除 Pod' })
+  await k8sApi.deletePod(selectedPod.value.namespace, selectedPod.value.name)
+  ElMessage.success('已发起删除')
+  await load()
+  selectedPod.value = undefined
+}
+
+async function deleteAllPods() {
+  await ElMessageBox.confirm(`删除「${name.value}」当前全部 ${detail.value?.pods.length || 0} 个容器组？控制器会自动重建。`, '删除容器组', { type: 'warning' })
+  for (const p of detail.value?.pods || []) {
+    await k8sApi.deletePod(p.namespace || namespace.value, p.name).catch(() => {})
+  }
+  ElMessage.success('已发起删除')
+  await load()
+}
+
+function onPodMore(cmd: string) {
+  if (!selectedPod.value) return
+  if (cmd === 'logs') openPodLogs(selectedPod.value)
+  else if (cmd === 'terminal') openTerminal(selectedPod.value)
+  else if (cmd === 'files') openFiles()
+  else if (cmd === 'full') goPod(selectedPod.value)
+  else if (cmd === 'evict') doEvict(selectedPod.value)
+}
+
+async function doEvict(p: PodItem) {
+  await ElMessageBox.confirm(`驱除 Pod「${p.name}」？将触发控制器重建（若有）。`, '驱除 Pod', { type: 'warning' })
+  await k8sApi.evictPod(p.namespace || namespace.value, p.name)
+  ElMessage.success('已发起驱除')
+  await load()
+}
+
+function openPodLogs(pod: PodItem, container?: string) {
+  logsPod.value = pod
+  logsContainer.value = container || ''
+  logsVisible.value = true
+}
+
+const terminalVisible = ref(false)
+const terminalPod = ref<PodItem>()
+const terminalContainer = ref('')
+function openTerminal(pod: PodItem, container?: string) {
+  terminalPod.value = pod
+  terminalContainer.value = container || ''
+  terminalVisible.value = true
+}
+
+const filesVisible = ref(false)
+function openFiles(_container?: string) {
+  filesVisible.value = true
+}
+
+// ---------- 非 Deployment 的资源树 ----------
 interface TreeNode {
   id: string
   label: string
   type: 'workload' | 'pod' | 'container'
   pod?: PodItem
-  container?: string
   status?: string
   children?: TreeNode[]
 }
@@ -407,64 +562,70 @@ const treeData = computed<TreeNode[]>(() => {
       type: 'pod' as const,
       pod: p,
       status: p.status,
-      children: (d.containers || []).map((c) => ({
-        id: 'container-' + p.name + '-' + c.name,
-        label: c.name,
-        type: 'container' as const,
-        pod: p,
-        container: c.name,
-      })),
     })),
   }
   return [root]
 })
 
-const containerConfig = computed(() => {
-  if (!selectedContainer.value) return undefined
-  return (detail.value?.containers || []).find((c) => c.name === selectedContainer.value?.name)
-})
-
-const containerStatus = computed(() => {
-  if (!selectedContainer.value) return undefined
-  return (podDetail.value?.containers || []).find((c) => c.name === selectedContainer.value?.name)
-})
-
-async function onTreeClick(node: TreeNode) {
-  selectedType.value = node.type
-  if (node.type === 'workload') {
-    selectedPod.value = undefined
-    selectedContainer.value = undefined
-    podDetail.value = undefined
-    return
-  }
-  selectedPod.value = node.pod
-  selectedContainer.value = node.type === 'container' ? { name: node.container || '' } : undefined
-  if (node.pod) {
-    await loadPodDetail(node.pod)
-  }
+function onTreeClick(node: TreeNode) {
+  if (node.type === 'pod' && node.pod) selectPod(node.pod)
 }
 
-async function loadPodDetail(pod: PodItem) {
-  podLoading.value = true
-  try {
-    podDetail.value = await k8sApi.podDetail(pod.namespace, pod.name)
-  } catch {
-    podDetail.value = undefined
-  } finally {
-    podLoading.value = false
-  }
-}
+// ---------- 工作负载级监控 ----------
+const range = ref('6h')
+const monitor = ref<WorkloadMonitor>()
+const monitorLoading = ref(false)
+
+const monitorCards = computed<MetricCardDef[]>(() => {
+  const m = monitor.value
+  const cpuPct = m?.cpuUsagePct ?? null
+  const memPct = m?.memUsagePct ?? null
+  return [
+    cpuPct != null
+      ? { label: 'CPU 使用率', value: cpuPct, unit: '%', color: '#2b4b83' }
+      : { label: 'CPU 用量', value: m?.cpuUsage ?? null, unit: '核', decimals: 2, color: '#2b4b83' },
+    memPct != null
+      ? { label: '内存使用率', value: memPct, unit: '%', color: '#2ba471' }
+      : { label: '内存用量', value: m?.memUsageMi ?? null, unit: 'Mi', decimals: 0, color: '#2ba471' },
+    { label: 'Pod 数量', value: m?.podCount ?? null, unit: '个', decimals: 0, color: '#f5872b' },
+    { label: '磁盘写', value: m?.diskWriteMBs ?? null, unit: 'MB/s', decimals: 2, color: '#74829b' },
+    { label: '网络接收', value: m?.netRxMBs ?? null, unit: 'MB/s', decimals: 2, color: '#e5484d' },
+    { label: '网络发送', value: m?.netTxMBs ?? null, unit: 'MB/s', decimals: 2, color: '#9254de' },
+  ]
+})
+
+const monitorCharts = computed<MetricChartDef[]>(() => {
+  const cpuIsPct = monitor.value?.cpuTrendIsPct ?? false
+  const memIsPct = monitor.value?.memTrendIsPct ?? false
+  const cpuUnit = cpuIsPct ? '%' : '核'
+  const memUnit = memIsPct ? '%' : 'Mi'
+  return [
+    { title: cpuIsPct ? 'CPU 使用率趋势' : 'CPU 用量趋势', series: [{ name: 'CPU', data: monitor.value?.cpuUsageTrend || [], color: '#2b4b83', unit: cpuUnit }], yAxisName: cpuUnit },
+    { title: memIsPct ? '内存使用率趋势' : '内存用量趋势', series: [{ name: '内存', data: monitor.value?.memUsageTrend || [], color: '#2ba471', unit: memUnit }], yAxisName: memUnit },
+    { title: '磁盘写趋势', series: [{ name: '磁盘写', data: monitor.value?.diskWriteTrend || [], color: '#74829b', unit: 'MB/s' }], yAxisName: 'MB/s' },
+    {
+      title: '网络流量',
+      series: [
+        { name: '接收', data: monitor.value?.netRxTrend || [], color: '#e5484d', unit: 'MB/s' },
+        { name: '发送', data: monitor.value?.netTxTrend || [], color: '#9254de', unit: 'MB/s' },
+      ],
+      yAxisName: 'MB/s',
+    },
+  ]
+})
 
 // ---------- 数据加载 ----------
 onMounted(() => {
   load()
-  loadMonitor() // 预加载监控数据
-  // 列表页「历史版本/回滚」行操作跳转过来时自动打开回滚对话框
-  if (route.query.rollouts && kind.value === 'deployments') openRollouts()
+  loadMonitor()
+  loadRollouts()
+  // 列表页跳转过来时自动选中当前版本
+  if (route.query.rollouts && kind.value === 'deployments') loadRollouts()
 })
 
-watch(tab, (v) => {
-  if (v === 'monitor' && !monitor.value) loadMonitor()
+watch([() => clusterStore.current, namespace], () => {
+  load()
+  loadRollouts()
 })
 
 async function load() {
@@ -472,8 +633,10 @@ async function load() {
   loading.value = true
   try {
     detail.value = await k8sApi.workloadDetail(kind.value, namespace.value, name.value)
-    const { yaml } = await k8sApi.getYaml(kind.value, namespace.value, name.value)
-    detailYaml.value = yaml
+    // 默认选中第一个容器组
+    if (!selectedPod.value && detail.value?.pods?.length) {
+      selectPod(detail.value.pods[0])
+    }
   } catch {
     /* 拦截器已提示 */
   } finally {
@@ -495,6 +658,7 @@ async function loadMonitor() {
 
 function refresh() {
   load()
+  loadRollouts()
 }
 
 function goBack() {
@@ -503,22 +667,6 @@ function goBack() {
 
 function goPod(pod: PodItem) {
   router.push({ path: `/pods/${pod.namespace}/${pod.name}` })
-}
-
-function openPodLogs(pod: PodItem, container?: string) {
-  logsPod.value = pod
-  logsContainer.value = container || ''
-  logsVisible.value = true
-}
-
-// 打开 Web 终端（不指定容器时使用第一个容器）
-const terminalVisible = ref(false)
-const terminalPod = ref<PodItem>()
-const terminalContainer = ref('')
-function openTerminal(pod: PodItem, container?: string) {
-  terminalPod.value = pod
-  terminalContainer.value = container || ''
-  terminalVisible.value = true
 }
 
 async function openYaml() {
@@ -584,39 +732,170 @@ const collectVisible = ref(false)
 </script>
 
 <style scoped>
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.actions { display: flex; gap: 6px; }
-.title :deep(.el-page-header__title) { font-size: 16px; }
-.ready-ok { color: #67c23a; font-weight: 600; }
-.yaml-pane { height: 480px; }
-.monitor-toolbar { margin-bottom: 12px; display: flex; justify-content: flex-end; }
-
-/* 左树右面板布局 */
-.detail-layout { display: flex; gap: 16px; min-height: 520px; }
-.detail-side {
-  width: 260px;
-  flex-shrink: 0;
-  border: 1px solid var(--kc-border);
-  border-radius: var(--kc-card-radius);
-  padding: 8px;
-  background: #fff;
-  max-height: 700px;
-  overflow-y: auto;
+.kc-page { display: flex; flex-direction: column; gap: 12px; }
+.mono { font-family: var(--kc-mono); }
+.kc-top-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.kc-status-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 14px;
+  font-size: 13px;
+  color: #8a94a6;
 }
-.side-title { font-size: 13px; font-weight: 600; color: #6b7280; padding: 6px 8px 10px; }
-.detail-main { flex: 1; min-width: 0; }
+.kc-strip-label { color: #6b7689; }
+.kc-strip-item b { color: #2f3b52; font-weight: 600; margin-left: 4px; }
+.kc-progress-mini { display: flex; align-items: center; gap: 8px; width: 180px; }
+.kc-progress-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: #e3e8f1;
+  overflow: hidden;
+}
+.kc-progress-track i {
+  display: block;
+  height: 100%;
+  background: var(--el-color-success);
+  border-radius: 3px;
+  transition: width 0.4s;
+}
+.kc-progress-text { font-size: 13px; color: #2f3b52; font-weight: 600; }
+.kc-two-col { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; align-items: start; }
+@media (max-width: 1200px) { .kc-two-col { grid-template-columns: 1fr; } }
+.kc-more { border-top: none; }
+.kc-more-title { color: var(--kc-link); font-size: 13.5px; }
+.kc-info-value.img { font-weight: 400; font-size: 13px; }
+.next-run { color: var(--el-color-primary); font-size: 13px; margin-left: 4px; }
+
+/* 三栏主体 */
+.kc-three-col {
+  display: grid;
+  grid-template-columns: 300px 300px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 1280px) {
+  .kc-three-col { grid-template-columns: 1fr 1fr; }
+  .kc-pod-detail { grid-column: 1 / -1; }
+}
+@media (max-width: 900px) { .kc-three-col { grid-template-columns: 1fr; } }
+.rs-head { display: flex; align-items: center; gap: 8px; }
+.rs-head .spacer { flex: 1; }
+
+/* 历史版本时间线 */
+.rs-item {
+  border: 1px solid var(--kc-border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  position: relative;
+}
+.rs-item:hover { border-color: var(--el-color-primary-light-5); }
+.rs-current { border-color: var(--el-color-success); background: #f4fbf7; }
+html.dark .rs-current { background: rgba(43, 164, 113, 0.08); }
+.rs-item::before {
+  content: '';
+  position: absolute;
+  left: -18px;
+  top: 16px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c0c6d1;
+}
+.rs-current::before { background: var(--el-color-success); }
+.rs-top { display: flex; justify-content: space-between; font-size: 12.5px; color: #8a94a6; }
+.rs-rev { color: #8a94a6; }
+.rs-name { font-size: 13px; color: var(--kc-link); margin: 4px 0; word-break: break-all; }
+.rs-meta { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #6b7689; flex-wrap: wrap; }
+.rs-img {
+  font-size: 12px;
+  color: #8a94a6;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rs-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+/* 容器组列表 */
+.pod-item {
+  border: 1px solid var(--kc-border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+.pod-item:hover { border-color: var(--el-color-primary-light-5); }
+.pod-active { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
+.pod-item-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.pod-item-name { font-size: 13px; color: #2f3b52; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pod-item-meta { font-size: 12.5px; color: #8a94a6; margin-top: 4px; }
+
+/* 选中容器组详情 */
+.pd-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 1100px) { .pd-charts { grid-template-columns: 1fr; } }
+.pd-chart { border: 1px solid var(--kc-border); border-radius: 4px; padding: 8px 10px; }
+.pd-chart-title { font-size: 13px; color: #6b7689; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.pod-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--kc-table-head-bg);
+  color: #fff;
+  border-radius: 4px;
+  padding: 6px 12px;
+  margin-bottom: 10px;
+}
+.pod-bar-label { font-size: 13px; opacity: 0.85; }
+.pod-bar-name { font-weight: 700; font-size: 14px; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pod-bar-age { font-size: 12.5px; opacity: 0.8; }
+.pod-bar .spacer { flex: 1; }
+.pod-bar :deep(.el-button) { color: #fff; }
+.pod-bar :deep(.el-button--danger:hover) { color: #ffb3b3; }
+.pd-info-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  font-size: 13px;
+  color: #6b7689;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--kc-border);
+}
+.pd-info-row b { color: #2f3b52; }
+.pd-timeline { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 12px 0; }
+.pd-tl-item { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #2f3b52; }
+.pd-tl-item small { color: #8a94a6; }
+.pd-tl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-success); display: inline-block; }
+.pd-tl-bad .pd-tl-dot { background: var(--el-color-danger); }
+.pd-tl-bad { color: var(--el-color-danger); }
+
+/* 容器卡片 */
+.ctr-card {
+  border: 1px solid var(--kc-border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.ctr-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ctr-name { font-size: 14px; color: #2f3b52; }
+.ctr-head .spacer { flex: 1; }
+.ctr-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; font-size: 13px; }
+.ctr-line .spacer { flex: 1; }
+.ctr-label { color: #8a94a6; flex-shrink: 0; }
+.ctr-img { color: #2f3b52; word-break: break-all; font-size: 12.5px; }
+.port-chip { font-family: var(--kc-mono); }
+.ctr-msg { font-size: 12.5px; color: #e5484d; word-break: break-all; }
+.pd-init { font-size: 13px; color: #6b7689; margin-top: 6px; }
+
+/* 树（非 Deployment） */
 .tree-node { display: flex; align-items: center; gap: 6px; font-size: 13px; flex: 1; }
 .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-/* 进入 Pod 按钮：默认隐藏，hover 节点时显示 */
-.tree-enter {
-  color: var(--el-color-primary);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
-  flex-shrink: 0;
-}
-.el-tree-node__content:hover .tree-enter { opacity: 1; }
-.tree-enter:hover { transform: scale(1.15); }
 .status-dot {
   width: 8px;
   height: 8px;
@@ -624,17 +903,8 @@ const collectVisible = ref(false)
   display: inline-block;
   flex-shrink: 0;
 }
-.dot-Running { background: #67c23a; }
-.dot-Pending, .dot-Waiting, .dot-Terminating { background: #e6a23c; }
-.dot-Failed, .dot-Error, .dot-CrashLoopBackOff, .dot-ImagePullBackOff { background: #f56c6c; }
+.dot-Running { background: #2ba471; }
+.dot-Pending, .dot-Waiting, .dot-Terminating { background: #f5872b; }
+.dot-Failed, .dot-Error, .dot-CrashLoopBackOff, .dot-ImagePullBackOff { background: #e5484d; }
 .dot-Completed { background: #909399; }
-
-/* Pod/容器视图 */
-.pod-view { padding: 4px 2px; }
-.view-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.view-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; color: #1f2937; }
-.view-sub { font-size: 12px; color: #9ca3af; font-weight: 400; }
-.sub-title { font-weight: 600; color: #606266; margin: 16px 0 8px; }
-
-.next-run { color: var(--el-color-primary); font-size: 12px; margin-left: 4px; }
 </style>

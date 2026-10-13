@@ -61,7 +61,7 @@ function render() {
           if (!params.length) return ''
           const ts = params[0].value[0]
           const time = new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
-          let html = `<div style="font-size:12px">${time}</div>`
+          let html = `<div style="font-size:13px">${time}</div>`
           for (const p of params) {
             const s = series[p.seriesIndex]
             // 小数值自适应精度：空闲 Pod 的 CPU 用量 ~0.0000x 核，固定 2 位小数会全显 0.00

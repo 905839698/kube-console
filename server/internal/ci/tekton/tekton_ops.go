@@ -92,14 +92,33 @@ type RunParam struct {
 	Value string
 }
 
-// CreatePipelineRun 创建一个引用指定 Pipeline 的 PipelineRun，绑定共享 PVC workspace。
-// imagePullSecrets 非空时挂到 podTemplate.spec.imagePullSecrets（registry 类型凭证，
-// 镜像拉取走 Secret 而非 env）；cacheClaim 非空时额外绑定 optional 的 cache workspace
-//（项目级依赖缓存，任务未声明该 workspace 时无副作用）。
-func (c *Client) CreatePipelineRun(ctx context.Context, namespace, runName, pipelineName, serviceAccount, pvcClaim, cacheClaim string, params []RunParam, imagePullSecrets []string) error {
+// RunScheduling 运行 Pod 的节点固定策略（节点标签选择 + 污点容忍）。
+// 会写进 PipelineRun 的 taskRunTemplate.podTemplate——Tekton 会把它传播给
+// 全部 TaskRun Pod 与 affinity-assistant（实验证实 v1.14 两者都跟随），
+// 所以整个 run（含 assistant）都会固定到目标节点。
+type RunScheduling struct {
+	NodeSelector map[string]string
+	Tolerations  []map[string]any
+}
+
+// buildPodTemplate 组装 taskRunTemplate.podTemplate。必须放在 taskRunTemplate
+// 下：PipelineRun v1 的顶层没有 spec.podTemplate 字段，写在那里会被 apiserver
+// **静默剪枝**（动态客户端创建只报 warning 不报错），preserveLogs/镜像拉取
+// Secret 曾因此全部无效。
+func buildPodTemplate(serviceAccount string, imagePullSecrets []string, sched *RunScheduling) map[string]interface{} {
 	podTemplate := map[string]interface{}{
 		// 保留终态 Pod，任务结束后日志仍可回看
 		"preserveLogs": true,
+	}
+	// 工作区盘的工作目录由 kubelet 以 root 创建（0755），而 CI 工具镜像统一以
+	// uid:gid=100:101 运行，非属主也不是该组，cd 得进、mkdir 直接 Permission denied。
+	// 用 fsGroup 让 kubelet 把挂载卷改成“组 = 工具镜像的 gid”且组可写：既让全部
+	// step 写得了工作区，又不碰 runAsUser——Tekton 的 set-security-context 会给它
+	// 自己的内部容器注入 runAsNonRoot: true，pod 级 runAsUser=0 会被 kubelet 以
+	// “container's runAsUser breaks non-root policy” 直接拒绝。
+	podTemplate["securityContext"] = map[string]interface{}{
+		"fsGroup":             int64(101),
+		"fsGroupChangePolicy": "OnRootMismatch",
 	}
 	if len(imagePullSecrets) > 0 {
 		ses := make([]interface{}, 0, len(imagePullSecrets))
@@ -108,28 +127,57 @@ func (c *Client) CreatePipelineRun(ctx context.Context, namespace, runName, pipe
 		}
 		podTemplate["imagePullSecrets"] = ses
 	}
-	spec := map[string]interface{}{
-		"pipelineRef": map[string]interface{}{"name": pipelineName},
-		"podTemplate": podTemplate,
+	if sched != nil {
+		if len(sched.NodeSelector) > 0 {
+			// 转成 map[string]interface{}：unstructured/fake 客户端的深拷贝不认 map[string]string
+			ns := make(map[string]interface{}, len(sched.NodeSelector))
+			for k, v := range sched.NodeSelector {
+				ns[k] = v
+			}
+			podTemplate["nodeSelector"] = ns
+		}
+		if len(sched.Tolerations) > 0 {
+			// 同上：[]map[string]any 也不在深拷贝支持范围，转成 []interface{} + map
+			tols := make([]interface{}, 0, len(sched.Tolerations))
+			for _, t := range sched.Tolerations {
+				m := make(map[string]interface{}, len(t))
+				for k, v := range t {
+					m[k] = v
+				}
+				tols = append(tols, m)
+			}
+			podTemplate["tolerations"] = tols
+		}
 	}
-	// Tekton v1：执行 Pod 的 SA 走 spec.taskRunTemplate.serviceAccountName
-	// （顶层 serviceAccountName 是 v1beta1 字段，v1 会忽略并告警）。
+	taskRunTemplate := map[string]interface{}{"podTemplate": podTemplate}
 	if serviceAccount != "" {
-		spec["taskRunTemplate"] = map[string]interface{}{"serviceAccountName": serviceAccount}
+		taskRunTemplate["serviceAccountName"] = serviceAccount
 	}
-	workspaces := []interface{}{
+	return taskRunTemplate
+}
+
+// CreatePipelineRun 创建一个引用指定 Pipeline 的 PipelineRun，绑定共享 PVC workspace。
+// imagePullSecrets / sched 都进 taskRunTemplate.podTemplate（v1 的顶层没有
+// spec.podTemplate 字段，写在顶层会被 apiserver 静默剪枝）；sched 非空时把整个 run
+// （全部 TaskRun 与 affinity-assistant）固定到指定节点。
+//
+// PipelineRun 上只保留这一条 workspace 绑定。依赖缓存不走第二条 PipelineRun 级
+// 绑定（哪怕指向同一块 claim 的 subPath）：Tekton affinity-assistant 对多条同 claim
+// 绑定只建一个 StatefulSet，任务 Pod 的亲和性却按各自 workspace 算出的助手实例名
+// 引用，两边不一致时 Pod 亲和不到任何节点，永远 Unschedulable 直到 PipelineRunTimeout。
+// 缓存改由任务级绑定承担（service 层把 task 的 cache workspace 重写到 shared +
+// subPath 后再 apply Pipeline CR），Pod 内是同一卷挂两次（根 + 子目录），attach 不变。
+func (c *Client) CreatePipelineRun(ctx context.Context, namespace, runName, pipelineName, serviceAccount, pvcClaim string, params []RunParam, imagePullSecrets []string, sched *RunScheduling) error {
+	spec := map[string]interface{}{
+		"pipelineRef":     map[string]interface{}{"name": pipelineName},
+		"taskRunTemplate": buildPodTemplate(serviceAccount, imagePullSecrets, sched),
+	}
+	spec["workspaces"] = []interface{}{
 		map[string]interface{}{
 			"name":                  "shared",
 			"persistentVolumeClaim": map[string]interface{}{"claimName": pvcClaim},
 		},
 	}
-	if cacheClaim != "" {
-		workspaces = append(workspaces, map[string]interface{}{
-			"name":                  "cache",
-			"persistentVolumeClaim": map[string]interface{}{"claimName": cacheClaim},
-		})
-	}
-	spec["workspaces"] = workspaces
 	if len(params) > 0 {
 		ps := make([]interface{}, 0, len(params))
 		for _, p := range params {
@@ -156,13 +204,13 @@ func (c *Client) CreatePipelineRun(ctx context.Context, namespace, runName, pipe
 }
 
 // CancelPipelineRun 取消一个运行中的 PipelineRun：
-// 置 spec.status=PipelineRunCancelled（Tekton v1 标准取消方式），
-// controller 停掉未开始的 TaskRun 并终止进行中的 Pod。
+// 置 spec.status=Cancelled（Tekton v1 的取值；v1beta1 时代的 PipelineRunCancelled
+// 会被 v1 webhook 拒绝：invalid value）。controller 停掉未开始的 TaskRun 并终止进行中的 Pod。
 // 已处于终态的 PipelineRun 再次 patch 无副作用（幂等）。
 func (c *Client) CancelPipelineRun(ctx context.Context, namespace, name string) error {
 	cli := c.dyn.Resource(gvkPipelineRun.GroupVersion().WithResource("pipelineruns")).Namespace(namespace)
 	patch, err := json.Marshal(map[string]interface{}{
-		"spec": map[string]interface{}{"status": "PipelineRunCancelled"},
+		"spec": map[string]interface{}{"status": "Cancelled"},
 	})
 	if err != nil {
 		return err
@@ -354,14 +402,10 @@ func (c *Client) StreamPodLogs(ctx context.Context, namespace, podName, containe
 	return err
 }
 
-// CreatePVC 创建共享 workspace PVC。
-func (c *Client) CreatePVC(ctx context.Context, namespace, name, storage string) error {
-	return c.EnsurePVC(ctx, namespace, name, storage, "ReadWriteOnce")
-}
-
-// EnsurePVC 幂等创建 PVC（已存在视为成功）：
-//   - workspace PVC（ci-ws-*）：每 run 一个，已存在即并发/脏数据异常
-//   - 缓存 PVC（ci-cache-*）：项目级共享，长期存在，重复创建是正常路径
+// EnsurePVC 幂等创建 PVC（已存在视为成功）。两类 PVC 都是项目级长期资产：
+//   - workspace（ci-ws-p<项目>）：同项目串行复用的工作区，第一次创建、之后直接复用，
+//     省掉每次触发都等新盘绑定的时间
+//   - 构建缓存（ci-cache-p<项目>）：跨运行复用依赖
 func (c *Client) EnsurePVC(ctx context.Context, namespace, name, storage, accessMode string) error {
 	if accessMode == "" {
 		accessMode = "ReadWriteOnce"
@@ -418,7 +462,7 @@ func (c *Client) GetDeploymentImages(ctx context.Context, namespace, name string
 }
 
 // ListDeploymentsByLabel 按 label selector 列出 deployment 名
-//（helm release 的 workload 用 app.kubernetes.io/instance=<release> 定位）。
+// （helm release 的 workload 用 app.kubernetes.io/instance=<release> 定位）。
 func (c *Client) ListDeploymentsByLabel(ctx context.Context, namespace, selector string) ([]string, error) {
 	list, err := c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
@@ -503,6 +547,44 @@ func (c *Client) DeletePipeline(ctx context.Context, namespace, name string) err
 		return nil
 	}
 	return err
+}
+
+// PVCView 一块 PVC 的展示信息（容量/状态/绑定的 PV；不含任何内容）
+type PVCView struct {
+	Name         string `json:"name"`
+	Phase        string `json:"phase"`
+	Requested    string `json:"requested"`
+	Capacity     string `json:"capacity"`
+	StorageClass string `json:"storageClass"`
+	Volume       string `json:"volume"`
+	CreatedAt    string `json:"createdAt"`
+}
+
+// GetPVC 读一块盘的展示信息；盘不存在返回 (nil, nil)——缓存页要把"还没建过盘"
+// 当成正常状态显示，而不是报 404。
+func (c *Client) GetPVC(ctx context.Context, namespace, name string) (*PVCView, error) {
+	pvc, err := c.clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	v := &PVCView{Name: pvc.Name, Phase: string(pvc.Status.Phase)}
+	if sc := pvc.Spec.StorageClassName; sc != nil {
+		v.StorageClass = *sc
+	}
+	if q, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+		v.Requested = q.String()
+	}
+	if q, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok {
+		v.Capacity = q.String()
+	}
+	v.Volume = pvc.Spec.VolumeName
+	if ts := pvc.CreationTimestamp; !ts.IsZero() {
+		v.CreatedAt = ts.Format("2006-01-02 15:04:05")
+	}
+	return v, nil
 }
 
 // ListPVCs 列出 namespace 内前缀匹配的 PVC 名。

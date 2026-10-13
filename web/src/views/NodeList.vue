@@ -1,13 +1,13 @@
 <template>
-  <el-card shadow="never">
-    <template #header>
-      <div class="card-header">
-        <span>节点 ({{ items.length }})</span>
-        <el-button :icon="Refresh" circle @click="load" />
-      </div>
-    </template>
-
-    <el-table border :data="items" v-loading="loading" stripe @row-click="onRowClick">
+  <div class="kc-list">
+    <div class="kc-list-head">
+      <span class="kc-section-title"><el-icon><Cpu /></el-icon>节点</span>
+      <span class="kc-count">共 {{ items.length }} 条</span>
+      <span class="spacer"></span>
+      <el-button :icon="Refresh" circle @click="load" />
+    </div>
+    <el-card shadow="never">
+      <el-table border :data="items" v-loading="loading" stripe @row-click="onRowClick">
       <el-table-column label="名称" prop="name" min-width="170" sortable>
         <template #default="{ row }">
           <el-link type="primary" @click="goDetail(row)">{{ row.name }}</el-link>
@@ -24,11 +24,11 @@
       <el-table-column prop="age" label="运行时长" width="80" align="center" sortable :sort-by="(row) => parseDuration(row.age)" />
       <el-table-column label="操作" width="290" fixed="right">
         <template #default="{ row }">
-          <el-button size="small" @click="goDetail(row)">详情</el-button>
-          <el-button size="small" type="success" plain :disabled="!perm.canWriteCluster()" @click="openTerminal(row)">终端</el-button>
-          <el-button v-if="row.schedulable" size="small" type="warning" plain :disabled="!perm.canWriteCluster()" @click="cordon(row)">封锁</el-button>
-          <el-button v-else size="small" type="success" plain :disabled="!perm.canWriteCluster()" @click="uncordon(row)">解封</el-button>
-          <el-button size="small" type="danger" plain :disabled="!perm.canWriteCluster()" @click="openDrain(row)">排空</el-button>
+          <el-button size="small" text type="primary" @click="goDetail(row)">详情</el-button>
+          <el-button size="small" text type="success" :disabled="!perm.canWriteCluster()" @click="openTerminal(row)">终端</el-button>
+          <el-button v-if="row.schedulable" size="small" text type="warning" :disabled="!perm.canWriteCluster()" @click="cordon(row)">封锁</el-button>
+          <el-button v-else size="small" text type="success" :disabled="!perm.canWriteCluster()" @click="uncordon(row)">解封</el-button>
+          <el-button size="small" text type="danger" :disabled="!perm.canWriteCluster()" @click="openDrain(row)">排空</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -67,7 +67,8 @@
         <el-button type="danger" :loading="draining" @click="doDrain">开始排空</el-button>
       </template>
     </el-dialog>
-  </el-card>
+    </el-card>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -161,7 +162,10 @@ function goDetail(row: NodeDetail) {
 </script>
 
 <style scoped>
-.card-header { display: flex; justify-content: space-between; align-items: center; }
+.kc-list { display: flex; flex-direction: column; gap: 12px; }
+.kc-list-head { display: flex; align-items: center; gap: 10px; }
+.kc-list-head .spacer { flex: 1; }
+.kc-count { color: #8a94a6; font-size: 13px; }
 .drain-result { margin-top: 10px; color: #606266; font-size: 13px; line-height: 1.8; }
 .drain-fail { color: #f56c6c; }
 </style>

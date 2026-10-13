@@ -27,6 +27,8 @@ type K8sHandler struct {
 	perm *service.PermissionService
 	// OnNamespaceCreated 命名空间创建后的联动钩子（Nacos 自动同步），由 router 装配注入；可为 nil
 	OnNamespaceCreated func(cluster, namespace string)
+	// logInject 日志采集（webhook 注入模式），由 router 装配注入
+	logInject *service.LogInjectService
 	// LogSourceFor 取集群 ES 日志源（日志采集 Sidecar 生成输出配置用），由 router 装配注入；可为 nil
 	LogSourceFor func(clusterName string) (*model.LogSource, error)
 }
@@ -34,6 +36,9 @@ type K8sHandler struct {
 func NewK8sHandler(clusters *service.ClusterManager, k8s *service.K8sService, jwtSecret string, perm *service.PermissionService) *K8sHandler {
 	return &K8sHandler{clusters: clusters, k8s: k8s, jwtSecret: jwtSecret, perm: perm}
 }
+
+// SetLogInject 注入日志采集服务（装配阶段调用；三个 logcollection 接口走它）
+func (h *K8sHandler) SetLogInject(svc *service.LogInjectService) { h.logInject = svc }
 
 // client 解析 X-Cluster 头并返回集群客户端，失败时写入响应并返回 nil
 func (h *K8sHandler) client(c *gin.Context) *kube.Client {
@@ -450,7 +455,7 @@ func (h *K8sHandler) GetLogCollection(c *gin.Context) {
 	if client == nil {
 		return
 	}
-	st, err := h.k8s.GetLogCollection(c.Request.Context(), client, c.Param("kind"), queryNamespace(c), c.Param("name"))
+	st, err := h.logInject.Get(c.Request.Context(), client, h.clusterName(c), c.Param("kind"), queryNamespace(c), c.Param("name"))
 	if err != nil {
 		response.K8sError(c, err)
 		return
@@ -478,7 +483,7 @@ func (h *K8sHandler) SetLogCollection(c *gin.Context) {
 		response.Fail(c, 400, 400, "该集群未启用日志源（平台管理-日志源配置），无法生成 ES 采集配置")
 		return
 	}
-	if err := h.k8s.EnableLogCollection(c.Request.Context(), client, c.Param("kind"), queryNamespace(c), c.Param("name"), &in, src); err != nil {
+	if err := h.logInject.Enable(c.Request.Context(), client, h.clusterName(c), c.Param("kind"), queryNamespace(c), c.Param("name"), &in, src); err != nil {
 		response.K8sError(c, err)
 		return
 	}
@@ -491,7 +496,7 @@ func (h *K8sHandler) RemoveLogCollection(c *gin.Context) {
 	if client == nil {
 		return
 	}
-	if err := h.k8s.RemoveLogCollection(c.Request.Context(), client, c.Param("kind"), queryNamespace(c), c.Param("name")); err != nil {
+	if err := h.logInject.Remove(c.Request.Context(), client, h.clusterName(c), c.Param("kind"), queryNamespace(c), c.Param("name")); err != nil {
 		response.K8sError(c, err)
 		return
 	}

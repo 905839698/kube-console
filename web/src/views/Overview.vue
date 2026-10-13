@@ -42,14 +42,22 @@
       <el-col :span="6"><MetricCard label="内存 Limits" :value="monitor?.memLimitsGi ?? null" unit="Gi" :decimals="2" color="#4d9e57" :sub="allocSub('mem', monitor?.memLimitsGi)" /></el-col>
     </el-row>
 
-    <!-- PV 存储用量（kubelet 未采集 volume stats 时隐藏） -->
+    <!-- PV 存储用量（数量/总容量走 kube-state-metrics 的 PV 容量，已用率走 kubelet volume stats） -->
     <el-row v-if="pvVisible" :gutter="16" style="margin-top: 16px">
-      <el-col :span="6"><MetricCard label="PV 数量" :value="monitor?.pvCount ?? null" unit="个" :decimals="0" color="#9254de" /></el-col>
-      <el-col :span="6"><MetricCard label="PV 总容量" :value="monitor?.pvTotalGi ?? null" unit="Gi" :decimals="1" color="#409eff" /></el-col>
-      <el-col :span="6"><MetricCard label="PV 总体已用" :value="monitor?.pvUsedPct ?? null" unit="%" :decimals="1" color="#e6a23c" /></el-col>
+      <el-col :span="6"><MetricCard label="PV 数量" :value="monitor?.pvCount ?? null" unit="个" :decimals="0" color="#9254de" sub="集群内 PersistentVolume 总数" /></el-col>
+      <el-col :span="6"><MetricCard label="PV 总容量" :value="monitor?.pvTotalGi ?? null" unit="Gi" :decimals="1" color="#409eff" sub="各 PV spec.capacity 之和" /></el-col>
+      <el-col :span="6"><MetricCard label="卷已用率" :value="monitor?.pvUsedPct ?? null" unit="%" :decimals="1" color="#e6a23c" sub="kubelet 挂载点口径" /></el-col>
       <el-col :span="6">
         <el-card shadow="never" class="pv-rank-card">
-          <template #header>PVC 使用率 Top</template>
+          <template #header>
+            PVC 使用率 Top
+            <el-tooltip
+              placement="top"
+              content="取自 kubelet 的 volume stats，是卷所在文件系统的用量：local-path / 共享盘会把整块节点盘算进来，不等于该 PVC 自己的用量。"
+            >
+              <el-icon class="pv-tip"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </template>
           <RankTable :items="monitor?.pvTopUsed || []" unit="%" />
         </el-card>
       </el-col>
@@ -90,57 +98,17 @@
       </el-col>
     </el-row>
 
-    <!-- 控制面组件监控 -->
-    <el-card shadow="never" style="margin-top: 16px">
-      <template #header>控制面组件监控</template>
-      <div v-if="(monitor?.controlPlane || []).length === 0" class="cp-empty-tip">
-        暂无控制面组件监控数据（Prometheus 未采集 kube-apiserver/etcd 等组件时此处为空）
-      </div>
-      <div v-else class="cp-grid">
-        <div v-for="cp in monitor?.controlPlane || []" :key="cp.name" class="cp-item">
-          <div class="cp-head">
-            <span class="cp-name">{{ cp.name }}</span>
-            <el-tag size="small" :type="cpTagType(cp)">{{ cpTagText(cp) }}</el-tag>
-            <span v-if="cp.total > 0" class="cp-replicas">{{ cp.ready }}/{{ cp.total }}</span>
-          </div>
-          <div v-if="cp.cards?.length" class="cp-cards">
-            <div v-for="card in cp.cards" :key="card.label" class="cp-card">
-              <div class="cp-card-label">{{ card.label }}</div>
-              <div class="cp-card-value">{{ fmtCard(card) }}</div>
-            </div>
-          </div>
-          <div v-else-if="cp.total === 0" class="cp-empty">未接入 Prometheus 采集</div>
-          <div v-else class="cp-empty">已采集，暂无可用指标</div>
-        </div>
-      </div>
-    </el-card>
-
-    <!-- 控制面趋势 -->
-    <el-row v-if="cpTrendVisible" :gutter="16" style="margin-top: 16px">
-      <el-col :span="12">
-        <el-card shadow="never">
-          <template #header>控制面 QPS 趋势</template>
-          <MetricChart :series="cpQpsSeries" height="260px" y-axis-name="req/s" />
-        </el-card>
-      </el-col>
-      <el-col :span="12">
-        <el-card shadow="never">
-          <template #header>etcd DB 大小趋势</template>
-          <MetricChart :series="etcdSeries" height="260px" y-axis-name="Gi" />
-        </el-card>
-      </el-col>
-    </el-row>
+    <!-- 控制面组件监控与趋势已迁至「可观测性 → 控制平面组件」（按需查询，总览不再背着它刷新） -->
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { k8sApi, type OverviewStats, type MonitorOverview, type RankItem, type ControlPlaneItem, type ControlCard } from '../api'
-import { Refresh } from '@element-plus/icons-vue'
+import { k8sApi, type OverviewStats, type MonitorOverview, type RankItem } from '../api'
+import { QuestionFilled, Refresh } from '@element-plus/icons-vue'
 import StatusTag from '../components/StatusTag.vue'
 import MetricCard from '../components/MetricCard.vue'
-import MetricChart, { type ChartSeries } from '../components/MetricChart.vue'
 import { useClusterStore } from '../store/cluster'
 import { textSelected } from '../utils/selection'
 
@@ -169,13 +137,6 @@ const quotaVisible = computed(
 const pvVisible = computed(
   () => (monitor.value?.pvCount ?? 0) > 0 || (monitor.value?.pvTopUsed || []).length > 0,
 )
-const cpTrendVisible = computed(
-  () =>
-    (monitor.value?.apiserverQpsTrend || []).length > 0 ||
-    (monitor.value?.coreDnsQpsTrend || []).length > 0 ||
-    // etcd 趋势卡片也在这一行：只有 etcd 指标时不能整行隐藏
-    (monitor.value?.etcdDbSizeTrend || []).length > 0,
-)
 
 // 分配占比副文案：requests/limits 占集群可分配资源的百分比
 function allocSub(kind: 'cpu' | 'mem', v?: number | null): string {
@@ -184,40 +145,6 @@ function allocSub(kind: 'cpu' | 'mem', v?: number | null): string {
   if (!alloc) return ''
   const unit = kind === 'cpu' ? '核' : 'Gi'
   return `占可分配 ${((v / alloc) * 100).toFixed(1)}%（可分配 ${alloc.toFixed(1)} ${unit}）`
-}
-
-const cpQpsSeries = computed<ChartSeries[]>(() => {
-  const s: ChartSeries[] = []
-  if ((monitor.value?.apiserverQpsTrend || []).length) {
-    s.push({ name: 'API Server', data: monitor.value!.apiserverQpsTrend, color: '#409eff', unit: 'req/s' })
-  }
-  if ((monitor.value?.coreDnsQpsTrend || []).length) {
-    s.push({ name: 'CoreDNS', data: monitor.value!.coreDnsQpsTrend, color: '#67c23a', unit: 'req/s' })
-  }
-  return s
-})
-
-const etcdSeries = computed<ChartSeries[]>(() =>
-  (monitor.value?.etcdDbSizeTrend || []).length
-    ? [{ name: 'etcd DB', data: monitor.value!.etcdDbSizeTrend, color: '#9254de', unit: 'Gi' }]
-    : [],
-)
-
-function cpTagType(cp: ControlPlaneItem): 'success' | 'warning' | 'danger' | 'info' {
-  if (cp.total === 0) return 'info'
-  if (cp.ready < cp.total) return 'danger'
-  return 'success'
-}
-
-function cpTagText(cp: ControlPlaneItem): string {
-  if (cp.total === 0) return '未接入'
-  if (cp.ready < cp.total) return `降级 ${cp.ready}/${cp.total}`
-  return '正常'
-}
-
-function fmtCard(card: ControlCard): string {
-  const v = card.value.toFixed(card.dec ?? 0)
-  return card.unit ? `${v} ${card.unit}` : v
 }
 
 // RankTable 排行榜组件
@@ -284,32 +211,8 @@ onMounted(load)
 .stat-inner { display: flex; align-items: center; gap: 14px; }
 .stat-value { font-size: 26px; font-weight: 600; color: #303133; }
 .stat-label { font-size: 13px; color: #909399; }
-.cp-empty-tip { color: #909399; font-size: 13px; padding: 8px 0; }
-.cp-grid { display: flex; flex-wrap: wrap; gap: 12px; }
-.cp-item {
-  flex: 1 1 30%;
-  min-width: 300px;
-  border: 1px solid var(--kc-border);
-  border-radius: 8px;
-  padding: 12px;
-  background: #fff;
-}
-.cp-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.cp-name { font-weight: 600; font-size: 14px; }
-.cp-replicas { font-size: 12px; color: #909399; }
-.cp-cards { display: flex; flex-wrap: wrap; gap: 8px; }
-.cp-card {
-  flex: 1 1 30%;
-  min-width: 90px;
-  background: #f7f9fc;
-  border-radius: 6px;
-  padding: 8px 10px;
-  text-align: center;
-}
-.cp-card-label { font-size: 12px; color: #909399; margin-bottom: 4px; }
-.cp-card-value { font-size: 15px; font-weight: 600; color: #303133; }
-.cp-empty { font-size: 12px; color: #c0c4cc; padding: 6px 0; }
 .pv-rank-card :deep(.rank-list) { max-height: 120px; }
+.pv-tip { font-size: 13px; color: #c0c4cc; vertical-align: -2px; margin-left: 4px; cursor: help; }
 </style>
 
 <style>

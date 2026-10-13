@@ -698,3 +698,105 @@ func TestCompileLiftedParamMixedTaskParamRejected(t *testing.T) {
 		t.Errorf("错误应说明 Pipeline 参数上下文: %v", err)
 	}
 }
+
+// ===== 节点开关（disabled）=====
+
+// 关闭的节点不生成 Task，前后依赖自动桥接（git → [scan 关闭] → build ⇒ build runAfter git）
+func TestCompileDisabledNodeBridgesRunAfter(t *testing.T) {
+	c := New(newStubRegistry("git", "scan", "build"))
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "git", Type: "git"},
+		{ID: "scan", Type: "scan", Disabled: true},
+		{ID: "build", Type: "build"},
+	}
+	g.Edges = []model.Edge{{Source: "git", Target: "scan"}, {Source: "scan", Target: "build"}}
+
+	spec, err := c.Compile(g, "ns")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if len(spec.Spec.Tasks) != 2 {
+		t.Fatalf("关闭节点不应生成 Task，期望 2 个，得 %d", len(spec.Spec.Tasks))
+	}
+	var build *TektonPTask
+	for i := range spec.Spec.Tasks {
+		if spec.Spec.Tasks[i].Name == "build" {
+			build = &spec.Spec.Tasks[i]
+		}
+	}
+	if build == nil {
+		t.Fatal("缺少 build 任务")
+	}
+	if len(build.RunAfter) != 1 || build.RunAfter[0] != "git" {
+		t.Errorf("build runAfter 应桥接到 [git]，得 %v", build.RunAfter)
+	}
+}
+
+// 关闭的条件节点退化为穿透节点：下游不再带 when 约束
+func TestCompileDisabledConditionPassThrough(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "step"})
+	reg.Register(specNode{t: model.NodeTypeCondition})
+	c := New(reg)
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "git", Type: "step"},
+		{ID: "c1", Type: model.NodeTypeCondition, Disabled: true, Params: map[string]interface{}{"param": "GIT_BRANCH", "op": "==", "value": "main"}},
+		{ID: "build", Type: "step"},
+	}
+	g.Edges = []model.Edge{
+		{Source: "git", Target: "c1"},
+		{Source: "c1", Target: "build", Branch: model.BranchYes},
+	}
+	spec, err := c.Compile(g, "ns")
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, task := range spec.Spec.Tasks {
+		if task.Name == "build" {
+			if len(task.When) != 0 {
+				t.Errorf("关闭的条件不应产生 when，得 %+v", task.When)
+			}
+			if len(task.RunAfter) != 1 || task.RunAfter[0] != "git" {
+				t.Errorf("build runAfter 应穿透到 [git]，得 %v", task.RunAfter)
+			}
+		}
+	}
+	// 条件被关闭后不再声明 GIT_* Pipeline 参数
+	if len(spec.Spec.Params) != 0 {
+		t.Errorf("关闭的条件不应声明参数，得 %+v", spec.Spec.Params)
+	}
+}
+
+// 下游引用已关闭节点的结果：编译期给出指明"已关闭"的错误
+func TestCompileDisabledResultRefRejected(t *testing.T) {
+	reg := newStubRegistry()
+	reg.Register(specNode{t: "git-clone", results: []string{"git_commit"}})
+	reg.Register(specNode{t: "build-image", script: "IMG=repo:$(tasks.gc.results.git_commit)"})
+	c := New(reg)
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "gc", Type: "git-clone", Disabled: true},
+		{ID: "build", Type: "build-image"},
+	}
+	g.Edges = []model.Edge{{Source: "gc", Target: "build"}}
+	_, err := c.Compile(g, "ns")
+	if err == nil {
+		t.Fatal("引用已关闭节点的结果应编译失败")
+	}
+	if !strings.Contains(err.Error(), "已关闭") {
+		t.Errorf("错误应指明节点已关闭: %v", err)
+	}
+}
+
+// 全部节点关闭 → 空 Pipeline 会被 Tekton 拒绝，编译期拦截
+func TestCompileAllDisabledRejected(t *testing.T) {
+	c := New(newStubRegistry("git"))
+	g := &model.Graph{Name: "p", Version: 1}
+	g.Nodes = []model.Node{{ID: "git", Type: "git", Disabled: true}}
+	_, err := c.Compile(g, "ns")
+	if err == nil || !strings.Contains(err.Error(), "没有任何启用的任务节点") {
+		t.Fatalf("全关应报空任务集错误，得: %v", err)
+	}
+}

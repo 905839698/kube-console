@@ -47,7 +47,7 @@ func kbCompParam() *unstructured.Unstructured {
 		"spec": map[string]any{
 			"clusterName": "db", "componentName": "mysql",
 			"configItemDetails": []any{map[string]any{
-				"name":            "mysql-replication-config",
+				"name": "mysql-replication-config",
 				"configFileParams": map[string]any{
 					"my.cnf": map[string]any{"parameters": map[string]any{
 						"max_connections": int64(500), "auto_cn": "on",

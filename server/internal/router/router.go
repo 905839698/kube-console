@@ -14,7 +14,7 @@ import (
 )
 
 // Setup 构建并返回 gin.Engine；archive/eventArchive 为 main 已启动的归档服务（状态查询用）
-func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ciDeps *ci.Deps, archive *service.AlertArchiveService, eventArchive *service.EventArchiveService, nacosSvc *service.NacosService) *gin.Engine {
+func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ciDeps *ci.Deps, archive *service.AlertArchiveService, eventArchive *service.EventArchiveService, nacosSvc *service.NacosService, logInjectSvc *service.LogInjectService) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(middleware.RequestLogger(middleware.ParseLogLevel(cfg.Server.LogLevel)))
@@ -32,6 +32,7 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 	authHandler := handler.NewAuthHandler(db, cfg)
 	clusterHandler := handler.NewClusterHandler(clusters)
 	k8sHandler := handler.NewK8sHandler(clusters, service.NewK8sService(cfg.K8s.DebugImage), cfg.JWT.Secret, permSvc)
+	k8sHandler.SetLogInject(logInjectSvc)
 	monitorHandler := handler.NewMonitorHandler(clusters)
 	helmHandler := handler.NewHelmHandler(clusters, service.NewHelmService(db))
 	userHandler := handler.NewUserHandler(db, cfg)
@@ -67,6 +68,9 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 	api.GET("/ci/ws", cicdHandler.RunWS)
 	// GitLab Webhook 回调（token 走路径，公开端点）
 	api.POST("/ci/webhook/:token", cicdHandler.GitLabWebhook)
+	// 镜像构建器制品下载：任务 Pod 里的 artifact-fetch 回平台取上传产物
+	//（Pod 无用户身份，随机令牌收口）
+	api.GET("/ci/artifact/:token", cicdHandler.BuilderArtifactGet)
 	// 节点终端：创建 nsenter 调试 Pod 后进入宿主机 shell
 	api.GET("/nodes/:name/exec", k8sHandler.ExecNode)
 
@@ -75,6 +79,8 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 	authed.Use(middleware.AuthRequired(cfg.JWT.Secret, db))
 	// 操作审计：记录认证后的写操作
 	authed.Use(middleware.AuditRequired(db))
+	// 菜单能力收口（rbac.enforceMenus）：关掉时本中间件直接放行，保持"资源读取登录即可浏览"
+	authed.Use(middleware.MenuGuard(permSvc, cfg.RBAC.EnforceMenus))
 	{
 		authed.GET("/auth/me", authHandler.Me)
 		authed.PUT("/auth/password", authHandler.ChangePassword)
@@ -113,7 +119,9 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		// 平台扩展：日志检索 / 用量报表 / 备份概览 / 证书巡检
 		authed.POST("/logs/search", platformHandler.LogSearch)
 		authed.GET("/usage", platformHandler.UsageReport)
-		authed.GET("/backups", platformHandler.Backups)
+		authed.GET("/velero/overview", platformHandler.VeleroOverview)
+		authed.GET("/velero/events", platformHandler.VeleroEvents)
+		authed.GET("/velero/volumes", platformHandler.VeleroVolumes)
 		authed.GET("/clusters/certs", platformHandler.ClusterCerts)
 
 		// 个人 API Token
@@ -133,6 +141,9 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		authed.POST("/ci/projects", cicdHandler.ProjectCreate)
 		authed.PUT("/ci/projects/:id", cicdHandler.ProjectUpdate)
 		authed.DELETE("/ci/projects/:id", cicdHandler.ProjectDelete)
+		// 项目构建缓存运维：读=该 ns 有任意角色，清空=该 ns 可写
+		authed.GET("/ci/projects/:id/cache", cicdHandler.ProjectCacheGet)
+		authed.POST("/ci/projects/:id/cache/clear", cicdHandler.ProjectCacheClear)
 		// 流水线 + 版本
 		authed.GET("/ci/pipelines", cicdHandler.PipelineList)
 		authed.POST("/ci/pipelines", cicdHandler.PipelineCreate)
@@ -180,6 +191,15 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		authed.PUT("/ci/globals/:id", cicdHandler.GlobalUpdate)
 		authed.DELETE("/ci/globals/:id", cicdHandler.GlobalDelete)
 
+		// 镜像构建器（上传制品 → 约定 Dockerfile → 托管流水线构建推送）
+		authed.GET("/ci/builders", cicdHandler.BuilderList)
+		authed.POST("/ci/builders", cicdHandler.BuilderCreate)
+		authed.PUT("/ci/builders/:id", cicdHandler.BuilderUpdate)
+		authed.DELETE("/ci/builders/:id", cicdHandler.BuilderDelete)
+		authed.POST("/ci/builders/:id/artifact", cicdHandler.BuilderUpload)
+		authed.POST("/ci/builders/:id/run", cicdHandler.BuilderRun)
+		authed.GET("/ci/builders/:id/preview", cicdHandler.BuilderPreview)
+
 		authed.GET("/ci/repo/refs", cicdHandler.RepoRefs)
 		authed.GET("/ci/k8s/targets", cicdHandler.K8sTargets)
 		// CD：ArgoCD 应用视图
@@ -219,6 +239,16 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		{
 			// 角色管理（自定义角色 CRUD 属写操作，实际仅 platform-admin 可通过）
 			admin.POST("/rbac/roles", rbacHandler.CreateRole)
+
+			// Velero 备份写操作：恢复=集群级重建、删备份连带远端数据，仅平台管理员
+			admin.POST("/velero/backups", platformHandler.VeleroBackupCreate)
+			admin.POST("/velero/schedules", platformHandler.VeleroScheduleCreate)
+			admin.POST("/velero/restores", platformHandler.VeleroRestoreCreate)
+			admin.PUT("/velero/schedules/:namespace/:name/pause", platformHandler.VeleroSchedulePause)
+			admin.PUT("/velero/schedules/:namespace/:name", platformHandler.VeleroScheduleUpdate)
+			admin.DELETE("/velero/schedules/:namespace/:name", platformHandler.VeleroScheduleDelete)
+			admin.DELETE("/velero/backups/:namespace/:name", platformHandler.VeleroBackupDelete)
+			admin.DELETE("/velero/restores/:namespace/:name", platformHandler.VeleroRestoreDelete)
 			admin.PUT("/rbac/roles/:id", rbacHandler.UpdateRole)
 			admin.DELETE("/rbac/roles/:id", rbacHandler.DeleteRole)
 			// 授权管理（写 DB + 物化/清理 K8s RBAC）
@@ -322,6 +352,8 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 
 		// 监控（通过 X-Cluster 请求头选择集群，?range=1h|6h|24h）
 		authed.GET("/monitor/overview", monitorHandler.Overview)
+		authed.GET("/monitor/controlplane", monitorHandler.ControlPlane)
+		authed.GET("/monitor/controlplane/:component", monitorHandler.ControlPlaneDetail)
 		authed.GET("/monitor/query", monitorHandler.Query)
 		authed.GET("/monitor/query-range", monitorHandler.QueryRange)
 		authed.GET("/monitor/node/:name", monitorHandler.Node)
@@ -388,6 +420,13 @@ func Setup(db *gorm.DB, cfg *config.Config, clusters *service.ClusterManager, ci
 		authed.GET("/kb/clusters/:namespace/:name/events", kbHandler.Events)
 		// 备份恢复（dataprotection.kubeblocks.io）：仓库/策略只读，备份增删/计划/恢复要 ns 可写
 		authed.GET("/kb/repos", kbHandler.BackupRepos)
+		// BackupRepo 管理（集群级资源）：读=登录，写=集群层可写；凭证 Secret 只按引用不入库
+		authed.GET("/kb/storage-providers", kbHandler.StorageProviders)
+		authed.GET("/kb/repo-secrets", kbHandler.CredentialSecrets)
+		authed.GET("/kb/repos/:name", kbHandler.BackupRepoDetail)
+		authed.POST("/kb/repos", kbHandler.BackupRepoCreate)
+		authed.PUT("/kb/repos/:name", kbHandler.BackupRepoUpdate)
+		authed.DELETE("/kb/repos/:name", kbHandler.BackupRepoDelete)
 		authed.GET("/kb/clusters/:namespace/:name/backup/policies", kbHandler.BackupPolicies)
 		authed.GET("/kb/clusters/:namespace/:name/backup/schedule", kbHandler.BackupScheduleGet)
 		authed.PUT("/kb/clusters/:namespace/:name/backup/schedule", kbHandler.BackupSchedulePut)

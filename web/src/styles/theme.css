@@ -1,28 +1,47 @@
-/* Kube Console 主题：KubeSphere 4.2 风格 —— 品牌绿主色 + 深色侧边栏 + 浅灰内容区 */
+/* Kube Console 主题：Kuboard 风格 —— 深蓝主色 + 浅色侧边栏 + 深蓝表头 + 分区卡片详情页 */
 :root {
-  /* KubeSphere 品牌绿主色系 */
-  --el-color-primary: #00aa55;
-  --el-color-primary-light-3: #4dc388;
-  --el-color-primary-light-5: #7fd5aa;
-  --el-color-primary-light-7: #b3e8cc;
-  --el-color-primary-light-8: #ccf1dd;
-  --el-color-primary-light-9: #e6f9ee;
-  --el-color-primary-dark-2: #008844;
+  /* Kuboard 深蓝主色系（按钮/链接/分页/菜单激活） */
+  --el-color-primary: #2b4b83;
+  --el-color-primary-light-3: #56739f;
+  --el-color-primary-light-5: #7e95b6;
+  --el-color-primary-light-7: #b5c3d8;
+  --el-color-primary-light-8: #cdd7e6;
+  --el-color-primary-light-9: #e5eaf2;
+  --el-color-primary-dark-2: #223c6a;
+
+  /* 语义色对齐 Kuboard：绿/橙/红更饱和、用于实心状态胶囊 */
+  --el-color-success: #2ba471;
+  --el-color-warning: #f5872b;
+  --el-color-danger: #e5484d;
+  --el-color-error: #e5484d;
+  --el-color-info: #74829b;
+
+  /* 字号：控制台里几乎所有列表/表单都用 size="small"，EP 默认 small=13px、
+     extra-small=12px，在 1080p 大屏上偏小。抬一档，比逐页改 class 更一致
+     （表格/输入框/按钮/标签/分页的内部字号都走这两个变量）。 */
+  --el-font-size-small: 14px;
+  --el-font-size-extra-small: 13px;
 
   /* 全局浅色背景 */
-  --kc-bg: #f5f6f8;
-  /* 深色侧边栏（KubeSphere 风格，两种主题下均为深色） */
-  --kc-sidebar-bg: #1b2c33;
-  --kc-sidebar-text: #9fb3be;
-  --kc-sidebar-text-active: #ffffff;
-  --kc-sidebar-border: rgba(255, 255, 255, 0.08);
-  --kc-sidebar-hover: rgba(255, 255, 255, 0.06);
-  --kc-sidebar-active-bg: rgba(47, 191, 113, 0.16);
-  --kc-sidebar-accent: #2fbf71;
+  --kc-bg: #eef1f6;
+  /* 浅色侧边栏（Kuboard 风格：白底 + 蓝色激活项） */
+  --kc-sidebar-bg: #ffffff;
+  --kc-sidebar-text: #5e6d85;
+  --kc-sidebar-text-active: #2b4b83;
+  --kc-sidebar-border: #e6e9f0;
+  --kc-sidebar-hover: #f3f6fb;
+  --kc-sidebar-active-bg: #e7eefb;
+  --kc-sidebar-accent: #2b4b83;
   --kc-header-bg: #ffffff;
-  --kc-border: #e8eaef;
-  --kc-card-radius: 8px;
-  --kc-logo-gradient: linear-gradient(135deg, #2fbf71 0%, #00aa55 100%);
+  --kc-border: #e6e9f0;
+  --kc-card-radius: 4px;
+  --kc-logo-gradient: linear-gradient(135deg, #3b6bb5 0%, #2b4b83 100%);
+  /* Kuboard 口径：区块标题深蓝、表头深蓝白字、名称类用等宽蓝链接 */
+  --kc-title: #23437f;
+  --kc-table-head-bg: #35528e;
+  --kc-table-head-text: #ffffff;
+  --kc-link: #2f6ab4;
+  --kc-mono: "JetBrains Mono", Consolas, Menlo, monospace;
 }
 
 html, body, #app {
@@ -37,31 +56,204 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* 卡片圆角与阴影统一 */
+/* 卡片：白底、小圆角、几乎不可见的描边（Kuboard 分区卡片） */
 .el-card {
   border-radius: var(--kc-card-radius) !important;
   border: 1px solid var(--kc-border) !important;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04) !important;
+  box-shadow: 0 1px 3px rgba(35, 67, 127, 0.06) !important;
 }
 
 .el-card__header {
   border-bottom: 1px solid var(--kc-border) !important;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--kc-title);
 }
 
-/* 表格微调 */
+/* 表格：深蓝表头 + 白字（Kuboard 列表页核心特征） */
 .el-table {
-  --el-table-header-bg-color: #fafbfc;
-  --el-table-header-text-color: #6b7280;
-  font-size: 13px;
+  --el-table-header-bg-color: var(--kc-table-head-bg);
+  --el-table-header-text-color: var(--kc-table-head-text);
+  --el-table-border-color: #e9edf4;
+  --el-table-row-hover-bg-color: #f2f6fd;
+  font-size: 14px;
 }
 
 .el-table th.el-table__cell {
   font-weight: 600;
+  background-color: var(--kc-table-head-bg) !important;
+  color: var(--kc-table-head-text) !important;
+  border-bottom-color: var(--kc-table-head-bg) !important;
 }
 
-/* 链接与主要按钮的主色已由 --el-color-primary 覆盖 */
+.el-table th.el-table__cell .el-table__column-filter-trigger,
+.el-table th.el-table__cell .el-table__sort-icon {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.el-table th.el-table__cell .el-table__sort-icon.is-active {
+  color: #ffd666;
+}
+
+/* 标签：胶囊形（Kuboard 状态标记） */
+.el-tag {
+  border-radius: 10px;
+}
+
+/* 链接主色 */
+.el-link {
+  --el-link-primary-color: var(--kc-link);
+  --el-link-primary-color-hover: #4a86cc;
+}
+
+/* 分页当前页：深蓝实心 */
+.el-pagination.is-background .el-pager li.is-active {
+  background-color: var(--el-color-primary) !important;
+}
+
+/* ------------------- Kuboard 风格通用区块样式 ------------------- */
+
+/* 分区标题：深蓝加粗，详情页每个卡片顶部 */
+.kc-section-title {
+  color: var(--kc-title);
+  font-weight: 700;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 详情键值网格：灰标签 + 深色值，一行四列自适应 */
+.kc-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 24px;
+  margin-top: 14px;
+}
+.kc-info-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13.5px;
+  min-width: 0;
+}
+.kc-info-label {
+  color: #8a94a6;
+  flex-shrink: 0;
+}
+.kc-info-value {
+  color: #2f3b52;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 资源用量进度条：细条 + 右上统计文字 */
+.kc-usage-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0 4px;
+}
+.kc-usage-name {
+  color: #4a5568;
+  font-size: 13.5px;
+}
+.kc-usage-stat {
+  color: #8a94a6;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.kc-usage-stat b {
+  color: #2f3b52;
+  font-weight: 600;
+}
+.kc-usage-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #e3e8f1;
+  overflow: hidden;
+}
+.kc-usage-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--el-color-primary);
+  transition: width 0.4s;
+}
+.kc-usage-bar i.warn { background: var(--el-color-warning); }
+.kc-usage-bar i.danger { background: var(--el-color-danger); }
+
+/* 仪表小卡：环形占用率 + 标签 + 数值（节点详情「资源与指标」行） */
+.kc-gauge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.kc-gauge-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--kc-border);
+  border-radius: 4px;
+  background: #f7f9fc;
+  padding: 10px 14px;
+  min-width: 170px;
+}
+.kc-gauge-label {
+  font-size: 13px;
+  color: #4a5568;
+  font-weight: 600;
+}
+.kc-gauge-value {
+  font-size: 14px;
+  color: #2f3b52;
+  font-weight: 700;
+}
+.kc-gauge-value small {
+  color: #8a94a6;
+  font-weight: 400;
+  font-size: 12px;
+}
+
+/* 列表页筛选条 / 操作条 */
+.kc-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: #fff;
+  border: 1px solid var(--kc-border);
+  border-radius: var(--kc-card-radius);
+  margin-bottom: 12px;
+}
+.kc-filter-label {
+  color: #6b7689;
+  font-size: 13.5px;
+  flex-shrink: 0;
+}
+.kc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.kc-toolbar .spacer {
+  flex: 1;
+}
+
+/* 名称类链接：等宽字体 + 蓝（Kuboard 的资源名样式） */
+.kc-name-link {
+  font-family: var(--kc-mono);
+  color: var(--kc-link);
+  cursor: pointer;
+}
+.kc-name-link:hover {
+  color: #4a86cc;
+}
 
 /* 滚动条 */
 ::-webkit-scrollbar {
@@ -70,12 +262,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #d1d5db;
+  background: #c8cfda;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #9ca3af;
+  background: #9aa5b5;
 }
 
 ::-webkit-scrollbar-track {
@@ -84,21 +276,29 @@ body {
 
 /* ------------------- 暗色模式（html.dark） ------------------- */
 html.dark {
-  --el-color-primary: #2fbf71;
-  --el-color-primary-light-3: #27a55f;
-  --el-color-primary-light-5: #1d8049;
-  --el-color-primary-light-7: #145c34;
-  --el-color-primary-light-8: #0f4727;
-  --el-color-primary-light-9: #0a331c;
-  --el-color-primary-dark-2: #4fcc85;
+  --el-color-primary: #4a72b8;
+  --el-color-primary-light-3: #3d5f99;
+  --el-color-primary-light-5: #314c7a;
+  --el-color-primary-light-7: #243859;
+  --el-color-primary-light-8: #1e2f4a;
+  --el-color-primary-light-9: #18253b;
+  --el-color-primary-dark-2: #5f86c9;
 
-  --kc-bg: #0f1419;
-  --kc-sidebar-bg: #1b2c33;
-  --kc-sidebar-text: #9fb3be;
-  --kc-sidebar-text-active: #ffffff;
-  --kc-header-bg: #161b22;
-  --kc-border: #2d333b;
-  --kc-logo-gradient: linear-gradient(135deg, #2fbf71 0%, #00aa55 100%);
+  --kc-bg: #10141c;
+  --kc-sidebar-bg: #171e2b;
+  --kc-sidebar-text: #9aa8c0;
+  --kc-sidebar-text-active: #d6e4ff;
+  --kc-sidebar-border: #232d3f;
+  --kc-sidebar-hover: rgba(255, 255, 255, 0.05);
+  --kc-sidebar-active-bg: rgba(74, 114, 184, 0.22);
+  --kc-sidebar-accent: #4a72b8;
+  --kc-header-bg: #141a26;
+  --kc-border: #253046;
+  --kc-logo-gradient: linear-gradient(135deg, #4a72b8 0%, #2b4b83 100%);
+  --kc-title: #9db9e8;
+  --kc-table-head-bg: #22304a;
+  --kc-table-head-text: #c9d7ee;
+  --kc-link: #7aa5e0;
 }
 
 html.dark body {
@@ -107,20 +307,30 @@ html.dark body {
 }
 
 html.dark .el-card {
-  background: #161b22;
+  background: #161d2b;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4) !important;
 }
 
 html.dark .el-table {
-  --el-table-bg-color: #161b22;
-  --el-table-tr-bg-color: #161b22;
-  --el-table-header-bg-color: #1c2128;
-  --el-table-row-hover-bg-color: #1c2128;
-  --el-table-border-color: #2d333b;
+  --el-table-bg-color: #161d2b;
+  --el-table-tr-bg-color: #161d2b;
+  --el-table-row-hover-bg-color: #1d2839;
+  --el-table-border-color: #253046;
 }
 
 html.dark .el-dialog,
 html.dark .el-drawer,
 html.dark .el-popover.el-popped {
-  background: #161b22;
+  background: #161d2b;
 }
+
+html.dark .kc-filter-bar {
+  background: #161d2b;
+}
+html.dark .kc-info-label { color: #7484a0; }
+html.dark .kc-info-value { color: #dbe4f3; }
+html.dark .kc-info-item, html.dark .kc-usage-name { color: #b7c3d8; }
+html.dark .kc-usage-bar { background: #253046; }
+html.dark .kc-gauge-card { background: #1b2434; border-color: #253046; }
+html.dark .kc-gauge-label, html.dark .kc-gauge-value { color: #dbe4f3; }
+html.dark .kc-gauge-value small { color: #7484a0; }

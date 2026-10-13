@@ -41,7 +41,7 @@
         <CiCanvas :nodes="graph.nodes" :edges="graph.edges" :selected="selectedNode"
           @change="updateCanvas" @select="selectNode" />
       </div>
-      <PropertyPanel :node="selectedNode" :graph="graph" @params="onNodeParams" />
+      <PropertyPanel :node="selectedNode" :graph="graph" @params="onNodeParams" @disabled="onNodeDisabled" />
     </div>
 
     <div class="footer" v-if="loaded">
@@ -214,6 +214,12 @@ function onNodeParams(params: Record<string, unknown>) {
   const n = selectedNode.value
   if (!n) return
   graph.value = { ...graph.value, nodes: graph.value.nodes.map((x) => (x.id === n.id ? { ...x, params } : x)) }
+}
+function onNodeDisabled(disabled: boolean) {
+  const n = selectedNode.value
+  if (!n) return
+  graph.value = { ...graph.value, nodes: graph.value.nodes.map((x) => (x.id === n.id ? (disabled ? { ...x, disabled: true } : { ...x, disabled: undefined }) : x)) }
+  selectedNode.value = { ...n, disabled }
 }
 
 // 路由守卫注册：脏时离开弹确认
@@ -549,13 +555,13 @@ function goBack() {
 .footer { margin-top: 8px; display: flex; gap: 8px; }
 .yaml-box {
   flex: 1; margin: 0; background: #fafafa; padding: 8px; border-radius: 8px;
-  max-height: 160px; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-all;
+  max-height: 160px; overflow: auto; font-size: 13px; white-space: pre-wrap; word-break: break-all;
 }
 .err-box { width: 280px; background: #fef0f0; padding: 8px; border-radius: 8px; max-height: 160px; overflow: auto; }
-.err-line { color: #cf1322; font-size: 12px; }
+.err-line { color: #cf1322; font-size: 13px; }
 .run-tip { margin-bottom: 10px; color: #606266; font-size: 13px; }
-.run-err { margin-top: 8px; color: #e6a23c; font-size: 12px; }
-.dup-tip { font-size: 12px; color: #909399; margin-bottom: 12px; }
-.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
-.cfg-tip { color: #909399; font-size: 12px; }
+.run-err { margin-top: 8px; color: #e6a23c; font-size: 13px; }
+.dup-tip { font-size: 13px; color: #909399; margin-bottom: 12px; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+.cfg-tip { color: #909399; font-size: 13px; }
 </style>

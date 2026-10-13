@@ -87,6 +87,12 @@ type TaskRef struct {
 type PWorkspace struct {
 	Name      string `json:"name" yaml:"name"`
 	Workspace string `json:"workspace,omitempty" yaml:"workspace,omitempty"`
+	// SubPath 任务级挂载子路径（Tekton PipelineTask workspace binding 支持）。
+	// 依赖缓存用它把 cache workspace 挂到 shared 同一块 PVC 的子目录，
+	// 避免 PipelineRun 出现两条指向同一 claim 的 workspace 绑定——那种形态下
+	// Tekton affinity-assistant 的创建去重与任务 Pod 的亲和引用不一致，
+	// 任务 Pod 会因亲和不到任何节点而永远 Unschedulable。
+	SubPath string `json:"subPath,omitempty" yaml:"subPath,omitempty"`
 }
 
 type TektonParam struct {
@@ -101,7 +107,8 @@ type TektonWorkspace struct {
 
 // workspaceBindName task workspace → Pipeline workspace 的映射规则：
 // "cache" 映射到项目级依赖缓存 workspace（Pipeline 上声明为 optional，
-// 运行时按节点的 cache 参数决定是否绑定 PVC）；其余一律映射到共享工作区 shared。
+// 运行时启用缓存时由 service 重写到 shared + subPath，未启用则不绑定）；
+// 其余一律映射到共享工作区 shared。
 func workspaceBindName(name string) string {
 	if name == "cache" {
 		return "cache"
@@ -123,9 +130,12 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 
 	byID := map[string]model.Node{}
 	isCond := map[string]bool{}
+	disabled := map[string]bool{}
 	for _, n := range g.Nodes {
 		byID[n.ID] = n
-		isCond[n.ID] = n.Type == model.NodeTypeCondition
+		disabled[n.ID] = n.Disabled
+		// 关闭的条件节点退化为普通穿透节点：不再产生 when 约束
+		isCond[n.ID] = n.Type == model.NodeTypeCondition && !n.Disabled
 	}
 
 	// 前驱（按边），condition 节点在 runAfter 中会被穿透
@@ -142,7 +152,7 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 	paramSet := map[string]bool{}   // 需声明的 Pipeline 参数
 	varSeen := map[string]bool{}    // B12 唯一性（按变量 key）
 	for _, n := range g.Nodes {
-		if n.Type != model.NodeTypeCondition {
+		if n.Type != model.NodeTypeCondition || n.Disabled {
 			continue
 		}
 		source := strParam(n.Params, "source", "param")
@@ -262,10 +272,10 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 		spec.Spec.Params = append(spec.Spec.Params, PipelineParam{Name: name, Type: "string"})
 	}
 
-	// 任务名集合（condition 控制节点不生成 Task）；供 runAfter 编译期自检
+	// 任务名集合（condition 控制节点与关闭的节点不生成 Task）；供 runAfter 编译期自检
 	taskSet := map[string]bool{}
 	for _, id := range order {
-		if !isCond[id] {
+		if !isCond[id] && !disabled[id] {
 			taskSet[id] = true
 		}
 	}
@@ -298,7 +308,7 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 	// 没有该类型节点时交由 validateTaskRefs 报错（引用注定解析不出）。
 	gitCloneID := ""
 	for _, id := range order {
-		if !isCond[id] && byID[id].Type == "git-clone" {
+		if !isCond[id] && !disabled[id] && byID[id].Type == "git-clone" {
 			gitCloneID = id
 			break
 		}
@@ -306,8 +316,8 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 
 	for _, id := range order {
 		n := byID[id]
-		if isCond[id] {
-			continue // 控制节点不生成 Task
+		if isCond[id] || disabled[id] {
+			continue // 控制节点 / 关闭的节点不生成 Task
 		}
 		plugin, ok := c.Nodes.Get(n.Type)
 		if !ok {
@@ -328,8 +338,8 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 			pt.Workspaces = append(pt.Workspaces, PWorkspace{Name: ws.Name, Workspace: workspaceBindName(ws.Name)})
 		}
 
-		// runAfter：前驱若是 condition，则穿透到 condition 的前驱 task
-		pt.RunAfter = runAfterThrough(id, byID, isCond, predEdges)
+		// runAfter：前驱若是 condition 或关闭的节点，则穿透到其前驱 task
+		pt.RunAfter = runAfterThrough(id, byID, isCond, disabled, predEdges)
 
 		// 编译期自检：runAfter 必须全部指向已生成的 task（condition 穿透后
 		// 若仍引用不存在的节点，直接报平台错误，而不是让 Tekton webhook 报
@@ -359,9 +369,15 @@ func (c *Compiler) Compile(g *model.Graph, namespace string) (*PipelineSpec, err
 		spec.Spec.Tasks = append(spec.Spec.Tasks, pt)
 	}
 
+	// 全部节点被关闭（或只剩条件节点）时生成空 Pipeline 会被 Tekton 拒绝，
+	// 编译期给出指明原因的报错
+	if len(spec.Spec.Tasks) == 0 {
+		return nil, fmt.Errorf("流水线没有任何启用的任务节点（节点全部被关闭或仅剩条件节点），请至少开启一个执行节点")
+	}
+
 	// 编译期校验 Tekton 变量引用，把 webhook 的笼统 "non-existent variable"
 	// 拒绝提前为指明节点与写法的平台错误
-	if err := validateTaskRefs(spec, ancestors); err != nil {
+	if err := validateTaskRefs(spec, ancestors, disabled); err != nil {
 		return nil, err
 	}
 
@@ -440,7 +456,7 @@ var tektonRefRe = regexp.MustCompile(`\$\((params|tasks)\.([a-zA-Z0-9._-]+)\)`)
 //     且不允许引用自身结果（结果只能被下游任务消费）。
 //
 // 校验范围：每个任务的 taskSpec 全文 + PipelineTask 级 params 值（提升后的结果引用）。
-func validateTaskRefs(spec *PipelineSpec, ancestors map[string]map[string]bool) error {
+func validateTaskRefs(spec *PipelineSpec, ancestors map[string]map[string]bool, disabled map[string]bool) error {
 	taskParams := map[string]map[string]bool{}
 	taskResults := map[string]map[string]bool{}
 	for i := range spec.Spec.Tasks {
@@ -481,6 +497,9 @@ func validateTaskRefs(spec *PipelineSpec, ancestors map[string]map[string]bool) 
 				return fmt.Errorf("任务 %s 引用了自身的结果 $(tasks.%s.results.%s)：结果只能被下游任务引用", t.Name, tname, rname)
 			}
 			if _, ok := taskResults[tname]; !ok {
+				if disabled[tname] {
+					return fmt.Errorf("任务 %s 引用了节点 %s 的结果，但 %s 已关闭（编译时跳过、不产出结果）：请开启 %s，或把 %s 的引用改到其它上游结果", t.Name, tname, tname, tname, t.Name)
+				}
 				return fmt.Errorf("任务 %s 引用了不存在的任务结果 $(tasks.%s.results.%s)：流水线中没有名为 %s 的任务节点（可能是节点被改名/删除，请重新在参数里选择上游结果）", t.Name, tname, rname, tname)
 			}
 			// 被引用任务必须是引用方的上游（存在依赖路径）：缺连线时 Tekton 并行
@@ -659,7 +678,7 @@ func whenKey(w WhenExpr) string {
 func ConditionVarNames(g *model.Graph) map[string]bool {
 	out := map[string]bool{}
 	for _, n := range g.Nodes {
-		if n.Type != model.NodeTypeCondition {
+		if n.Type != model.NodeTypeCondition || n.Disabled {
 			continue
 		}
 		if strParam(n.Params, "source", "param") != "param" {
@@ -734,16 +753,16 @@ func declaresProperty(meta nodetype.Meta, name string) bool {
 	return false
 }
 
-// runAfterThrough 计算 task 的 runAfter：前驱是 condition 时穿透到其前驱 task。
-func runAfterThrough(id string, byID map[string]model.Node, isCond map[string]bool, predEdges map[string][]model.Edge) []string {
+// runAfterThrough 计算 task 的 runAfter：前驱是 condition 或已关闭的节点时穿透到其前驱。
+func runAfterThrough(id string, byID map[string]model.Node, isCond, disabled map[string]bool, predEdges map[string][]model.Edge) []string {
 	seen := map[string]bool{}
 	var out []string
 	var walk func(node string)
 	walk = func(node string) {
 		for _, e := range predEdges[node] {
 			src := e.Source
-			if isCond[src] {
-				walk(src) // 穿透 condition
+			if isCond[src] || disabled[src] {
+				walk(src) // 穿透 condition / 关闭节点
 			} else {
 				if !seen[src] {
 					seen[src] = true

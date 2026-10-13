@@ -304,7 +304,7 @@ onMounted(load)
 <style scoped>
 .empty-actions { display: flex; align-items: center; gap: 12px; }
 .muted { color: #c0c4cc; }
-.sub { font-size: 12px; margin-top: 2px; }
+.sub { font-size: 13px; margin-top: 2px; }
 .stat-card { text-align: center; }
 .stat-num { font-size: 30px; font-weight: 700; line-height: 1.2; }
 .stat-num.danger { color: #f56c6c; }

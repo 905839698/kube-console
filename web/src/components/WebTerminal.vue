@@ -264,7 +264,7 @@ function destroyTerminal() {
   gap: 10px;
 }
 .terminal-status {
-  font-size: 12px;
+  font-size: 13px;
   color: #8b949e;
 }
 .terminal-status.warn {

@@ -34,15 +34,25 @@ func (v *Validator) Validate(g *model.Graph) Result {
 
 	errs = append(errs, orphanNodes(g)...)
 
+	enabledTasks := 0
 	for _, n := range g.Nodes {
 		node, ok := v.Nodes.Get(n.Type)
 		if !ok {
 			errs = append(errs, fmt.Sprintf("未知节点类型: %s", n.Type))
 			continue
 		}
+		if n.Disabled {
+			continue // 关闭的节点编译时跳过，参数不完整也放行（重新开启时再校验）
+		}
+		if n.Type != model.NodeTypeCondition {
+			enabledTasks++
+		}
 		for _, e := range node.Validate(n.Params) {
 			errs = append(errs, fmt.Sprintf("节点 %s(%s): %s", n.ID, n.Type, e))
 		}
+	}
+	if len(g.Nodes) > 0 && enabledTasks == 0 {
+		errs = append(errs, "流水线没有任何启用的任务节点（全部被关闭），请至少开启一个执行节点")
 	}
 
 	errs = append(errs, validateConditions(g, v.Nodes)...)
@@ -71,13 +81,15 @@ const (
 //   - 非 condition 节点的出边不能带 branch
 func validateConditions(g *model.Graph, reg nodetype.Registry) []string {
 	isCond := map[string]bool{}
+	disabled := map[string]bool{}
 	byID := map[string]model.Node{}
 	var errs []string
 	for _, n := range g.Nodes {
 		isCond[n.ID] = n.Type == model.NodeTypeCondition
+		disabled[n.ID] = n.Disabled
 		byID[n.ID] = n
-		// 参数完整性：op/value 非空 + op 合法 + 变量来源合法
-		if isCond[n.ID] {
+		// 参数完整性：op/value 非空 + op 合法 + 变量来源合法（关闭的条件节点跳过）
+		if isCond[n.ID] && !n.Disabled {
 			o, _ := n.Params["op"].(string)
 			v, _ := n.Params["value"].(string)
 			source, _ := n.Params["source"].(string)
@@ -107,7 +119,7 @@ func validateConditions(g *model.Graph, reg nodetype.Registry) []string {
 					errs = append(errs, fmt.Sprintf("条件节点 %s 缺少 result（被比较的结果名）", n.ID))
 				}
 				if task != "" && result != "" {
-					errs = append(errs, validateTaskResultRef(g, n.ID, isCond, byID, reg, task, result)...)
+					errs = append(errs, validateTaskResultRef(g, n.ID, isCond, disabled, byID, reg, task, result)...)
 				}
 			default:
 				errs = append(errs, fmt.Sprintf("条件节点 %s 的 source %q 不支持（可选 param/taskResult）", n.ID, source))
@@ -127,7 +139,7 @@ func validateConditions(g *model.Graph, reg nodetype.Registry) []string {
 		}
 	}
 	for id := range isCond {
-		if isCond[id] && condOut[id] == 0 {
+		if isCond[id] && !disabled[id] && condOut[id] == 0 {
 			errs = append(errs, fmt.Sprintf("条件节点 %s 至少需要一条 yes/no 出边", id))
 		}
 	}
@@ -138,11 +150,15 @@ func validateConditions(g *model.Graph, reg nodetype.Registry) []string {
 //   - task 必须存在、非 condition 节点
 //   - task 必须是 cond 的严格上游（沿入边可达），保证结果在判断时已产出
 //   - task 的插件必须声明了该 result（Meta.Results 来自 task.yaml）
-func validateTaskResultRef(g *model.Graph, condID string, isCond map[string]bool, byID map[string]model.Node, reg nodetype.Registry, task, result string) []string {
+func validateTaskResultRef(g *model.Graph, condID string, isCond, disabled map[string]bool, byID map[string]model.Node, reg nodetype.Registry, task, result string) []string {
 	var errs []string
 	upstream := byID[task]
 	if upstream.ID == "" {
 		errs = append(errs, fmt.Sprintf("条件节点 %s 引用的上游节点 %s 不存在", condID, task))
+		return errs
+	}
+	if upstream.Disabled {
+		errs = append(errs, fmt.Sprintf("条件节点 %s 引用的节点 %s 已关闭（不产出结果），请开启 %s 或改引用", condID, task, task))
 		return errs
 	}
 	if isCond[task] {

@@ -1,10 +1,12 @@
 // cicd.go 内置 CI（Tekton）handler——替代原 ci-platform HTTP 透传。
 // 所有接口经 X-Cluster 选择集群（集群隔离）；项目 1:1 绑定一个已存在的命名空间，
 // 流水线与凭据都归属某个项目，因此权限一律按「资源所属 ns」判定（复用三层 RBAC）：
-//   读（列表/详情/日志/制品）= 该 ns 有任意角色（view 及以上）；
-//   触发运行 / 重跑 / 取消 / 审批 = 同上（view 也能跑）；
-//   建改删（项目内容 / 流水线 / 项目凭据 / 定时 / webhook / 回滚）= 该 ns 可写（edit/admin）；
-//   平台级凭据与全局变量 = 平台管理员。
+//
+//	读（列表/详情/日志/制品）= 该 ns 有任意角色（view 及以上）；
+//	触发运行 / 重跑 / 取消 / 审批 = 同上（view 也能跑）；
+//	建改删（项目内容 / 流水线 / 项目凭据 / 定时 / webhook / 回滚）= 该 ns 可写（edit/admin）；
+//	平台级凭据与全局变量 = 平台管理员。
+//
 // SSE/WS 端点走 ?token= 查询参数鉴权（浏览器 EventSource/WebSocket 无法设请求头），
 // 同样按 run 所属 ns 收口。
 package handler
@@ -562,8 +564,9 @@ func (h *CICDHandler) ProjectDelete(c *gin.Context) {
 		return
 	}
 	var active int64
+	// 排队中的 run 也算"有执行"：它马上要占用这个项目的 workspace
 	h.db.Model(&model.CIRun{}).
-		Where("status IN ?", []string{model.CIRunStatusPending, model.CIRunStatusRunning}).
+		Where("status IN ?", model.CIRunActiveStatuses).
 		Joins("JOIN ci_pipelines pp ON pp.id = ci_pipeline_runs.pipeline_id").
 		Where("pp.project_id = ?", p.ID).Count(&active)
 	if active > 0 {
@@ -616,7 +619,23 @@ func (h *CICDHandler) ProjectDelete(c *gin.Context) {
 		h.errResp(c, err)
 		return
 	}
+	h.releaseProjectPVCs(c, cl, p)
 	response.OK(c, gin.H{"ok": true, "pipelines": len(pipeIDs), "runs": len(runIDs)})
+}
+
+// releaseProjectPVCs 项目删除后回收它长期保留的两块盘：共享工作区 + 依赖缓存。
+// 运行侧（syncer / 取消 / reconcile）都刻意不删它们，项目没了才是该消失的时刻；
+// 集群不可达或删失败只记日志——留盘不该让项目删除失败。
+func (h *CICDHandler) releaseProjectPVCs(c *gin.Context, cl string, p *model.CIProject) {
+	k8s, err := h.deps.K8sFor(cl)
+	if err != nil {
+		return
+	}
+	for _, name := range []string{runtime.ProjectWorkspacePVCName(p.ID), runtime.LegacyProjectCachePVCName(p.ID)} {
+		if e := k8s.DeletePVC(c.Request.Context(), p.Namespace, name); e != nil {
+			log.Printf("ci: 删项目 PVC %s/%s 失败（项目 %s 已删除）: %v", p.Namespace, name, p.Name, e)
+		}
+	}
 }
 
 // deleteProjectCreds 删除项目凭据在集群里的 Secret 副本（DB 行随后由事务清理）。
@@ -832,7 +851,7 @@ func (h *CICDHandler) PipelineDelete(c *gin.Context) {
 	}
 	var active int64
 	h.db.Model(&model.CIRun{}).Where("pipeline_id = ? AND status IN ?", id,
-		[]string{model.CIRunStatusPending, model.CIRunStatusRunning}).Count(&active)
+		model.CIRunActiveStatuses).Count(&active)
 	if active > 0 {
 		response.Fail(c, http.StatusConflict, 409, "流水线有进行中的执行，请等待结束")
 		return

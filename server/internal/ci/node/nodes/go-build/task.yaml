@@ -26,6 +26,11 @@ steps:
         export GOTELEMETRY=off
         mkdir -p "$GOMODCACHE" "$GOCACHE"
       fi
+      # 内网/受限环境：goproxy 参数非空时覆盖 GOPROXY（镜像内置代理不适用时用，
+      # 如 Nexus goproxy）。留空保持镜像内置配置不变
+      if [ -n "{{goproxy}}" ]; then
+        export GOPROXY="{{goproxy}}"
+      fi
       [ "{{runTest}}" = "true" ] && go test ./...
       # go 不会创建 -o 的父目录，缺 out/ 时带 -o 的首次构建必败（错误还被 2>/dev/null 吞掉）
       mkdir -p out

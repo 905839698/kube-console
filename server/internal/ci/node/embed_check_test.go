@@ -15,11 +15,14 @@ func TestLoadEmbeddedAll(t *testing.T) {
 		t.Fatal(err)
 	}
 	list := reg.List()
-	if len(list) != 19 {
-		t.Fatalf("expected 19 nodes, got %d", len(list))
+	if len(list) != 20 {
+		t.Fatalf("expected 20 nodes, got %d", len(list))
 	}
 	if _, ok := reg.Get("git-clone"); !ok {
 		t.Fatal("git-clone missing")
+	}
+	if _, ok := reg.Get("artifact-fetch"); !ok {
+		t.Fatal("artifact-fetch missing")
 	}
 	if _, ok := reg.Get("harbor-scan"); !ok {
 		t.Fatal("harbor-scan missing")

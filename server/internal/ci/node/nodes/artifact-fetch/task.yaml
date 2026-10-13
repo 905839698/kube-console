@@ -1,0 +1,48 @@
+# artifact-fetch Tekton Task 模板
+# 从平台制品接口下载用户上传的构建产物（镜像构建器的第一节点）。
+# url 含一次性访问令牌（GET /api/ci/artifact/<token>，公开路由、令牌收口）；
+# 令牌由平台在保存流水线版本时轮转生成，旧 run 凭旧令牌仍可下载（保留期见 ci_builder_tokens）。
+name: artifact-fetch
+description: "Fetch uploaded artifact {{fileName}}"
+params:
+  - name: url
+    type: string
+    default: "{{url}}"
+  - name: fileName
+    type: string
+    default: "{{fileName}}"
+  - name: sha256
+    type: string
+    default: "{{sha256}}"
+  - name: extract
+    type: string
+    default: "{{extract}}"
+workspaces:
+  - name: source
+results:
+  - name: artifact_path
+    description: "产物在 workspace 内的相对路径（upload/<fileName>）"
+steps:
+  - name: fetch
+    # curl:8.5.0 与 upload-artifact 同源（预推清单已含），busybox tar 支持 gz 解包
+    image: {{imageRegistry}}/curl:8.5.0
+    script: |
+      #!/bin/sh
+      set -e
+      cd $(workspaces.source.path)
+      # 工作区按流水线复用，先清掉上一次运行的 upload/
+      rm -rf upload
+      mkdir -p upload
+      curl -fL --retry 3 -o "upload/{{fileName}}" "{{url}}"
+      # 完整性校验：平台上传时已算 sha256，下载内容不一致（截断/代理缓存）必须当场失败，
+      # 而不是带着坏产物继续打镜像
+      if [ -n "{{sha256}}" ]; then
+        echo "{{sha256}}  upload/{{fileName}}" | sha256sum -c -
+      fi
+      if [ "{{extract}}" = "true" ]; then
+        mkdir -p upload/dist
+        tar -xzf "upload/{{fileName}}" -C upload/dist
+      fi
+      SIZE=$(wc -c < "upload/{{fileName}}" | tr -d '[:space:]')
+      echo "artifact fetched: upload/{{fileName}} (${SIZE} bytes)"
+      printf '%s' "upload/{{fileName}}" > $(results.artifact_path.path)

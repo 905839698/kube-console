@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"gorm.io/gorm"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"gorm.io/gorm"
 
 	"kube-console/server/internal/kube"
 	"kube-console/server/internal/model"
@@ -358,8 +358,8 @@ func SearchArchivedEvents(ctx context.Context, c *kube.Client, src *model.LogSou
 		return nil, err
 	}
 	var resp struct {
-		Took  int `json:"took"`
-		Hits  struct {
+		Took int `json:"took"`
+		Hits struct {
 			Total struct {
 				Value int64 `json:"value"`
 			} `json:"total"`

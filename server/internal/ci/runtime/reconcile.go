@@ -132,9 +132,15 @@ func (s *Service) reconcileNS(ctx context.Context, k8s interface {
 		}
 	}
 
-	// 2) 孤儿 workspace PVC
+	// 2) 孤儿 workspace PVC。项目级共享盘（ci-ws-p*）不在回收范围：它在没有 run 在跑的
+	//    时候本来就没有"活跃引用"，按老口径会被这一轮删掉，下次运行又得重新绑盘。
+	//    真正该删的是老命名（ci-ws-<流水线>-<run>-<后缀>）的每 run 一个的残留盘，
+	//    以及项目被删除时（handler/cicd.go 的 ProjectDelete 显式回收）。
 	if pvcs, err := k8s.ListPVCs(ctx, ns, "ci-ws-"); err == nil {
 		for _, name := range pvcs {
+			if isProjectWorkspacePVC(name) {
+				continue
+			}
 			if !dbPVCs[name] {
 				if err := k8s.DeletePVC(ctx, ns, name); err != nil {
 					log.Printf("reconcile: 删孤儿 PVC %s: %v", name, err)
@@ -180,7 +186,7 @@ func (s *Service) reconcileNS(ctx context.Context, k8s interface {
 					log.Printf("reconcile: 删超时 PipelineRun %s: %v", r.TektonRunName, err)
 				}
 			}
-			if r.PVCName != "" {
+			if r.PVCName != "" && !isProjectWorkspacePVC(r.PVCName) {
 				if err := k8s.DeletePVC(ctx, ns, r.PVCName); err != nil {
 					log.Printf("reconcile: 删超时 PVC %s: %v", r.PVCName, err)
 				}

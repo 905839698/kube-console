@@ -66,7 +66,12 @@ func kbFakeDyn(objs ...*unstructured.Unstructured) *dynamicfake.FakeDynamicClien
 		kbPolicyGVR:      "BackupPolicyList",
 		kbSchedGVR:       "BackupScheduleList",
 		kbRepoGVR:        "BackupRepoList",
+		kbProviderGVR:    "StorageProviderList",
 		kbRestoreGVR:     "RestoreList",
+		// 抓取自检这条链路要列/建这两类对象；fake dynamic client 对没登记 list kind 的
+		// GVR 是 panic 而不是报错，新增一类就要在这里补一行
+		kbSMGVR:         "ServiceMonitorList",
+		kbPrometheusGVR: "PrometheusList",
 	}
 	runtimeObjs := make([]runtime.Object, 0, len(objs))
 	for _, o := range objs {

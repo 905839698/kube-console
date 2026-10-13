@@ -76,9 +76,26 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 20
       volumes:
-        # SQLite 开发模式默认落在 /data；生产用 PostgreSQL 时该卷仅存 Webhook 自签证书
+        # /data 装两样东西：SQLite 元数据库（生产用 PG/MySQL 时不写）和 Nacos 注入的 Webhook 自签证书。
+        # 用 PVC 而不是 emptyDir：emptyDir 下每次重启都会换一张新 CA，而 MutatingWebhookConfiguration
+        # 里的 caBundle 是上一轮的 → 重启到首轮同步（启动后 15s）之间新建的 Pod 静默不被注入
+        # （failurePolicy=Ignore，不报错）。集群没有默认 StorageClass 时可退回 emptyDir，代价就是这段窗口。
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: kube-console-data
+---
+# 证书与 SQLite 的落盘位置（RWO 即可：副本数固定 1）
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kube-console-data
+  namespace: kube-console
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+  # storageClassName 留空 = 用集群默认 StorageClass；没有默认 SC 就显式填一个，否则 Pod 一直 Pending
 ---
 # 密钥与数据库连接：apply 前必须改成真值（或改用 SealedSecret/ExternalSecret 注入后删除本段）
 # db-dsn 示例: host=10.0.0.1 user=kc password=xxx dbname=kube_console port=5432 sslmode=disable TimeZone=Asia/Shanghai

@@ -479,7 +479,7 @@ onMounted(load)
 .spec-bad { color: #f56c6c; }
 .filter-bar { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
 .filter-right { margin-left: auto; display: flex; gap: 8px; }
-.chip-count { margin-left: 4px; color: #909399; font-size: 12px; }
+.chip-count { margin-left: 4px; color: #909399; font-size: 13px; }
 .app-row { cursor: pointer; }
 .app-icon { margin-right: 6px; font-size: 14px; vertical-align: -2px; }
 .app-name { font-weight: 600; }
@@ -490,14 +490,14 @@ onMounted(load)
 .tree-filter { margin-bottom: 8px; max-width: 320px; }
 .tree-node { display: flex; align-items: center; gap: 6px; }
 .h-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 8px; }
-.tree-kind { color: #909399; font-size: 12px; }
+.tree-kind { color: #909399; font-size: 13px; }
 .tree-name { font-weight: 600; }
 .tree-jump { margin-left: 8px; }
 .sec { margin: 14px 0 6px; font-size: 13px; }
 .cond { display: flex; gap: 8px; margin-bottom: 6px; align-items: flex-start; }
-.cond-msg { font-size: 12px; color: #606266; word-break: break-all; }
-.op-msg { font-size: 12px; color: #909399; word-break: break-all; }
+.cond-msg { font-size: 13px; color: #606266; word-break: break-all; }
+.op-msg { font-size: 13px; color: #909399; word-break: break-all; }
 .mb12 { margin-bottom: 12px; }
-.cascade-warn { color: #f56c6c; font-size: 12px; margin-top: 6px; }
+.cascade-warn { color: #f56c6c; font-size: 13px; margin-top: 6px; }
 .confirm-tip { margin: 12px 0 4px; font-size: 13px; color: #606266; }
 </style>

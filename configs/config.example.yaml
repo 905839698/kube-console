@@ -27,9 +27,35 @@ k8s:
 
 ci:
   # CI 任务镜像仓库前缀（节点模板里 {{imageRegistry}} 的全局取值；env: KC_CI_IMAGE_REGISTRY）。
-  # 换 Harbor/registry 只改这一处，全部 19 类 CI 节点镜像随之切换；镜像版本仍是各节点自己的参数。
+  # 换 Harbor/registry 只改这一处，全部 20 类 CI 节点镜像随之切换；镜像版本仍是各节点自己的参数。
   # 完整镜像清单见 docs/images.md
   imageRegistry: harbor.cqyxpt.site:8443/library
+
+  # 自签名镜像仓库的根证书 PEM 文件路径（节点模板里 {{registryCA}} 的取值来源；
+  # env: KC_CI_REGISTRY_CA_FILE）。为空则不注入，构建节点退回系统信任库
+  # （registry 用公共证书时正好）。配了必须能读到，否则后端启动直接报错。
+  # registryCAFile: /etc/kc/registry-ca.pem
+
+  # 节点固定：把 CI 运行的全部 Pod（所有任务 + affinity-assistant）钉到指定节点——
+  # 专用构建节点带污点时，nodeSelector 选节点、tolerations 容忍污点。
+  # 注意：生效后存量项目工作区 PVC 的 PV 仍钉在旧节点（local-path 按首次消费者绑定），
+  # 需在项目行「缓存」→ 清空依赖缓存（删盘重建）才会迁到新节点。
+  # nodeSelector: {"kubernetes.io/hostname": "build-node-1"}
+  # tolerations:
+  #   - key: "type"
+  #     operator: "Exists"
+  #   - key: "node-role.kubernetes.io/build"
+  #     operator: "Equal"
+  #     value: "true"
+  #     effect: "NoSchedule"
+
+  # 镜像构建器（CI → 镜像构建器：上传 jar/二进制/前端 tar.gz，平台按约定 Dockerfile
+  # 构建并推送镜像）。serverUrl 必填：任务 Pod 里的 artifact-fetch 节点凭它回调平台
+  # 下载上传的制品，填平台在集群内的服务地址。
+  # env: KC_CI_SERVER_URL / KC_CI_BUILDER_UPLOAD_DIR / KC_CI_BUILDER_UPLOAD_MAX_MB
+  # serverUrl: http://kube-console-server.kube-console:8080   # 后端 Service 的集群内地址（deploy/04 清单），不是浏览器访问地址
+  # builderUploadDir: ./data/ci-artifacts   # 制品存放目录（与 sqlite 同盘时注意容量）
+  # builderUploadMaxMB: 512                 # 单个制品大小上限
 
 obs:
   # 告警历史轮询 Alertmanager 的间隔（秒；env: KC_OBS_ALERT_INTERVAL）
@@ -50,3 +76,12 @@ nacos:
   skipNamespaces: kube-system,kube-public,kube-node-lease,kube-console
   # Webhook 自签证书目录（须持久化，保证 caBundle 跨重启稳定；env: KC_NACOS_CERT_DIR）
   certDir: ./data
+
+rbac:
+  # 接口收口开关（env: KC_RBAC_ENFORCE_MENUS，只认 1 / true 为打开）。
+  # 侧边栏显隐一直按「该用户在当前集群能读哪些资源」推导（后端 menus 给出）；打开这个
+  # 开关后，同一套判定也用于接口：菜单里没给的模块，直接调接口返回 403。
+  # 默认 false = 保持"资源读取登录即可浏览"的既有口径（写权限一直是逐接口判的）。
+  # 打开前先确认该给的角色都在「授权」页授了：菜单能力来自用户生效角色的规则，
+  # 手工 K8s 绑定也认，但没授权的用户切换后确实会看不见大部分页面。
+  enforceMenus: false

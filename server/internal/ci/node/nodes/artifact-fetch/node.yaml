@@ -1,0 +1,6 @@
+type: artifact-fetch
+name: 拉取上传制品
+category: source
+icon: package
+version: "1.0"
+description: 从平台制品接口下载上传的构建产物（镜像构建器托管节点，可手动画入流水线配合 build-image 使用）

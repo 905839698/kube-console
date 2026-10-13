@@ -274,5 +274,5 @@ onMounted(async () => {
 
 <style scoped>
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
-.hint { color: #909399; font-size: 12px; }
+.hint { color: #909399; font-size: 13px; }
 </style>

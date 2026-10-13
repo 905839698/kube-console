@@ -163,5 +163,5 @@ onMounted(load)
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .msg-pre { margin: 0; padding: 8px 16px; font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; }
-.msg-err { padding: 4px 16px; color: #f56c6c; font-size: 12px; }
+.msg-err { padding: 4px 16px; color: #f56c6c; font-size: 13px; }
 </style>

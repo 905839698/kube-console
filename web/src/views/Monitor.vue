@@ -207,9 +207,9 @@ onMounted(execute)
 .preset-tag { cursor: pointer; }
 .preset-tag:hover { color: var(--el-color-primary); border-color: var(--el-color-primary); }
 .result-card { margin-top: 16px; }
-.result-meta { font-size: 12px; color: #909399; }
+.result-meta { font-size: 13px; color: #909399; }
 .empty-tip { color: #909399; font-size: 13px; padding: 32px 0; text-align: center; }
 .instant-table { margin-top: 16px; }
-.cap-note { font-size: 12px; color: #e6a23c; margin-top: 8px; }
-.metric-name { font-size: 12px; word-break: break-all; }
+.cap-note { font-size: 13px; color: #e6a23c; margin-top: 8px; }
+.metric-name { font-size: 13px; word-break: break-all; }
 </style>

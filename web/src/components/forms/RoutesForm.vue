@@ -84,5 +84,5 @@ function addEntry() {
 .rule-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; }
 .kv-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 .sep { color: #909399; }
-.form-tip { font-size: 12px; color: #909399; margin-bottom: 8px; line-height: 1.6; }
+.form-tip { font-size: 13px; color: #909399; margin-bottom: 8px; line-height: 1.6; }
 </style>

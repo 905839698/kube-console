@@ -106,5 +106,5 @@ function removeMetric(idx: number) {
 
 <style scoped>
 .kv-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
-.unit { color: #909399; font-size: 12px; }
+.unit { color: #909399; font-size: 13px; }
 </style>

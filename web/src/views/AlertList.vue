@@ -402,12 +402,12 @@ onMounted(load)
 .fire-icon { color: #f56c6c; }
 .op-group { white-space: nowrap; }
 .op-col .cell { padding: 0 8px; }
-.alert-group { color: #c0c4cc; font-size: 12px; margin-top: 2px; }
+.alert-group { color: #c0c4cc; font-size: 13px; margin-top: 2px; }
 .muted { color: #c0c4cc; }
 
 .expand-body { padding: 12px 16px; }
 .desc-text { white-space: pre-wrap; line-height: 1.6; }
-.promql { background: #f5f7fa; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-size: 12px; word-break: break-all; display: block; }
+.promql { background: #f5f7fa; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-size: 13px; word-break: break-all; display: block; }
 .inst-section { margin-top: 14px; }
 .inst-title { font-weight: 600; margin-bottom: 8px; font-size: 13px; }
 

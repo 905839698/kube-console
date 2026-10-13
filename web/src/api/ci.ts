@@ -30,7 +30,7 @@ export interface CINodeType {
 }
 
 export interface CIPosition { x: number; y: number }
-export interface CIPNode { id: string; type: string; params: Record<string, unknown>; position?: CIPosition }
+export interface CIPNode { id: string; type: string; params: Record<string, unknown>; disabled?: boolean; position?: CIPosition }
 export interface CIPEdge { source: string; target: string; branch?: string }
 /** 画布 DSL（与后端 model.Graph 逐字段一致） */
 export interface CIGraph { name: string; version: number; nodes: CIPNode[]; edges: CIPEdge[] }
@@ -54,12 +54,16 @@ export interface CIPipelineDetail {
   latestVersion?: CIPipelineVersion | null
   graph?: CIGraph | null
 }
-export type CIRunStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled' | 'skipped'
+export type CIRunStatus = 'queued' | 'pending' | 'running' | 'success' | 'failed' | 'cancelled' | 'skipped'
 export interface CIRun {
   id: number; pipelineId: number; versionId: number; runNo: number
   status: CIRunStatus; triggerType: string
   gitCommit?: string; gitBranch?: string; gitRepo?: string
   startedBy?: string; tektonRunName?: string
+  // 失败原因（目前只有"排队后放行失败"这类平台侧失败会写：那时还没有任务行）
+  message?: string
+  // 依赖缓存情况："已启用：ci-ws-p3 内 kc-cache/（与工作区同盘）…"／"未启用：<原因>"
+  cacheInfo?: string
   startedAt?: string | null; finishedAt?: string | null
 }
 export interface CITaskRun {
@@ -115,7 +119,41 @@ export interface CIGlobalVar {
   createdAt?: string; updatedAt?: string
 }
 
+// ============ 镜像构建器（上传制品 → 约定 Dockerfile → 构建推送） ============
+
+export type CIBuilderAppType = 'java' | 'go' | 'web'
+export interface CIImageBuilder {
+  id: number; projectId: number; name: string; appType: CIBuilderAppType
+  registry: string; repository: string; credentialId: number
+  baseImage?: string; port?: number; javaOpts?: string; entryArgs?: string; defaultTag?: string
+  fileName?: string; fileSize?: number; fileSha256?: string; uploadedAt?: string | null
+  pipelineId: number; createdAt?: string; updatedAt?: string
+}
+export interface CIImageBuilderView extends CIImageBuilder {
+  image: string; projectNamespace: string; lastRun?: CIRun | null
+}
+export interface CIBuilderSaveBody {
+  projectId?: number; name: string; appType: CIBuilderAppType
+  registry: string; repository: string; credentialId: number
+  baseImage?: string; port?: number; javaOpts?: string; entryArgs?: string; defaultTag?: string
+}
+
 // ============ 接口 ============
+
+// ---- 项目构建缓存（与工作区同盘，缓存是盘里的子目录）----
+export interface CipVCView {
+  name: string; phase: string; requested: string; capacity: string
+  storageClass?: string; volume?: string; createdAt?: string
+}
+export interface CICacheUser { pipelineId: number; pipeline: string; nodes: string[] }
+export interface CICacheView {
+  project: string; namespace: string; cluster: string
+  cacheEnabled: boolean; cacheDir: string; workspaceSize: string
+  workspace?: CipVCView | null
+  legacy?: CipVCView[]
+  users: CICacheUser[]
+  busy: boolean
+}
 
 export const ciApi = {
   ready: () => request<CICIRReady>({ url: '/ci/ready' }),
@@ -160,8 +198,34 @@ export const ciApi = {
     request<CIGlobalVar>({ url: `/ci/globals/${id}`, method: 'put', data: body }),
   deleteGlobal: (id: number) => request<void>({ url: `/ci/globals/${id}`, method: 'delete' }),
 
+  // ---- 镜像构建器 ----
+  builders: (projectId?: number) =>
+    request<{ items: CIImageBuilderView[] }>({ url: '/ci/builders', params: projectId ? { projectId } : undefined }),
+  createBuilder: (body: CIBuilderSaveBody) =>
+    request<CIImageBuilder>({ url: '/ci/builders', method: 'post', data: body }),
+  updateBuilder: (id: number, body: CIBuilderSaveBody) =>
+    request<CIImageBuilder>({ url: `/ci/builders/${id}`, method: 'put', data: body }),
+  deleteBuilder: (id: number) => request<void>({ url: `/ci/builders/${id}`, method: 'delete' }),
+  // 大文件上传：10 分钟超时（默认 60s 传不完内网百兆 jar）
+  builderUpload: (id: number, file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request<CIImageBuilder>({
+      url: `/ci/builders/${id}/artifact`, method: 'post', data: fd,
+      headers: { 'Content-Type': 'multipart/form-data' }, timeout: 600000,
+    })
+  },
+  builderRun: (id: number, tag?: string) =>
+    request<CIRun>({ url: `/ci/builders/${id}/run`, method: 'post', data: tag ? { tag } : {} }),
+  builderPreview: (id: number) => request<{ yaml: string }>({ url: `/ci/builders/${id}/preview` }),
+
   // ---- 项目（= 命名空间隔离单元） ----
   projects: () => request<CIProject[]>({ url: '/ci/projects' }),
+  projectCache: (id: number) => request<CICacheView>({ url: `/ci/projects/${id}/cache` }),
+  clearProjectCache: (id: number) =>
+    request<{ cleared: string[]; recreated?: boolean; warning?: string }>({
+      url: `/ci/projects/${id}/cache/clear`, method: 'post',
+    }),
   createProject: (body: { name: string; displayName?: string; description?: string; namespace: string }) =>
     request<CIProject>({ url: '/ci/projects', method: 'post', data: body }),
   updateProject: (id: number, body: { displayName?: string; description?: string }) =>

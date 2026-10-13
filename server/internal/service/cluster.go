@@ -33,8 +33,8 @@ type ClusterManager struct {
 const breakerWait = 60 * time.Second
 
 type cachedDefs struct {
-	groups   []kube.GroupDef
-	fetched  time.Time
+	groups  []kube.GroupDef
+	fetched time.Time
 }
 
 const resourceDefsTTL = 5 * time.Minute

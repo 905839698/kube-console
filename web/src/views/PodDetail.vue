@@ -1,18 +1,39 @@
 <template>
-  <div v-loading="loading">
+  <div v-loading="loading" class="kc-page">
+    <!-- 顶部：概况 + 操作 -->
     <el-card shadow="never">
-      <template #header>
-        <div class="card-header">
-          <el-page-header :content="`Pod / ${name}`" @back="router.back()" />
-          <div class="actions">
-            <el-button size="small" @click="load">刷新</el-button>
-            <el-button size="small" type="success" plain :disabled="!perm.canWriteNS(namespace)" @click="openTerminal()">终端</el-button>
-            <el-button size="small" type="primary" plain @click="logsVisible = true">日志</el-button>
-            <el-button size="small" type="info" plain :disabled="!perm.canWriteNS(namespace)" @click="filesVisible = true">文件</el-button>
-            <el-button size="small" type="danger" plain :disabled="!perm.canWriteNS(namespace)" @click="doDelete">删除</el-button>
-          </div>
+      <div class="kc-top-head">
+        <span class="kc-section-title"><el-icon><Grid /></el-icon>Pod 详情 / <span class="mono">{{ name }}</span></span>
+        <div class="actions">
+          <el-button size="small" @click="load">刷新</el-button>
+          <el-button size="small" type="success" :disabled="!perm.canWriteNS(namespace)" @click="openTerminal()">终端</el-button>
+          <el-button size="small" type="primary" @click="logsVisible = true">日志</el-button>
+          <el-button size="small" :disabled="!perm.canWriteNS(namespace)" @click="filesVisible = true">文件</el-button>
+          <el-button size="small" type="danger" :disabled="!perm.canWriteNS(namespace)" @click="doDelete">删除</el-button>
         </div>
-      </template>
+      </div>
+
+      <div class="kc-status-strip">
+        <StatusTag :status="detail?.status || ''" />
+        <span class="kc-strip-item">就绪 <b>{{ detail?.ready || '-' }}</b></span>
+        <span class="kc-strip-item">重启 <b>{{ detail?.restarts ?? '-' }}</b></span>
+        <span class="kc-strip-item">运行时长 <b>{{ detail?.age || '-' }}</b></span>
+      </div>
+
+      <div class="kc-info-grid">
+        <div class="kc-info-item"><span class="kc-info-label">集群:</span><span class="kc-info-value">{{ clusterStore.current }}</span></div>
+        <div class="kc-info-item"><span class="kc-info-label">名称空间:</span><span class="kc-info-value mono">{{ detail?.namespace }}</span></div>
+        <div class="kc-info-item"><span class="kc-info-label">名称:</span><span class="kc-info-value mono">{{ detail?.name }}</span></div>
+        <div class="kc-info-item"><span class="kc-info-label">类型:</span><span class="kc-info-value">Pod <el-tag size="small" type="info" effect="plain">pods</el-tag></span></div>
+        <div class="kc-info-item"><span class="kc-info-label">Phase:</span><span class="kc-info-value">{{ detail?.phase }}</span></div>
+        <div class="kc-info-item"><span class="kc-info-label">IP:</span><span class="kc-info-value mono">{{ detail?.ip || '-' }}</span></div>
+        <div class="kc-info-item"><span class="kc-info-label">节点:</span><span class="kc-info-value mono">{{ detail?.nodeName || '-' }}</span></div>
+        <div class="kc-info-item"><span class="kc-info-label">ServiceAccount:</span><span class="kc-info-value mono">{{ detail?.serviceAccount || '-' }}</span></div>
+        <div class="kc-info-item"><span class="kc-info-label">启动时间:</span><span class="kc-info-value">{{ detail?.startTime || '-' }}</span></div>
+      </div>
+    </el-card>
+
+    <el-card shadow="never">
 
       <div class="detail-layout">
         <!-- 左侧资源树 -->
@@ -40,17 +61,6 @@
         <!-- 右侧面板 -->
         <section class="detail-main">
           <template v-if="selectedType === 'pod'">
-            <el-descriptions :column="4" border size="small" style="margin-bottom: 12px">
-              <el-descriptions-item label="命名空间">{{ detail?.namespace }}</el-descriptions-item>
-              <el-descriptions-item label="状态"><StatusTag :status="detail?.status || ''" /></el-descriptions-item>
-              <el-descriptions-item label="Phase">{{ detail?.phase }}</el-descriptions-item>
-              <el-descriptions-item label="IP">{{ detail?.ip || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="节点">{{ detail?.nodeName || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="ServiceAccount">{{ detail?.serviceAccount || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="启动时间">{{ detail?.startTime || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="重启次数">{{ detail?.restarts }}</el-descriptions-item>
-            </el-descriptions>
-
             <el-tabs v-model="tab">
               <!-- 容器 -->
               <el-tab-pane label="容器" name="containers">
@@ -325,8 +335,20 @@ async function doDelete() {
 </script>
 
 <style scoped>
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.actions { display: flex; gap: 6px; }
+.kc-page { display: flex; flex-direction: column; gap: 12px; }
+.kc-top-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.kc-status-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 14px;
+  font-size: 13px;
+  color: #8a94a6;
+}
+.kc-strip-item b { color: #2f3b52; font-weight: 600; margin-left: 4px; }
+.mono { font-family: var(--kc-mono); }
 .sub-title { font-weight: 600; color: #606266; margin-bottom: 8px; }
 .monitor-toolbar { margin-bottom: 12px; display: flex; justify-content: flex-end; }
 
@@ -338,7 +360,7 @@ async function doDelete() {
   border: 1px solid var(--kc-border);
   border-radius: var(--kc-card-radius);
   padding: 8px;
-  background: #fff;
+  background: var(--kc-header-bg);
   max-height: 700px;
   overflow-y: auto;
 }
@@ -362,5 +384,5 @@ async function doDelete() {
 .view-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; color: #1f2937; }
 </style>
 <style>
-.mono-img { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.mono-img { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
 </style>

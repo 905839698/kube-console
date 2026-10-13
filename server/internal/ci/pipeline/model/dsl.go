@@ -16,6 +16,9 @@ type Node struct {
 	ID     string                 `json:"id"`     // 画布内唯一（如 "git"、"scan"）
 	Type   string                 `json:"type"`   // 节点类型（如 "git-clone"）
 	Params map[string]interface{} `json:"params"` // 属性值，对应节点 schema
+	// Disabled 节点开关：true 时编译跳过该节点（不生成 Task，依赖桥接穿透），
+	// 语义同画布上"暂时下线"此步骤。缺省 false = 启用。
+	Disabled bool `json:"disabled,omitempty"`
 	// Position 前端布局用，后端编译可忽略。
 	Position *Position `json:"position,omitempty"`
 }

@@ -33,6 +33,13 @@
       "type": "text",
       "required": true,
       "description": "仓库根目录下的完整 shell（node 镜像内执行）：registry/代理、依赖安装、构建命令都写这里。与主步骤同容器，故 npm config set / export 对后续命令生效（preShell 是独立容器，写那里不生效）。注意 bash 的 set -e 不会中断 \"A && B && C\" 链中靠前命令的失败，脚本里每条命令请自行确认真的成功（例如 registry 是否先配好）。"
+    },
+    {
+      "name": "cache",
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "使用项目依赖缓存（独立缓存 PVC）：设 npm_config_cache / YARN_CACHE_FOLDER / pnpm store-dir 后再执行脚本，下载缓存跨运行复用。不同流水线同项目可并行（工作区按流水线分目录）；缓存为项目级共享，npm/yarn/pnpm 缓存自身并发安全。"
     }
   ]
 }

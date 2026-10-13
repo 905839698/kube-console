@@ -97,7 +97,7 @@ onMounted(async () => {
 </style>
 <style scoped>
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
-.path { font-family: monospace; font-size: 12px; word-break: break-all; }
+.path { font-family: monospace; font-size: 13px; word-break: break-all; }
 .ok { color: #67c23a; }
 .err { color: #f56c6c; font-weight: 600; }
 .pager { margin-top: 12px; display: flex; justify-content: flex-end; }

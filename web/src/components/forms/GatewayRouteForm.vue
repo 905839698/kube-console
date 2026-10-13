@@ -366,10 +366,10 @@ function addBackend(rule: any) {
 </script>
 
 <style scoped>
-.listener-label { font-size: 12px; color: #909399; }
+.listener-label { font-size: 13px; color: #909399; }
 .rule-card { border: 1px solid #e4e7ed; border-radius: 6px; padding: 12px; width: 100%; margin-bottom: 8px; }
 .rule-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; }
-.rule-label { font-size: 12px; color: #909399; margin-bottom: 6px; }
+.rule-label { font-size: 13px; color: #909399; margin-bottom: 6px; }
 .kv-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
-.form-hint { margin-left: 10px; font-size: 12px; color: #c0c4cc; }
+.form-hint { margin-left: 10px; font-size: 13px; color: #c0c4cc; }
 </style>

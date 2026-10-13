@@ -152,7 +152,7 @@ func TestBuildEventBulk(t *testing.T) {
 	events := []corev1.Event{
 		{
 			ObjectMeta: metav1.ObjectMeta{UID: "u1", Namespace: "prod"},
-			Type: "Warning", Reason: "OOMKilled", Count: 2, LastTimestamp: ts,
+			Type:       "Warning", Reason: "OOMKilled", Count: 2, LastTimestamp: ts,
 			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "app-1"},
 		},
 		{ObjectMeta: metav1.ObjectMeta{UID: ""}}, // 无 UID → 跳过
@@ -212,7 +212,7 @@ func TestAMConfigCodecGzip(t *testing.T) {
 	}
 	// 保持 gzip 格式编码回写
 	out := map[string][]byte{amConfigKeyGzip: gz.Bytes()}
-	if err := amConfigEncode(out, cfg + "\nroute:\n  receiver: default\n"); err != nil {
+	if err := amConfigEncode(out, cfg+"\nroute:\n  receiver: default\n"); err != nil {
 		t.Fatalf("编码失败: %v", err)
 	}
 	if len(out[amConfigKeyGzip]) == 0 || out[amConfigKeyPlain] != nil {

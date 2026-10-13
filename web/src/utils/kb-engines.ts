@@ -19,6 +19,8 @@ export const KB_ENGINES: KBEngineMeta[] = [
 
 // 父菜单与引擎项也不能同图标；未知引擎（自装 addon 起了别的名字）给中性兜底，不至于显示空白
 export const KB_GROUP_ICON = 'Management'
+// 备份仓库不属于任何引擎，但它是数据库页签里"没有它就备不了份"的前置条件，放在同一分组里
+export const KB_REPO_ICON = 'FolderOpened'
 const FALLBACK_ICON = 'Coin'
 
 export function kbEngineMeta(key: string): KBEngineMeta {

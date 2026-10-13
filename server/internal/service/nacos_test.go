@@ -4,6 +4,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
@@ -208,5 +209,50 @@ func TestNacosDuplicateMessageSurvivesTruncation(t *testing.T) {
 	err := fmt.Errorf("Nacos 返回 500: %s", truncateStr(body, 500))
 	if !nacosAlreadyExists(err) {
 		t.Fatalf("500 字符截断后幂等冲突关键词丢失: %s", err)
+	}
+}
+
+// 注入的条目必须是合法 EnvFromSource：configMapRef/secretRef 恰好其一。
+// 曾经写成 {"kind","name"} 的扁平结构——apiserver 应用补丁时剪掉未知字段，
+// 条目变空 {}，Pod 校验直接失败（must specify one of: configMapRef or secretRef），
+// 命中映射的命名空间里所有新建 Pod 全部卡死在 ReplicaFailure，滚动无法完成。
+func TestNacosMutateInjectsValidEnvFromSources(t *testing.T) {
+	s := newNacosTestService(t)
+	pod := corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}}
+	resp := s.mutate("c1", nacosReview(t, "prod", pod))
+	if resp.Response.PatchType == nil || len(resp.Response.Patch) == 0 {
+		t.Fatal("应产生 JSON Patch")
+	}
+	var ops []struct {
+		Path  string                 `json:"path"`
+		Value []corev1.EnvFromSource `json:"value"`
+	}
+	if err := json.Unmarshal(resp.Response.Patch, &ops); err != nil {
+		t.Fatalf("Patch 不是合法 JSON: %v", err)
+	}
+	if len(ops) == 0 {
+		t.Fatal("应有注入操作")
+	}
+	for _, op := range ops {
+		if !strings.Contains(op.Path, "/envFrom") {
+			t.Errorf("patch 应只动 envFrom: %s", op.Path)
+		}
+		if len(op.Value) == 0 {
+			t.Fatalf("%s 注入了空条目：apiserver 会整单拒绝 Pod（ReplicaFailure）", op.Path)
+		}
+		for _, ef := range op.Value {
+			if (ef.ConfigMapRef != nil) == (ef.SecretRef != nil) {
+				t.Fatalf("%s 的条目必须恰好带 configMapRef 或 secretRef 其一，实际: %+v", op.Path, ef)
+			}
+			name := ""
+			if ef.ConfigMapRef != nil {
+				name = ef.ConfigMapRef.Name
+			} else {
+				name = ef.SecretRef.Name
+			}
+			if name != NacosConfigMapName && name != NacosSecretName {
+				t.Errorf("%s 注入了不认识的引用 %q", op.Path, name)
+			}
+		}
 	}
 }

@@ -6,6 +6,8 @@ name: npm-build
 description: "Node {{nodeVersion}} 自定义构建脚本"
 workspaces:
   - name: source
+  - name: cache
+    optional: true
 results:
   - name: build_output
     description: "产物路径（workspace 内；脚本里 export OUTPUT_DIR=<路径>，默认 dist）"
@@ -16,6 +18,24 @@ steps:
       #!/bin/bash
       set -e
       cd $(workspaces.source.path)
+      # 依赖缓存：cache workspace 未绑定时 $(workspaces.cache.path) 为空串，自动跳过。
+      # 三种包管理器各自的环境变量都在这里设好，后面的用户脚本直接继承——
+      # 本节点是单一 shell 入口，这里 export 的值对后续命令都有效。
+      # （注意：模板注释里不能写占位符本身，渲染是纯文本替换，它会被真值替换掉，
+      #   多行值还会把注释行撑破成非法 YAML。）
+      CACHE="$(workspaces.cache.path)"
+      if [ "{{cache}}" = "true" ] && [ -n "$CACHE" ]; then
+        mkdir -p "$CACHE/npm" "$CACHE/yarn" "$CACHE/pnpm"
+        export npm_config_cache="$CACHE/npm"
+        export YARN_CACHE_FOLDER="$CACHE/yarn"
+        # Yarn Berry（v2+）用的是全局缓存，不看 YARN_CACHE_FOLDER
+        export YARN_ENABLE_GLOBAL_CACHE=true
+        export YARN_GLOBAL_CACHE_DIR="$CACHE/yarn-berry"
+        # pnpm 没有官方缓存目录环境变量，只能用配置项；容器里没有全局配置，写用户级即可
+        if command -v pnpm >/dev/null 2>&1; then
+          pnpm config set store-dir "$CACHE/pnpm" >/dev/null 2>&1 || true
+        fi
+      fi
       {{script}}
       # 产物目录登记：节点属性 outputDir（默认 dist），脚本里 export OUTPUT_DIR=<路径> 可覆盖。
       # 目录不存在即判失败：bash 的 set -e 不会中断 "A && B && C" 链中靠前命令的失败

@@ -1,0 +1,120 @@
+# 集群内共享 BuildKit 构建器（build-image 节点依赖，地址 tcp://buildkitd:1234）
+# 在 CI 项目所在的命名空间 apply（流水线 run 落在哪个 ns，buildkitd 就得在哪个 ns，
+# 否则短域名 buildkitd 解析不到）。buildkitd 兼容自签名 registry 靠下面的 buildkitd.toml；
+# CA 与 server/internal/ci/node/nodes/build-image/task.yaml 内嵌的是同一张，续期时两处同步换。
+# privileged: buildkitd（rootful 模式）构建容器需要；介意可换 rootless 变体（需额外配置）。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: buildkitd-config
+  namespace: kube-console
+data:
+  buildkitd.toml: |
+    # 基础镜像拉取路径：自签名 registry 走 CA 信任（push 路径的 insecure 由 buildctl 客户端承担）
+    [registry."registry3.nhdc.cloud"]
+      ca = ["/etc/buildkit/registry3-ca.pem"]
+  registry3-ca.pem: |
+    -----BEGIN CERTIFICATE-----
+    MIIErTCCAxWgAwIBAgIQRfo6wPJjw5lFCCBDgt+G5TANBgkqhkiG9w0BAQsFADBvMR4wHAYDVQQK
+    ExVta2NlcnQgZGV2ZWxvcG1lbnQgQ0ExIjAgBgNVBAsMGXJvb3RAb3BlbnZwbiAoU3VwZXIgVXNl
+    cikxKTAnBgNVBAMMIG1rY2VydCByb290QG9wZW52cG4gKFN1cGVyIFVzZXIpMB4XDTI2MDkwOTAy
+    NDIyN1oXDTM2MDkwOTAyNDIyN1owbzEeMBwGA1UEChMVbWtjZXJ0IGRldmVsb3BtZW50IENBMSIw
+    IAYDVQQLDBlyb290QG9wZW52cG4gKFN1cGVyIFVzZXIpMSkwJwYDVQQDDCBta2NlcnQgcm9vdEBv
+    cGVudnBuIChTdXBlciBVc2VyKTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGBAK3URqrW
+    JsMzxVvU4n/OPrUpNVClFzkv6x15LytFBfOPNLv0KmuMlXZmFYRG/YTr85G4kK4cFaKbukuJsW+M
+    Kmr7IKDFhs5RDL3Q3e0TNyBW23XTUYJO2EsrYLKIyQNa+2uPX4TGgbFve3wWdpqh22VVm5cqycXO
+    WqU/q741CPH2EcLzhXhiim9wa2LmNS2sr/NJAKnP9ud4y7tD4d0CM0oI3Zc88+ZBCgQptMFC/aX/
+    IhqnSNW0z9mNVYnSarWgzCrzVcNqD5l36Tj3MCh7vtNaT+1bwYDkSaNxO7xpb4z1rA3Qtvx1ZaH2
+    GEa6LbiEr0FSbghDf68c1T8vUxewRGFOcnLUs67/ADTlguJrHSk7NPnDH5rPQM/t3Nkmm8CGCCWE
+    MyfNfUJv29RSfARP4lfMdUddv2s68kOvd0MRCCyET+wXVrho0JSn5m4lrOGhbDRFtPK9nHxUNc64
+    2K/5G0UPqLIWxeWlwv3y4ItAC0L4W15QrYp3uS6SCMigLOYCowIDAQABo0UwQzAOBgNVHQ8BAf8E
+    BAMCAgQwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQUhpT6+RD9nPrEP+Cid41kzJHeocww
+    DQYJKoZIhvcNAQELBQADggGBAAP+gcONnQM/EiHX5SCxLnA77q+jblT9nSDCQLGVlRDjmibhqQel
+    aTXkL2ma97Ve5JH1+4yXSYQK5yDumG4dg0+v8psmjSkhDvq+CIJZSQUjOJqkuIM25SxQxHIoJH8v
+    wjOC//+xhLm2ZoktNV7OkYAyBYl9pRUAVuyPNQc5M5rsmTAQE9U61JqPRuHqqvv7m0LYDCufxg+K
+    flGAvxg+v5Bzs8n1XLCOFzCgGtAaevqsVwChQbtuaBwhiamBPyyUQb8wyjF5GHqtF8UXqTnMyN+N
+    ZXaqns8oRTSI1ZdbJiQBAwnW9+m+WBKLSTXkvY1msgBsUkiLdnTyvAYN0M2CJYfgPsEquxZnsuR7
+    CXIZB0i7/O5XBzDpJtuiZpujxtRzXrlxJDZrp0ALv6ZpOvRFq5y1LDxoowERPDyv+ADK6WbscK6n
+    8T2k4kSS7RLYVFlZnfHjXk8KC/QA8eo2TVAG0QzVR6UIGGqItYOddsx4asfVtWQLh9ToRIkrzU9d
+    WTIxFQ==
+    -----END CERTIFICATE-----
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: buildkitd-cache
+  namespace: kube-console
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+  # storageClassName 留空 = 集群默认 StorageClass；没有默认 SC 就显式填一个
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: buildkitd
+  namespace: kube-console
+  labels:
+    app: buildkitd
+spec:
+  replicas: 1
+  # 挂 RWO 缓存盘：滚动更新会先起新 Pod 而卷被旧 Pod 占着，卡 Pending；直接重建
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: buildkitd
+  template:
+    metadata:
+      labels:
+        app: buildkitd
+    spec:
+      containers:
+        - name: buildkitd
+          image: registry3.nhdc.cloud/library/buildkit:stable
+          args: ["--addr", "tcp://0.0.0.0:1234", "--config", "/etc/buildkit/buildkitd.toml"]
+          ports:
+            - containerPort: 1234
+              name: grpc
+          securityContext:
+            privileged: true
+          readinessProbe:
+            tcpSocket:
+              port: 1234
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/buildkit
+            - name: cache
+              mountPath: /var/lib/buildkit
+      volumes:
+        - name: config
+          configMap:
+            name: buildkitd-config
+        - name: cache
+          persistentVolumeClaim:
+            claimName: buildkitd-cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: buildkitd
+  namespace: kube-console
+  labels:
+    app: buildkitd
+spec:
+  selector:
+    app: buildkitd
+  ports:
+    - port: 1234
+      targetPort: grpc

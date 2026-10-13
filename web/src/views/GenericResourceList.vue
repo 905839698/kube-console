@@ -1,21 +1,21 @@
 <template>
-  <el-card shadow="never">
-    <template #header>
-      <div class="card-header">
-        <span>{{ title }} ({{ unavailable ? 0 : items.length }})</span>
-        <div class="header-right">
-          <el-input v-model="search" placeholder="搜索..." :prefix-icon="Search" clearable style="width: 200px" @input="load" />
-          <el-button :icon="Refresh" circle @click="load" />
-          <template v-if="!isGvr && !unavailable">
-            <el-button size="default" @click="exportVisible = true">导出</el-button>
-            <el-button size="default" @click="importDlg?.pick()">导入</el-button>
-          </template>
-          <el-button v-if="!unavailable" type="primary" size="default" :disabled="!canWriteCreate" @click="openCreate">
-            <el-icon><Plus /></el-icon>&nbsp;新建
-          </el-button>
-        </div>
-      </div>
-    </template>
+  <div class="kc-list">
+    <div class="kc-list-head">
+      <span class="kc-section-title"><el-icon><Files /></el-icon>{{ title }}</span>
+      <span class="kc-count">共 {{ unavailable ? 0 : items.length }} 条</span>
+      <span class="spacer"></span>
+      <el-input v-model="search" placeholder="请输入名称" :prefix-icon="Search" clearable style="width: 240px" @input="load" />
+      <el-button :icon="Refresh" circle @click="load" />
+      <template v-if="!isGvr && !unavailable">
+        <el-button @click="exportVisible = true">导出</el-button>
+        <el-button @click="importDlg?.pick()">导入</el-button>
+      </template>
+      <el-button v-if="!unavailable" type="primary" :disabled="!canWriteCreate" @click="openCreate">
+        <el-icon><Plus /></el-icon>&nbsp;新增
+      </el-button>
+    </div>
+
+    <el-card shadow="never">
 
     <el-alert
       v-if="unavailable"
@@ -57,8 +57,8 @@
       <el-table-column prop="age" label="运行时长" width="80" align="center" sortable :sort-by="(row) => parseDuration(row.age)" />
       <el-table-column label="操作" width="160" fixed="right">
         <template #default="{ row }">
-          <el-button size="small" @click="viewDetail(row)">详情</el-button>
-          <el-button size="small" type="danger" :disabled="!canWrite(row)" @click="remove(row)">删除</el-button>
+          <el-button size="small" text type="primary" @click="viewDetail(row)">详情</el-button>
+          <el-button size="small" text type="danger" :disabled="!canWrite(row)" @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -114,7 +114,8 @@
     <!-- 导入（多文档 YAML 预览 + 逐个应用） -->
     <ResourceImportDialog ref="importDlg" @done="load" />
 
-  </el-card>
+    </el-card>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -433,10 +434,12 @@ function kindTitle(kind: string): string {
 </script>
 
 <style scoped>
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.header-right { display: flex; gap: 8px; align-items: center; }
+.kc-list { display: flex; flex-direction: column; gap: 12px; }
+.kc-list-head { display: flex; align-items: center; gap: 10px; }
+.kc-list-head .spacer { flex: 1; }
+.kc-count { color: #8a94a6; font-size: 13px; }
 .summary { color: #606266; }
-.mono-addr { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: #303133; }
+.mono-addr { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: #303133; }
 .addr-list { display: flex; flex-direction: column; gap: 2px; }
 .addr-line { display: flex; align-items: center; gap: 2px; }
 /* 详情/新建对话框内容自适应：高度随视口，内容超出时滚动 */

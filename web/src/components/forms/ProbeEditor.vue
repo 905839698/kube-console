@@ -43,5 +43,5 @@ const p = computed({
 
 <style scoped>
 .probe-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
-.probe-label { font-size: 12px; color: #909399; }
+.probe-label { font-size: 13px; color: #909399; }
 </style>

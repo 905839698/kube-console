@@ -1,4 +1,4 @@
-<!-- CI 流水线（内置 Tekton，集群/命名空间隔离）：执行中心 / 流水线 / 项目 / 凭据。
+<!-- CI 流水线（内置 Tekton，集群/命名空间隔离）：执行中心 / 流水线 / 镜像构建器 / 项目 / 凭据。
      数据经 /api/ci/*（http 层自动带 X-Cluster，切集群自动重载）；
      实时状态 = WS 推送 + 5s 轮询兜底；任务日志 = SSE（RunLog）。 -->
 <template>
@@ -102,6 +102,11 @@
         <div v-if="!projects.length" class="empty-tip">当前集群还没有 CI 项目——先到「项目」tab 创建（项目 = 一个 K8s 命名空间）。</div>
       </el-tab-pane>
 
+      <!-- ============ 镜像构建器（上传制品 → 约定 Dockerfile → 构建推送） ============ -->
+      <el-tab-pane label="镜像构建器" name="builders" lazy>
+        <BuilderPanel ref="builderPanel" :projects="projects" :credentials="credentials" @open-run="openBuilderRun" />
+      </el-tab-pane>
+
       <!-- ============ 项目（= 命名空间隔离单元） ============ -->
       <el-tab-pane label="项目" name="projects">
         <div class="toolbar">
@@ -125,8 +130,9 @@
           <el-table-column label="创建时间" width="160">
             <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="150" fixed="right">
+          <el-table-column label="操作" width="210" fixed="right">
             <template #default="{ row }">
+              <el-button size="small" text @click="openCache(row)">缓存</el-button>
               <el-button size="small" text :disabled="!perm.canWriteNS(row.namespace)" @click="openProjDlg(row)">编辑</el-button>
               <el-button size="small" text type="danger" :disabled="!perm.canWriteNS(row.namespace)" @click="delProj(row)">删除</el-button>
             </template>
@@ -271,15 +277,15 @@
 
     <!-- 制品详情（血缘） -->
     <el-dialog v-model="artifactDlg" title="制品详情" width="640px">
-      <el-descriptions :column="2" size="small" border v-if="artifactDetail">
+      <el-descriptions :column="2" size="small" border label-width="86px" class="artifact-desc" v-if="artifactDetail">
         <el-descriptions-item label="名称">{{ artifactDetail.name }}</el-descriptions-item>
         <el-descriptions-item label="类型">{{ artifactDetail.type }}</el-descriptions-item>
         <el-descriptions-item label="版本">{{ artifactDetail.version || '—' }}</el-descriptions-item>
-        <el-descriptions-item label="存储">{{ artifactDetail.storageType }} · <span class="mono">{{ artifactDetail.storagePath }}</span></el-descriptions-item>
         <el-descriptions-item label="流水线">{{ artifactDetail.pipelineName || '—' }} #{{ artifactDetail.runNo }}</el-descriptions-item>
-        <el-descriptions-item label="触发">{{ artifactDetail.startedBy || '—' }} · {{ artifactDetail.runStartedAt || '—' }}</el-descriptions-item>
         <el-descriptions-item label="分支">{{ artifactDetail.gitBranch || '—' }}</el-descriptions-item>
         <el-descriptions-item label="提交"><span class="mono">{{ (artifactDetail.gitCommit || '').slice(0, 10) || '—' }}</span></el-descriptions-item>
+        <el-descriptions-item label="触发">{{ artifactDetail.startedBy || '—' }} · {{ artifactDetail.runStartedAt || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="存储" :span="2">{{ artifactDetail.storageType }} · <span class="mono">{{ artifactDetail.storagePath }}</span></el-descriptions-item>
         <el-descriptions-item v-if="artifactDetail.digest" label="Digest" :span="2"><span class="mono">{{ artifactDetail.digest }}</span></el-descriptions-item>
         <el-descriptions-item v-if="artifactDetail.pullCommand" label="拉取命令" :span="2"><span class="mono">{{ artifactDetail.pullCommand }}</span></el-descriptions-item>
       </el-descriptions>
@@ -308,6 +314,67 @@
       </template>
     </el-dialog>
 
+    <!-- 项目构建缓存抽屉 -->
+    <el-drawer v-model="cacheVisible" :title="`构建缓存 · ${cacheView?.project || ''}`" size="46%">
+      <div v-loading="cacheLoading">
+        <template v-if="cacheView">
+          <el-alert v-if="!cacheView.cacheEnabled" type="warning" :closable="false" show-icon style="margin-bottom: 12px"
+            title="平台开关 ci.cacheEnabled 是关闭的"
+            description="节点上勾了「使用依赖缓存」也不会生效：每次运行都重新下载依赖。要启用请改服务端配置后重启。" />
+          <el-alert v-else-if="!cacheView.users.length" type="info" :closable="false" show-icon style="margin-bottom: 12px"
+            title="这个项目还没有流水线勾了依赖缓存"
+            description="在构建节点（git 之外的 go / maven / gradle / python / npm 编译）属性里勾「使用依赖缓存」。" />
+
+          <div class="sec-title">承载盘</div>
+          <el-descriptions :column="1" size="small" border>
+            <el-descriptions-item label="PVC">
+              <span class="mono">{{ cacheView.workspace?.name || (cacheView.namespace + ' 还没建盘') }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="缓存目录">
+              <span class="mono">{{ cacheView.cacheDir }}/（与运行工作目录同盘，不是第二块盘）</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="状态">
+              <el-tag size="small" :type="pvcTagType(cacheView.workspace?.phase)">{{ cacheView.workspace?.phase || '未创建' }}</el-tag>
+              <span class="dim">容量 {{ cacheView.workspace?.capacity || cacheView.workspaceSize || '-' }}
+                / 申请 {{ cacheView.workspace?.requested || cacheView.workspaceSize || '-' }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item v-if="cacheView.workspace?.storageClass" label="StorageClass">
+              <span class="mono">{{ cacheView.workspace.storageClass }}</span>
+            </el-descriptions-item>
+          </el-descriptions>
+          <div class="dim" style="margin-top: 6px">
+            盘容量由服务端配置 <span class="mono">ci.pvcSize</span> 决定，改大只对新创建的盘生效。
+          </div>
+
+          <div class="sec-title" style="margin-top: 14px">谁在用</div>
+          <el-table v-if="cacheView.users.length" border size="small" :data="cacheView.users">
+            <el-table-column prop="pipeline" label="流水线" min-width="140" />
+            <el-table-column label="使用缓存的节点" min-width="220">
+              <template #default="{ row }"><span class="mono">{{ row.nodes.join('、') }}</span></template>
+            </el-table-column>
+          </el-table>
+          <div v-else class="dim">没有流水线在用。</div>
+
+          <template v-if="cacheView.legacy?.length">
+            <div class="sec-title" style="margin-top: 14px">旧设计的独立缓存盘</div>
+            <div class="dim">缓存已并入工作区盘，这些盘不再被引用（点下方清空可一并回收）：</div>
+            <div v-for="l in cacheView.legacy" :key="l.name" class="dim mono">{{ l.name }} · {{ l.capacity || '?' }} · {{ l.phase }}</div>
+          </template>
+
+          <div style="margin-top: 16px">
+            <el-tooltip :disabled="!cacheView.busy" content="项目下有执行正在跑，等它结束再清空" placement="top">
+              <span>
+                <el-button type="danger" size="small" :disabled="cacheView.busy || !perm.canWriteNS(cacheView.namespace)"
+                  :loading="cacheClearing" @click="clearCache">清空依赖缓存</el-button>
+              </span>
+            </el-tooltip>
+            <span class="dim" style="margin-left: 8px">清空 = 删掉承载盘重建一块空的；下次运行多一次磁盘绑定。</span>
+          </div>
+        </template>
+        <el-empty v-else-if="!cacheLoading" description="读不到缓存信息（集群可能不可达）" />
+      </div>
+    </el-drawer>
+
     <!-- 运行详情抽屉 -->
     <el-drawer v-model="detailVisible" :title="`运行详情 #${detail?.run.runNo ?? ''} · ${pipelineName(detail?.run.pipelineId ?? 0)}`" size="62%" @closed="onDetailClosed">
       <template v-if="detail">
@@ -318,6 +385,12 @@
           <el-descriptions-item label="触发">{{ detail.run.triggerType }} / {{ detail.run.startedBy }}</el-descriptions-item>
           <el-descriptions-item label="开始">{{ fmtTime(detail.run.startedAt) }}</el-descriptions-item>
           <el-descriptions-item label="结束">{{ fmtTime(detail.run.finishedAt) }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.run.cacheInfo" label="依赖缓存" :span="3">
+            {{ detail.run.cacheInfo }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detail.run.message" label="原因" :span="3">
+            <span class="run-msg">{{ detail.run.message }}</span>
+          </el-descriptions-item>
         </el-descriptions>
         <div class="sec-title">
           任务
@@ -391,7 +464,7 @@
       >
         <el-option v-for="r in (runMode === 'branch' ? runRefs.branches : runRefs.tags)" :key="r" :label="r" :value="r" />
       </el-select>
-      <div v-if="runRefs.err" style="margin-top: 8px; color: #e6a23c; font-size: 12px">{{ runRefs.err }}</div>
+      <div v-if="runRefs.err" style="margin-top: 8px; color: #e6a23c; font-size: 13px">{{ runRefs.err }}</div>
       <template #footer>
         <el-button @click="runDlg = false">取消</el-button>
         <el-button type="primary" :loading="running" @click="doRun">运行</el-button>
@@ -534,7 +607,7 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import {
   ciApi, runWsUrl,
-  type CIGraph, type CIPEdge, type CIProject, type CIPipeline, type CIRun, type CIRunDetail, type CITaskRun, type CICIRReady, type CIGlobalVar, type CIArtifact, type CIArtifactDetail, type CIDeployment,
+  type CIGraph, type CIPEdge, type CICacheView, type CIProject, type CIPipeline, type CIRun, type CIRunDetail, type CITaskRun, type CICIRReady, type CIGlobalVar, type CIArtifact, type CIArtifactDetail, type CIDeployment,
 } from '../api/ci'
 import { useUserStore } from '../store/user'
 import { usePerm } from '../store/perm'
@@ -542,6 +615,7 @@ import { k8sApi } from '../api'
 import { activeCluster } from '../store/clusterRef'
 import { invalidateNodeTypes } from './ci/nodes'
 import RunLog from './ci/RunLog.vue'
+import BuilderPanel from './ci/BuilderPanel.vue'
 import { confirmDelete } from '../utils/confirm'
 import { textSelected } from '../utils/selection'
 
@@ -683,6 +757,15 @@ async function loadCredentials() {
 }
 function reloadAll() {
   void loadReady(); void loadProjects(); void loadPipelines(); void loadRuns(runPage.value); void loadCredentials(); void loadGlobals(); void loadArtifacts(); void loadDeployments()
+  ;(builderPanel.value as { load?: () => void } | null)?.load?.()
+}
+
+// 镜像构建器 → 执行中心：提交构建后直接打开该 run 详情（同页复用 WS/SSE 链路）
+const builderPanel = ref<{ load?: () => void } | null>(null)
+function openBuilderRun(runId: number) {
+  tab.value = 'runs'
+  void loadRuns(1)
+  void loadDetail(runId)
 }
 
 // ---- 详情 + 实时状态（WS + 5s 轮询兜底；终态停止） ----
@@ -769,7 +852,11 @@ async function rerun(r: CIRun) {
   void loadDetail(nr.id)
 }
 async function stopRun(r: CIRun) {
-  await ElMessageBox.confirm(`停止 #${r.runNo}？进行中的任务会被终止。`, '停止', { type: 'warning' })
+  // 排队中的 run 还没提交到集群：停止 = 出队，不会终止任何在跑的任务
+  const tip = r.status === 'queued'
+    ? `停止 #${r.runNo}？它还在排队（同项目串行），停止后不会启动。`
+    : `停止 #${r.runNo}？进行中的任务会被终止。`
+  await ElMessageBox.confirm(tip, '停止', { type: 'warning' })
   await ciApi.cancel(r.id)
   ElMessage.success('已停止')
   await loadRuns()
@@ -830,7 +917,7 @@ const dagFlow = computed(() => {
       position: n.position ?? { x: 0, y: 0 },
       data: {
         label: n.type,
-        style: { background: st.bg, border: `2px solid ${st.border}`, borderRadius: 8, padding: '8px 14px', fontSize: 12 },
+        style: { background: st.bg, border: `2px solid ${st.border}`, borderRadius: 8, padding: '8px 14px', fontSize: 13 },
       },
     }
   })
@@ -980,6 +1067,57 @@ async function delProj(p: CIProject) {
   await ciApi.deleteProject(p.id)
   ElMessage.success('已删除')
   await loadProjects()
+}
+
+// ---- 项目构建缓存 ----
+const cacheVisible = ref(false)
+const cacheLoading = ref(false)
+const cacheClearing = ref(false)
+const cacheView = ref<CICacheView | null>(null)
+const cacheProject = ref<CIProject | null>(null)
+
+async function openCache(p: CIProject) {
+  cacheProject.value = p
+  cacheVisible.value = true
+  await loadCache()
+}
+async function loadCache() {
+  const p = cacheProject.value
+  if (!p) return
+  cacheLoading.value = true
+  try {
+    cacheView.value = await ciApi.projectCache(p.id)
+  } catch {
+    cacheView.value = null
+  } finally {
+    cacheLoading.value = false
+  }
+}
+async function clearCache() {
+  const v = cacheView.value
+  const p = cacheProject.value
+  if (!v || !p) return
+  const legacy = v.legacy?.length ? `，并回收 ${v.legacy.length} 块旧独立缓存盘` : ''
+  // 这里删的是承载盘本身（缓存在它里面），所以确认串用项目名：动作与影响面要对齐
+  await confirmDelete(p.name, {
+    title: '清空依赖缓存',
+    warning: `将删除 ${v.namespace}/${v.workspace?.name || 'ci-ws-p' + p.id} 重建空盘${legacy}；正在跑的构建不受影响（有执行时会拒绝），但下次运行要多等一次磁盘绑定`,
+  })
+  cacheClearing.value = true
+  try {
+    const r = await ciApi.clearProjectCache(p.id)
+    if (r?.warning) ElMessage.warning(r.warning)
+    else ElMessage.success('已清空')
+    await loadCache()
+  } finally {
+    cacheClearing.value = false
+  }
+}
+function pvcTagType(phase?: string) {
+  if (phase === 'Bound') return 'success'
+  if (phase === 'Pending') return 'warning'
+  if (phase === 'Lost') return 'danger'
+  return 'info'
 }
 
 // ---- 凭据 CRUD ----
@@ -1162,6 +1300,7 @@ const RunStatusTag = {
   props: { status: { type: String, default: '' } },
   setup(p: any) {
     const map: Record<string, [string, string]> = {
+      queued: ['info', '排队中'],
       pending: ['info', '等待中'], running: ['primary', '运行中'],
       success: ['success', '成功'], failed: ['danger', '失败'], cancelled: ['warning', '已取消'],
       skipped: ['info', '已跳过'],
@@ -1180,8 +1319,11 @@ const RunStatusTag = {
 .stat-num { font-size: 22px; font-weight: 700; }
 .stat-card.ok .stat-num { color: #67c23a; }
 .stat-card.bad .stat-num { color: #f56c6c; }
-.stat-label { font-size: 12px; color: #909399; }
-.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.stat-label { font-size: 13px; color: #909399; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+/* 制品详情：长镜像引用必须可折行，否则把 descriptions 表格撑爆、标签列挤成竖排 */
+.artifact-desc :deep(.el-descriptions__content),
+.artifact-desc :deep(.el-descriptions__label) { word-break: break-all; white-space: normal; }
 .dim { color: #c0c4cc; }
 .empty-tip { color: #909399; font-size: 13px; padding: 18px 0; text-align: center; }
 .cursor-row { cursor: pointer; }
@@ -1190,17 +1332,19 @@ const RunStatusTag = {
 .dot.st-failed { background: #f56c6c; }
 .dot.st-running { background: #409eff; }
 .dot.st-pending { background: #c0c4cc; }
+.dot.st-queued { background: #d3adf7; }
+.run-msg { color: #f56c6c; font-size: 13px; word-break: break-all; }
 .dot.st-cancelled { background: #e6a23c; }
 .sec-title { font-weight: 600; margin: 10px 0 8px; }
 .task-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .task-name { font-weight: 600; }
-.task-type { color: #909399; font-size: 12px; }
-.task-dur { color: #909399; font-size: 12px; }
+.task-type { color: #909399; font-size: 13px; }
+.task-dur { color: #909399; font-size: 13px; }
 .task-results { margin-top: 8px; }
 .logs-box { margin: 0; max-height: 62vh; overflow: auto; padding: 10px; background: #0d1117; color: #c9d1d9; font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; border-radius: 6px; }
-.cfg-tip { color: #909399; font-size: 12px; }
+.cfg-tip { color: #909399; font-size: 13px; }
 .cred-kv { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
 .dag-box { height: 480px; border: 1px solid #ebeef5; border-radius: 8px; overflow: hidden; }
-.dag-node { border-radius: 8px; font-size: 12px; white-space: nowrap; }
-.dag-legend { margin-top: 10px; font-size: 12px; color: #909399; display: flex; gap: 6px; align-items: center; }
+.dag-node { border-radius: 8px; font-size: 13px; white-space: nowrap; }
+.dag-legend { margin-top: 10px; font-size: 13px; color: #909399; display: flex; gap: 6px; align-items: center; }
 </style>

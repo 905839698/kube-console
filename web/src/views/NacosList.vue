@@ -334,9 +334,9 @@ clusterStore.clusters.length || clusterStore.load().then(() => {
 .header-left { display: flex; align-items: center; gap: 10px; }
 .header-right { display: flex; align-items: center; }
 .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
-.muted { color: #909399; font-size: 12px; }
-.hint { color: #909399; font-size: 12px; margin-left: 12px; }
-.pwd { font-family: Consolas, monospace; font-size: 12px; margin-right: 8px; }
+.muted { color: #909399; font-size: 13px; }
+.hint { color: #909399; font-size: 13px; margin-left: 12px; }
+.pwd { font-family: Consolas, monospace; font-size: 13px; margin-right: 8px; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 260px; overflow-y: auto; }
 .user-tag { font-family: Consolas, monospace; }
 </style>

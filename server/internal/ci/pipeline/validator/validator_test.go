@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"strings"
 	"testing"
 
 	"kube-console/server/internal/ci/nodetype"
@@ -167,5 +168,88 @@ func TestConditionSourceDefaultParam(t *testing.T) {
 	errs := validateConditions(g, reg)
 	if len(errs) == 0 {
 		t.Fatal("缺 param（source 缺省=param）应报错")
+	}
+}
+
+// ===== 节点开关（disabled）=====
+
+// stubInvalidNode 参数校验永远失败的节点类型
+type stubInvalidNode struct{ t string }
+
+func (s stubInvalidNode) Meta() nodetype.Meta                      { return nodetype.Meta{Type: s.t} }
+func (s stubInvalidNode) Validate(map[string]interface{}) []string { return []string{"缺少必填参数"} }
+func (s stubInvalidNode) RenderTask(map[string]interface{}) (nodetype.TaskSpec, error) {
+	return nodetype.TaskSpec{}, nil
+}
+func (s stubInvalidNode) ResultMapping() nodetype.ResultMap { return nodetype.ResultMap{} }
+
+func invalidReg() nodetype.Registry {
+	r := stubReg{m: map[string]nodetype.Node{}}
+	r.Register(stubInvalidNode{t: "bad"})
+	r.Register(stubResultNode{t: "x"})
+	r.Register(stubResultNode{t: "condition"})
+	return r
+}
+
+// 关闭的节点跳过参数校验；条件节点关闭后 op/value 缺失也不再报错
+func TestDisabledNodesSkipValidation(t *testing.T) {
+	g := &model.Graph{Name: "t", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "a", Type: "bad", Disabled: true},
+		{ID: "c", Type: model.NodeTypeCondition, Disabled: true, Params: map[string]interface{}{}},
+		{ID: "b", Type: "x", Params: map[string]interface{}{}},
+	}
+	g.Edges = []model.Edge{{Source: "a", Target: "c"}, {Source: "c", Target: "b", Branch: model.BranchYes}}
+	res := New(invalidReg()).Validate(g)
+	if !res.Valid {
+		t.Fatalf("关闭的节点不应参与校验: %+v", res.Errors)
+	}
+}
+
+// 全部节点关闭 → 明确错误
+func TestAllDisabledValidatorErrors(t *testing.T) {
+	g := &model.Graph{Name: "t", Version: 1}
+	g.Nodes = []model.Node{
+		{ID: "a", Type: "x", Disabled: true},
+		{ID: "b", Type: "x", Disabled: true},
+	}
+	g.Edges = []model.Edge{{Source: "a", Target: "b"}}
+	res := New(invalidReg()).Validate(g)
+	if res.Valid || len(res.Errors) == 0 {
+		t.Fatal("全关应报错")
+	}
+	found := false
+	for _, e := range res.Errors {
+		if strings.Contains(e, "没有任何启用的任务节点") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("错误应指明没有启用节点: %v", res.Errors)
+	}
+}
+
+// 条件引用已关闭节点的结果 → 报错指明"已关闭"
+func TestConditionRefDisabledTaskErrors(t *testing.T) {
+	g, reg := taskResultGraph(map[string]interface{}{
+		"source": "taskResult", "task": "a", "result": "r1", "op": "==", "value": "x",
+	})
+	for i := range g.Nodes {
+		if g.Nodes[i].ID == "a" {
+			g.Nodes[i].Disabled = true
+		}
+	}
+	res := New(reg).Validate(g)
+	if res.Valid {
+		t.Fatal("引用已关闭节点的结果应校验失败")
+	}
+	found := false
+	for _, e := range res.Errors {
+		if strings.Contains(e, "已关闭") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("错误应指明节点已关闭: %v", res.Errors)
 	}
 }

@@ -92,6 +92,6 @@ function encodeMap(map: Record<string, string>): Record<string, string> {
 </script>
 
 <style scoped>
-.secret-hint { width: 100%; font-size: 12px; color: #9ca3af; margin-bottom: 6px; }
+.secret-hint { width: 100%; font-size: 13px; color: #9ca3af; margin-bottom: 6px; }
 .mono { font-family: ui-monospace, Consolas, monospace; }
 </style>

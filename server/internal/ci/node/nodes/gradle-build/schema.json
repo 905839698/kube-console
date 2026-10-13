@@ -57,7 +57,7 @@
       "type": "boolean",
       "required": false,
       "default": false,
-      "description": "启用项目级依赖缓存（挂载缓存 PVC，依赖包不再每次重新下载；同项目并发运行时可能因 RWO 卷排队，建议错峰或使用 RWX 存储）"
+      "description": "启用项目级依赖缓存（挂载缓存 PVC，依赖包不再每次重新下载；不同流水线同项目可并行（工作区按流水线分目录）；缓存为项目级共享，npm/go 等依赖缓存自身并发安全）"
     }
   ]
 }

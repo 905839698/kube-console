@@ -295,5 +295,5 @@ function addPort() {
 <style scoped>
 .kv-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 .sep { color: #909399; }
-.monitor-hint { color: #909399; font-size: 12px; margin-left: 10px; }
+.monitor-hint { color: #909399; font-size: 13px; margin-left: 10px; }
 </style>

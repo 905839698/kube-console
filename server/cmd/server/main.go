@@ -88,9 +88,13 @@ func main() {
 
 	// Nacos 微服务集成：ns 自动同步 + Pod 注入 Admission Webhook（HTTPS :webhookPort）
 	nacosSvc := service.NewNacosService(db, clusters, cfg.Nacos)
+	// 日志采集注入：复用 nacos 的 webhook 通道（端口/证书/集群 token），策略存库、Pod 准入时注入
+	logInjectSvc := service.NewLogInjectService(db, clusters, nacosSvc, service.NewK8sService(cfg.K8s.DebugImage))
+	nacosSvc.MountInjectRoute("/log-inject/", logInjectSvc.HandleInject)
+	logInjectSvc.Start()
 	nacosSvc.Start()
 
-	r := router.Setup(db, cfg, clusters, ciDeps, archive, eventArchive, nacosSvc)
+	r := router.Setup(db, cfg, clusters, ciDeps, archive, eventArchive, nacosSvc, logInjectSvc)
 
 	port := cfg.Server.Port
 	if port == 0 {
@@ -152,11 +156,12 @@ func migrateModels(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&model.User{}, &model.Cluster{}, &model.HelmRepo{}, &model.AuditLog{},
 		&model.LogSource{}, &model.NotifyChannel{}, &model.NotifyLog{}, &model.ApiToken{}, &model.UserGroup{}, &model.RegistryConfig{}, &model.CIIntegration{},
-		&model.AlertmanagerConfig{}, &model.AlertEvent{}, &model.NacosConfig{}, &model.NacosNamespace{},
+		&model.AlertmanagerConfig{}, &model.AlertEvent{}, &model.NacosConfig{}, &model.NacosNamespace{}, &model.LogCollectionPolicy{},
 		&model.CIProject{}, &model.CIPipeline{}, &model.CIPipelineVersion{}, &model.CIRunCounter{},
 		&model.CIRun{}, &model.CITaskRun{}, &model.CICredential{}, &model.CIGlobalVar{},
 		&model.CISchedule{}, &model.CIWebhook{}, &model.CIWebhookDelivery{},
 		&model.CIArtifact{}, &model.CIDeployment{},
+		&model.CIImageBuilder{}, &model.CIBuilderToken{},
 		&model.Role{}, &model.RbacBinding{})
 }
 

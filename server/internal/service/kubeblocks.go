@@ -110,20 +110,25 @@ type KBTemplateComponent struct {
 	CompDefPattern string `json:"compDefPattern,omitempty"`
 	// ReplicasMin/ReplicasMax 取自 ComponentDefinition.spec.replicasLimit；
 	// max=0 表示该版本模板没声明上限（1.0.2 的 mysql/redis addon 就没有），不能当成 1
-	ReplicasMin      int64          `json:"replicasMin"`
-	ReplicasMax      int64          `json:"replicasMax"`
-	ServiceVersion   string         `json:"serviceVersion"`
-	Volumes          []KBVolume     `json:"volumes"`
-	HasExporter      bool           `json:"hasExporter"`
-	Configs          []string       `json:"configs"`
-	HighAvailability bool           `json:"highAvailability"`
-	CompDefs         []KBCompOption `json:"compDefs,omitempty"`
+	ReplicasMin      int64      `json:"replicasMin"`
+	ReplicasMax      int64      `json:"replicasMax"`
+	ServiceVersion   string     `json:"serviceVersion"`
+	Volumes          []KBVolume `json:"volumes"`
+	HasExporter      bool       `json:"hasExporter"`
+	Configs          []string   `json:"configs"`
+	HighAvailability bool       `json:"highAvailability"`
+	// OwnsDataVolume 该模板自己就带来了名为 data 的卷（mongos 是 emptyDir）：
+	// 这种组件不需要、也不能配存储，见 kbCheckOwnVolume
+	OwnsDataVolume bool           `json:"ownsDataVolume"`
+	CompDefs       []KBCompOption `json:"compDefs,omitempty"`
 }
 
 // KBCompOption 组件的一个具体模板可选值（版本取自该 ComponentDefinition 的默认版本）
 type KBCompOption struct {
 	CompDef        string `json:"compDef"`
 	ServiceVersion string `json:"serviceVersion"`
+	// OwnsDataVolume 换到这个模板后存储该禁用（向导按当前选中项判断，不看默认项）
+	OwnsDataVolume bool `json:"ownsDataVolume,omitempty"`
 }
 
 type KBVolume struct {
@@ -223,7 +228,10 @@ func kbTemplateFor(name, compDef string, idx *kbCompDefIndex) KBTemplateComponen
 	}
 	tc.CompDefPattern = compDef
 	for _, o := range opts {
-		tc.CompDefs = append(tc.CompDefs, KBCompOption{CompDef: o.name, ServiceVersion: o.serviceVersion})
+		tc.CompDefs = append(tc.CompDefs, KBCompOption{
+			CompDef: o.name, ServiceVersion: o.serviceVersion,
+			OwnsDataVolume: kbOwnsVolumeName(o.obj, "data"),
+		})
 	}
 	tc.CompDef = opts[0].name
 	fillFromCompDef(&tc, opts[0].obj)
@@ -436,6 +444,7 @@ func fillFromCompDef(tc *KBTemplateComponent, cd *unstructured.Unstructured) {
 	if _, ok, _ := unstructured.NestedMap(cd.Object, "spec", "exporter"); ok {
 		tc.HasExporter = true
 	}
+	tc.OwnsDataVolume = kbOwnsVolumeName(cd, "data")
 	if vols, ok, _ := unstructured.NestedSlice(cd.Object, "spec", "volumes"); ok {
 		for _, v := range vols {
 			vm, ok := v.(map[string]any)
@@ -488,6 +497,8 @@ type KBCluster struct {
 	Conditions []KBCondition `json:"conditions,omitempty"`
 	// Shardings 分片拓扑（spec.shardings + status.shardings 的 phase）；分片成员组件在详情接口里带出
 	Shardings []KBSharding `json:"shardings,omitempty"`
+	// Scheduling 集群级调度设置的一行摘要（spec.schedulingPolicy；没配则为空）
+	Scheduling string `json:"scheduling,omitempty"`
 }
 
 // KBCondition k8s conditions 的通用形态（集群 / 工单 / Component 都用这套字段）
@@ -562,6 +573,8 @@ func clusterView(obj *unstructured.Unstructured, idx *kbCompDefIndex) KBCluster 
 	v.Engine = v.ClusterDef
 	v.Topology, _, _ = unstructured.NestedString(obj.Object, "spec", "topology")
 	v.TerminationPolicy, _, _ = unstructured.NestedString(obj.Object, "spec", "terminationPolicy")
+	// 调度设置读成一行展示（建完能在界面上确认有没有落上，不用再去 kubectl 看 spec）
+	v.Scheduling = kbSchedulingSummaryOf(obj)
 	v.Phase, _, _ = unstructured.NestedString(obj.Object, "status", "phase")
 	v.Message, _, _ = unstructured.NestedString(obj.Object, "status", "message")
 	if ts := obj.GetCreationTimestamp(); !ts.IsZero() {
@@ -718,15 +731,22 @@ func KBHeadlessServices(ctx context.Context, c *kube.Client, ns, cluster string)
 		if inst == "" {
 			continue
 		}
-		// exporter 端口名不统一：mysql/redis/pg 用 http-metrics，kafka-exporter 用 metrics
-		metricsPort := ""
+		// exporter 端口名不统一：mysql/redis/pg 用 http-metrics，kafka-exporter 用 metrics，
+		// mongodb 用 exporter——漏了哪个引擎就会被判成"没有带 exporter 端口的组件，无需接入"。
+		// 有重名时按 http-metrics > metrics > exporter 取第一个
+		metricsPort, rank := "", 9
 		for _, p := range s.Spec.Ports {
-			if p.Name == "http-metrics" {
-				metricsPort = p.Name
-				break
+			r := 9
+			switch p.Name {
+			case "http-metrics":
+				r = 1
+			case "metrics":
+				r = 2
+			case "exporter":
+				r = 3
 			}
-			if p.Name == "metrics" {
-				metricsPort = p.Name
+			if r < rank {
+				rank, metricsPort = r, p.Name
 			}
 		}
 		comp := strings.TrimSuffix(strings.TrimPrefix(s.Name, cluster+"-"), "-headless")
@@ -739,7 +759,7 @@ type KBServiceRef struct {
 	Service        string `json:"service"`
 	InstanceLabel  string `json:"instanceLabel"`
 	HasMetricsPort bool   `json:"hasMetricsPort"`
-	// MetricsPort 实际端口名（http-metrics 或 metrics），ServiceMonitor 按它写
+	// MetricsPort 实际端口名（http-metrics/metrics/exporter），ServiceMonitor 按它写
 	MetricsPort string `json:"metricsPort"`
 }
 
@@ -866,6 +886,8 @@ type KBCreateInput struct {
 	TerminationPolicy string             `json:"terminationPolicy"`
 	Components        []KBComponentInput `json:"components"`
 	Shardings         []KBShardingInput  `json:"shardings"`
+	// Scheduling 集群级调度设置（节点亲和 / 容忍污点 / 打散），对所有组件生效
+	Scheduling *KBScheduling `json:"scheduling"`
 }
 
 // KBCreateCluster 按 v1 形态下发 Cluster；组件模板可为 KBEngines 给的具体名或模式，此处统一解析
@@ -909,9 +931,17 @@ func KBCreateCluster(ctx context.Context, c *kube.Client, ns string, in *KBCreat
 			spec["resources"] = res
 		}
 		if ci.Storage != "" {
+			if err := kbCheckOwnVolume("组件 "+ci.Name, picked.name, picked.obj, ci.Storage); err != nil {
+				return err
+			}
 			spec["volumeClaimTemplates"] = []any{pvcTemplate(ci)}
 		}
 		comps = append(comps, spec)
+	}
+	// Elasticsearch 的单组件形态必须显式拿到单机渲染开关（详见 kbESModeForComponents）
+	esModeInjected, err := kbESModeForComponents(comps, in, compIdx)
+	if err != nil {
+		return err
 	}
 	shardSpecs, err := kbShardingSpecs(ctx, c, ns, in, compIdx)
 	if err != nil {
@@ -949,6 +979,27 @@ func KBCreateCluster(ctx context.Context, c *kube.Client, ns string, in *KBCreat
 			return err
 		}
 	}
+	if esModeInjected {
+		// variables 要是被 apiserver 剪掉就等于没注入：宁可拒发，也别建出一个一直 CrashLoop 的集群
+		if err := kbAssertConfigVarsKept(ctx, c, ns, obj); err != nil {
+			return err
+		}
+	}
+	if !in.Scheduling.empty() {
+		sp, err := kbSchedulingSpec(in.Scheduling, in.Name)
+		if err != nil {
+			return err
+		}
+		if sp != nil {
+			if err := unstructured.SetNestedMap(obj.Object, sp, "spec", "schedulingPolicy"); err != nil {
+				return err
+			}
+			// 老 addon 的 CRD 没这个字段，下发会被静默剪成"配了但没生效"
+			if err := kbAssertSchedulingSupported(ctx, c, ns, obj); err != nil {
+				return err
+			}
+		}
+	}
 	if _, err := c.Dynamic.Resource(kbClusterGVR).Namespace(ns).Create(ctx, obj, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("集群 %s/%s 已存在", ns, in.Name)
@@ -980,6 +1031,155 @@ func resourceMap(ci KBComponentInput) map[string]any {
 		out["limits"] = lim
 	}
 	return out
+}
+
+// kbOwnsVolumeName 模板的 podSpec 是否自己就带来了这个名称的卷（spec.runtime.volumes，
+// 例如 mongos 的 data=emptyDir、etcd 的 bin）。
+//
+// 只认这一处，**不认 spec.volumes**：那一份是"这个组件需要哪些 PVC"的声明（mysql/pg/redis
+// 的 data 都在那儿列着），正是要 Cluster 下发 volumeClaimTemplates 的依据，
+// 拿它当"自带卷"会把该建盘的组件判成无状态（真机扫过：mysql-8.0 / postgresql-16 /
+// redis-8 / mongo-config-server 都在 spec.volumes 列了 data，只有 mongos 在 runtime 里带）。
+func kbOwnsVolumeName(cd *unstructured.Unstructured, name string) bool {
+	if cd == nil || name == "" {
+		return false
+	}
+	vols, ok, _ := unstructured.NestedSlice(cd.Object, "spec", "runtime", "volumes")
+	if !ok {
+		return false
+	}
+	for _, v := range vols {
+		if vm, ok := v.(map[string]any); ok {
+			if n, _ := vm["name"].(string); n == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// kbCheckOwnVolume 提交前挡住"给自带卷的组件再配存储"。
+//
+// 为什么不能只跳过不下发：mongos 这类组件的 data 由模板自带（emptyDir），Cluster 再下发
+// 同名 volumeClaimTemplates 时 KB 合成 InstanceSet 直接失败，operator 每 1s 重试同一个错
+// （实测 kube-public/mongodb：日志里 799 次 "duplicated volume data"），集群永远停在
+// Creating 且一个 pod 都没有——界面只看到"没有运行正常"，看不出是存储那一格造成的。
+// 所以宁可报错让用户把那一格留空，也不要建出一个卡死的集群。
+func kbCheckOwnVolume(who, tplName string, cd *unstructured.Unstructured, storage string) error {
+	if storage == "" || !kbOwnsVolumeName(cd, "data") {
+		return nil
+	}
+	return fmt.Errorf("%s 的数据卷由模板 %s 自带（同名 data 卷），请把它的存储留空——同名卷一起下发会让集群卡在 Creating 起不来", who, tplName)
+}
+
+// ES 单机/多机渲染开关的落点（见 kbESModeForComponents）
+const (
+	kbESEngineName     = "elasticsearch"
+	kbESModeVarName    = "mode"
+	kbESSingleNodeMode = "single-node"
+)
+
+// kbFirstConfigName 该模板的第一个配置项名（`variables` 必须挂在它下面）。
+// ES 用的是 es-cm（addon 固定），但名字是 addon 说了算，所以从模板里读而不是写死。
+func kbFirstConfigName(cd *unstructured.Unstructured) string {
+	if cd == nil {
+		return ""
+	}
+	cfgs, ok, _ := unstructured.NestedSlice(cd.Object, "spec", "configs")
+	if !ok {
+		return ""
+	}
+	for _, v := range cfgs {
+		if cm, ok := v.(map[string]any); ok {
+			if n, _ := cm["name"].(string); n != "" {
+				return n
+			}
+		}
+	}
+	return ""
+}
+
+// kbEngineOfCompDef 组件模板属于哪个引擎：优先用条目上算好的（带 addon 的
+// app.kubernetes.io/name 标签），列不出模板时按模板名猜（宁可当 ES 处理也不能漏掉）
+func kbEngineOfCompDef(e kbCompDefEntry) string {
+	if e.engine != "" {
+		return e.engine
+	}
+	return kbEngineOfName(e.name, nil)
+}
+
+// kbESModeForComponents 给"Elasticsearch 的单组件形态"注入单机渲染开关。
+//
+// ES 的配置模板用 {{ index . "mode" }} 决定按单机还是多机渲染，这个变量只能从
+// spec.componentSpecs[].configs[].variables 传进去——clusterdefinition/elasticsearch 的
+// topologies 里只给了组件名，没有任何兜底（真机核对过）。不传的后果很具体：模板按
+// multi-node 渲染时，从 ALL_CMP_REPLICA_LIST 里只认 "master:" 开头那一段
+// （KB 给多组件集群的列表加组件名前缀，如 "dit:logs-dit-0;master:logs-master-0"，
+// 单组件集群的列表不带前缀），于是产出 "cluster.initial_master_nodes:"（有键无值），
+// ES 启动即报 null-valued setting 退出，Pod 一直 CrashLoop，界面只看得见"集群不健康"。
+//
+// 条件刻意收得很窄（真机 addon 的 5 个拓扑逐个核过）：只在**只有一个组件**时注入。
+//   - multi-node / m-dit / m-d-i-t：多个组件 → KB 给的列表带组件名前缀（实测
+//     "dit:logs-dit-0,...;master:logs-master-0"），模板能算出主节点列表，不该插手；
+//   - single-node / mdit：只有一个组件 → KB 给的列表**不带前缀**（实测
+//     "elk-mdit-0,elk-mdit-1,elk-mdit-2"），模板里的 `master:` 过滤永远匹配不上，
+//     所以这种形态只有单机模式能用，副本数也必须锁 1
+//     （单机模式下多开副本就是 N 个互不相干的集群，那不是高可用，静默建出来更坏）。
+func kbESModeForComponents(comps []any, in *KBCreateInput, idx *kbCompDefIndex) (bool, error) {
+	if len(in.Components) != 1 {
+		return false, nil // 多组件形态由模板自己算主节点列表，插手只会把集群降级成单机
+	}
+	ci := in.Components[0]
+	picked, err := kbPickCompDef(idx, ci.CompDef, ci.ServiceVersion)
+	if err != nil || picked.obj == nil {
+		return false, nil // 列不出模板（没权限或没装 addon）时不动别人的集群：只能原样下发
+	}
+	if kbEngineOfCompDef(picked) != kbESEngineName {
+		return false, nil
+	}
+	spec, ok := comps[0].(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	if replicas, _, _ := unstructured.NestedInt64(spec, "replicas"); replicas > 1 {
+		return false, fmt.Errorf("组件 %s 是 Elasticsearch 的单节点形态，副本数只能是 1（多副本会变成多个互不相干的单节点集群）；要多节点高可用请改用 multi-node 拓扑（master + dit）", ci.Name)
+	}
+	cfgName := kbFirstConfigName(picked.obj)
+	if cfgName == "" {
+		return false, fmt.Errorf("Elasticsearch 模板 %s 没给出配置项名，控制台无法注入单机开关（mode=%s）；请改用 multi-node 拓扑，或手工在 spec.componentSpecs[].configs[].variables 里补", picked.name, kbESSingleNodeMode)
+	}
+	spec["configs"] = []any{map[string]any{
+		"name":      cfgName,
+		"variables": map[string]any{kbESModeVarName: kbESSingleNodeMode},
+	}}
+	return true, nil
+}
+
+// kbAssertConfigVarsKept 注入过 variables 就 dry-run 探一次：structural schema 会把
+// 未知字段静默剪掉，剪掉就等于"配了但没生效"，集群照样起不来（与调度设置同一个坑）。
+func kbAssertConfigVarsKept(ctx context.Context, c *kube.Client, ns string, obj *unstructured.Unstructured) error {
+	probe := obj.DeepCopy()
+	probe.SetName("kc-cfgvar-probe")
+	res, err := c.Dynamic.Resource(kbClusterGVR).Namespace(ns).Create(ctx, probe, metav1.CreateOptions{DryRun: []string{"All"}})
+	if err != nil {
+		return nil // 其他原因失败（webhook 拒等）不在本检查范围内
+	}
+	specs, _, _ := unstructured.NestedSlice(res.Object, "spec", "componentSpecs")
+	for _, s := range specs {
+		sm, _ := s.(map[string]any)
+		// configs 是列表，每项里的 variables 才是我们要确认没被剪掉的东西
+		cfgs, ok, _ := unstructured.NestedSlice(sm, "configs")
+		if !ok {
+			continue
+		}
+		for _, cg := range cfgs {
+			cm, _ := cg.(map[string]any)
+			if vars, ok, _ := unstructured.NestedStringMap(cm, "variables"); ok && len(vars) > 0 {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("该 KubeBlocks 不认 spec.componentSpecs[].configs[].variables（下发后被 apiserver 剪掉），无法为 Elasticsearch 注入单机开关；请改用 multi-node 拓扑")
 }
 
 func pvcTemplate(ci KBComponentInput) map[string]any {
@@ -1484,15 +1684,28 @@ func kbCompDefMatch(pattern, def string) bool {
 
 // ---------- 监控接入 ----------
 
+// KBMonitorAccess 一键接入的结果：建/修了哪些对象，以及该不该提示什么
+type KBMonitorAccess struct {
+	Created []string `json:"created"`
+	// Note 做了哪件额外的事（贴了 Prometheus 的 selector 标签、修了几条历史配置）
+	Note string `json:"note,omitempty"`
+	// Warning 贴标签也解决不了的情况（selector 用 matchExpressions），必须显式说出来
+	Warning string `json:"warning,omitempty"`
+}
+
 // KBEnsureServiceMonitor 为集群各组件建 exporter 抓取配置。
-// 实测：该集群 Prometheus 的 serviceMonitorSelector / serviceMonitorNamespaceSelector 均为 {}
-// （匹配全部），所以建出来即被抓取；端口名固定 http-metrics（KubeBlocks exporter 约定）。
-func KBEnsureServiceMonitor(ctx context.Context, c *kube.Client, ns, cluster string) ([]string, error) {
+//
+// 返回的 note 是"这次做了什么/还差什么"，必须显示给用户：prometheus-operator 只加载
+// Prometheus CR 的 serviceMonitorSelector 匹配得上的 ServiceMonitor，标签不对就是
+// "创建成功但永远没数据"（见 kbpromsel.go），不写清楚用户只能干等。
+func KBEnsureServiceMonitor(ctx context.Context, c *kube.Client, ns, cluster string) (*KBMonitorAccess, error) {
 	refs, err := KBHeadlessServices(ctx, c, ns, cluster)
 	if err != nil {
 		return nil, err
 	}
+	ml := KBMonitorLabelsFor(ctx, c, kbSelServiceMonitor)
 	created := []string{}
+	repaired := 0
 	for comp, r := range refs {
 		if !r.HasMetricsPort {
 			continue
@@ -1504,10 +1717,10 @@ func KBEnsureServiceMonitor(ctx context.Context, c *kube.Client, ns, cluster str
 			"metadata": map[string]any{
 				"name":      name,
 				"namespace": ns,
-				"labels": map[string]any{
+				"labels": KBMergeMonitorLabels(map[string]any{
 					"app.kubernetes.io/managed-by": "kube-console",
 					"kubeblocks.io/cluster":        cluster,
-				},
+				}, ml.Labels),
 			},
 			"spec": map[string]any{
 				"namespaceSelector": map[string]any{},
@@ -1522,16 +1735,28 @@ func KBEnsureServiceMonitor(ctx context.Context, c *kube.Client, ns, cluster str
 			},
 		}}
 		cli := c.Dynamic.Resource(kbSMGVR).Namespace(ns)
-		if _, err := cli.Create(ctx, sm, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		_, err := cli.Create(ctx, sm, metav1.CreateOptions{})
+		if err != nil && !apierrors.IsAlreadyExists(err) {
+			res := &KBMonitorAccess{Created: created, Note: ml.AppliedNote()}
 			if metaNoMatch(err) {
-				return created, fmt.Errorf("集群未安装 Prometheus Operator（无 ServiceMonitor CRD），无法接入抓取")
+				return res, fmt.Errorf("集群未安装 Prometheus Operator（无 ServiceMonitor CRD），无法接入抓取")
 			}
-			return created, fmt.Errorf("创建 ServiceMonitor 失败: %s", kbErrText(err))
+			return res, fmt.Errorf("创建 ServiceMonitor 失败: %s", kbErrText(err))
+		}
+		if apierrors.IsAlreadyExists(err) {
+			// 历史遗留：早先建的没带抓取标签，再点一次按钮得把它修好，而不是"已存在"就什么都不做
+			if fixed, perr := KBMonitorApplyLabels(ctx, c, kbSMGVR, ns, name, ml.Labels); perr == nil && fixed {
+				repaired++
+			}
 		}
 		created = append(created, name)
 	}
 	sort.Strings(created)
-	return created, nil
+	res := &KBMonitorAccess{Created: created, Note: ml.AppliedNote(), Warning: ml.Warning}
+	if repaired > 0 {
+		res.Note += fmt.Sprintf("；已为 %d 条既有抓取配置补上标签", repaired)
+	}
+	return res, nil
 }
 
 // ---------- 连接信息 ----------
@@ -1936,6 +2161,9 @@ func kbShardingSpecs(ctx context.Context, c *kube.Client, ns string, in *KBCreat
 			tpl["resources"] = res
 		}
 		if si.Storage != "" {
+			if err := kbCheckOwnVolume("分片组 "+si.Name, picked.name, picked.obj, si.Storage); err != nil {
+				return nil, err
+			}
 			tpl["volumeClaimTemplates"] = []any{pvcTemplate(ci)}
 		}
 		out = append(out, map[string]any{"name": si.Name, "shardingDef": defName, "shards": si.Shards, "template": tpl})

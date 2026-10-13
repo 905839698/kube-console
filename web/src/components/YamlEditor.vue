@@ -17,7 +17,7 @@ let view: EditorView | null = null
 
 const theme = [
   EditorView.theme({
-    '&': { height: '100%', fontSize: '13px' },
+    '&': { height: '100%', fontSize: '14px' },
     '.cm-scroller': { fontFamily: 'Consolas, Menlo, monospace', lineHeight: '1.6' },
   }),
 ]

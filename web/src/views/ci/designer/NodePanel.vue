@@ -65,11 +65,11 @@ export default { name: 'CiNodePanel' }
   padding: 8px; overflow-y: auto; flex-shrink: 0; background: #fff;
 }
 .title { font-weight: 600; margin-bottom: 4px; }
-.hint { font-size: 11px; color: #909399; margin-bottom: 8px; }
-.empty { text-align: center; padding: 12px 0; font-size: 12px; color: #909399; }
+.hint { font-size: 12px; color: #909399; margin-bottom: 8px; }
+.empty { text-align: center; padding: 12px 0; font-size: 13px; color: #909399; }
 .empty.err { color: #f56c6c; }
 .group { margin-bottom: 12px; }
-.cat { font-size: 12px; color: #909399; margin-bottom: 4px; }
+.cat { font-size: 13px; color: #909399; margin-bottom: 4px; }
 .item {
   cursor: grab; border: 1px dashed #dcdfe6; border-radius: 6px;
   padding: 4px 8px; margin-bottom: 4px; font-size: 13px; background: #fafafa;
