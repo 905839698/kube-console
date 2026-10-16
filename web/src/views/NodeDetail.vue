@@ -3,11 +3,15 @@
     <!-- 顶部：节点概况 -->
     <el-card shadow="never" class="kc-top-card">
       <div class="kc-top-head">
-        <span class="kc-section-title"><el-icon><Cpu /></el-icon>节点详情</span>
+        <span class="kc-section-title">
+          <DetailBack to="/nodes" label="节点列表" />
+          <el-icon><Cpu /></el-icon>节点详情
+        </span>
         <div class="header-actions">
           <el-tag v-if="detail && !detail.schedulable" type="warning" size="small" effect="dark">已封锁 (SchedulingDisabled)</el-tag>
           <el-button v-if="detail?.schedulable" size="small" type="warning" @click="cordon(true)">暂停调度</el-button>
           <el-button v-else size="small" type="success" @click="cordon(false)">恢复调度</el-button>
+          <el-button size="small" type="primary" :disabled="!perm.canWriteCluster()" @click="terminalVisible = true">Shell</el-button>
           <el-button size="small" @click="load">刷新</el-button>
         </div>
       </div>
@@ -83,7 +87,13 @@
 
     <!-- 资源与指标 -->
     <el-card shadow="never" class="kc-usage-card">
-      <template #header><span class="kc-section-title">资源与指标</span></template>
+      <template #header>
+        <div class="usage-head">
+          <span class="kc-section-title">资源与指标</span>
+          <span class="spacer"></span>
+          <RangeSwitch v-model="range" @change="loadMonitor" />
+        </div>
+      </template>
       <template v-for="u in usageBars" :key="u.name">
         <div class="kc-usage-row">
           <span class="kc-usage-name">{{ u.name }}</span>
@@ -100,6 +110,21 @@
             <div class="kc-gauge-value">{{ g.value }}<small> {{ g.sub }}</small></div>
           </div>
         </div>
+      </div>
+
+      <!-- 趋势图（原「监控」页签并入此处，Kuboard 口径：用量条 + 仪表 + 趋势同区展示） -->
+      <div class="kc-chart-grid">
+        <div v-for="ch in monitorCharts" :key="ch.title" class="kc-chart-card">
+          <div class="kc-chart-title">{{ ch.title }}</div>
+          <MetricChart :series="ch.series" height="200px" :y-axis-name="ch.yAxisName" />
+        </div>
+      </div>
+      <div v-if="monitor?.kubelet" class="kc-kubelet-row">
+        <span class="kc-usage-name">Kubelet 运行时</span>
+        <el-tag size="small" type="info" effect="plain">运行中 Pod {{ monitor.kubelet.runningPods ?? '-' }}</el-tag>
+        <el-tag size="small" type="info" effect="plain">运行中容器 {{ monitor.kubelet.runningContainers ?? '-' }}</el-tag>
+        <el-tag size="small" type="info" effect="plain">PLEG Relist {{ fmtNum(monitor.kubelet.relistRate) }} 次/s</el-tag>
+        <el-tag size="small" :type="(monitor.kubelet.runtimeErrorsRate ?? 0) > 0 ? 'danger' : 'info'" effect="plain">运行时操作错误 {{ fmtNum(monitor.kubelet.runtimeErrorsRate) }} 次/s</el-tag>
       </div>
     </el-card>
 
@@ -119,7 +144,7 @@
             </el-table-column>
             <el-table-column prop="ready" label="就绪" width="70" align="center" />
             <el-table-column prop="ip" label="IP" width="130" />
-            <el-table-column label="操作" width="90" align="center">
+            <el-table-column label="操作" width="76" align="center">
               <template #default="{ row }">
                 <el-button size="small" type="warning" text @click="evictPod(row)">驱除</el-button>
               </template>
@@ -167,38 +192,44 @@
           </el-form>
         </el-tab-pane>
 
-        <!-- 监控 -->
-        <el-tab-pane label="监控" name="monitor" lazy>
-          <div class="monitor-toolbar">
-            <RangeSwitch v-model="range" @change="loadMonitor" />
-          </div>
-          <MetricPanel :cards="monitorCards" :charts="monitorCharts" :loading="monitorLoading" />
-          <!-- Kubelet 运行时（无 node 标签的采集环境自动隐藏） -->
-          <template v-if="monitor?.kubelet">
-            <div class="kubelet-title">Kubelet 运行时</div>
-            <MetricPanel :cards="kubeletCards" :charts="[]" :loading="monitorLoading" />
-          </template>
+        <!-- 镜像（kubelet status.images，与 kubectl describe node 同源） -->
+        <el-tab-pane :label="`镜像 (${detail?.images?.length || 0})`" name="images" lazy>
+          <el-table border :data="imageRows" size="small" stripe max-height="560">
+            <el-table-column prop="name" label="镜像名称" min-width="420" show-overflow-tooltip>
+              <template #default="{ row }"><span class="mono">{{ row.name }}</span></template>
+            </el-table-column>
+            <el-table-column prop="sizeText" label="大小" width="120" align="right" sortable :sort-by="(r: any) => r.sizeBytes" />
+          </el-table>
         </el-tab-pane>
       </el-tabs>
     </el-card>
+
+    <!-- 节点终端（nsenter 调试 Pod 进入宿主机，与节点列表同口径，需集群级写权限） -->
+    <WebTerminal v-model:visible="terminalVisible" namespace="kube-system" :pod="name" :node="true" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Cpu, Delete, Plus } from '@element-plus/icons-vue'
 import { eventsApi, k8sApi, nodeApi, type EventItemEx, type NodeDetail, type NodeMonitor, type PodItem } from '../api'
 import StatusTag from '../components/StatusTag.vue'
-import MetricPanel, { type MetricCardDef, type MetricChartDef } from '../components/MetricPanel.vue'
+import DetailBack from '../components/DetailBack.vue'
+import MetricChart from '../components/MetricChart.vue'
 import RangeSwitch from '../components/RangeSwitch.vue'
+import WebTerminal from '../components/WebTerminal.vue'
 import KvEditor from '../components/forms/KvEditor.vue'
 import { useClusterStore } from '../store/cluster'
+import { usePerm } from '../store/perm'
+import { METRIC_COLORS as MC, levelColor } from '../utils/chart-palette'
 
 const route = useRoute()
 const router = useRouter()
 const clusterStore = useClusterStore()
+const perm = usePerm()
+const terminalVisible = ref(false)
 
 const name = computed(() => String(route.params.name))
 const detail = ref<NodeDetail>()
@@ -215,67 +246,24 @@ const monitorLoading = ref(false)
 // 关联事件（事件中心按对象名检索）
 const nodeEvents = ref<EventItemEx[]>([])
 
-const monitorCards = computed<MetricCardDef[]>(() => [
-  { label: 'CPU 使用率', value: monitor.value?.cpuUsagePct ?? null, unit: '%', color: '#409eff' },
-  { label: '内存使用率', value: monitor.value?.memUsagePct ?? null, unit: '%', color: '#67c23a' },
-  { label: '磁盘使用率', value: monitor.value?.diskUsagePct ?? null, unit: '%', color: '#e6a23c' },
-  { label: '网络接收', value: monitor.value?.netRxMBs ?? null, unit: 'MB/s', color: '#f56c6c' },
-  { label: '网络发送', value: monitor.value?.netTxMBs ?? null, unit: 'MB/s', color: '#909399' },
-  { label: '负载 (1m)', value: monitor.value?.load1 ?? null, unit: '', decimals: 2, color: '#9254de', sub: `5m ${fmtNum(monitor.value?.load5)} / 15m ${fmtNum(monitor.value?.load15)}` },
-  { label: 'Swap 使用率', value: monitor.value?.swapUsagePct ?? null, unit: '%', decimals: 1, color: '#c059cf' },
-  { label: '磁盘读 IOPS', value: monitor.value?.diskReadIops ?? null, unit: '次/s', decimals: 1, color: '#409eff', sub: `写 ${fmtNum(monitor.value?.diskWriteIops)} 次/s` },
-  { label: '磁盘读吞吐', value: monitor.value?.diskReadMBs ?? null, unit: 'MB/s', decimals: 2, color: '#67c23a', sub: `写 ${fmtNum(monitor.value?.diskWriteMBs)} MB/s` },
-  { label: '磁盘 IO 利用率', value: monitor.value?.ioUtilPct ?? null, unit: '%', decimals: 1, color: '#e6a23c' },
-  { label: '网络丢包', value: monitor.value?.netDropRate ?? null, unit: '次/s', decimals: 2, color: '#f56c6c' },
-  { label: 'TCP 连接', value: monitor.value?.tcpEstablished ?? null, unit: '条', decimals: 0, color: '#00aa55' },
-])
-
-const monitorCharts = computed<MetricChartDef[]>(() => [
-  { title: 'CPU 使用率', series: [{ name: 'CPU', data: monitor.value?.cpuUsageTrend || [], color: '#409eff', unit: '%' }], yAxisName: '%' },
-  { title: '内存使用率', series: [{ name: '内存', data: monitor.value?.memUsageTrend || [], color: '#67c23a', unit: '%' }], yAxisName: '%' },
-  { title: '磁盘使用率', series: [{ name: '磁盘', data: monitor.value?.diskUsageTrend || [], color: '#e6a23c', unit: '%' }], yAxisName: '%' },
+const monitorCharts = computed(() => [
+  { title: 'CPU 使用率', series: [{ name: 'CPU', data: monitor.value?.cpuUsageTrend || [], color: MC.primary, unit: '%' }], yAxisName: '%' },
+  { title: '内存使用率', series: [{ name: '内存', data: monitor.value?.memUsageTrend || [], color: MC.sky, unit: '%' }], yAxisName: '%' },
+  { title: '磁盘使用率', series: [{ name: '磁盘', data: monitor.value?.diskUsageTrend || [], color: MC.sun, unit: '%' }], yAxisName: '%' },
   {
     title: '网络流量',
     series: [
-      { name: '接收', data: monitor.value?.netRxTrend || [], color: '#409eff', unit: 'MB/s' },
-      { name: '发送', data: monitor.value?.netTxTrend || [], color: '#67c23a', unit: 'MB/s' },
+      { name: '接收', data: monitor.value?.netRxTrend || [], color: MC.primary, unit: 'MB/s' },
+      { name: '发送', data: monitor.value?.netTxTrend || [], color: MC.sky, unit: 'MB/s' },
     ],
     yAxisName: 'MB/s',
   },
-  {
-    title: '系统负载 (load1)',
-    series: [{ name: 'load1', data: monitor.value?.load1Trend || [], color: '#9254de', unit: '' }],
-    yAxisName: '',
-  },
-  {
-    title: '磁盘 IOPS',
-    series: [
-      { name: '读', data: monitor.value?.diskIopsTrend || [], color: '#409eff', unit: '次/s' },
-    ],
-    yAxisName: '次/s',
-  },
-  {
-    title: '磁盘吞吐',
-    series: [{ name: '读写合计', data: monitor.value?.diskThroughputTrend || [], color: '#67c23a', unit: 'MB/s' }],
-    yAxisName: 'MB/s',
-  },
-  {
-    title: '磁盘 IO 利用率',
-    series: [{ name: 'IO 利用率', data: monitor.value?.ioUtilTrend || [], color: '#e6a23c', unit: '%' }],
-    yAxisName: '%',
-  },
-  {
-    title: '网络丢包',
-    series: [{ name: '丢包(收+发)', data: monitor.value?.netDropTrend || [], color: '#f56c6c', unit: '次/s' }],
-    yAxisName: '次/s',
-  },
-])
-
-const kubeletCards = computed<MetricCardDef[]>(() => [
-  { label: '运行中 Pod', value: monitor.value?.kubelet?.runningPods ?? null, unit: '个', decimals: 0, color: '#409eff' },
-  { label: '运行中容器', value: monitor.value?.kubelet?.runningContainers ?? null, unit: '个', decimals: 0, color: '#67c23a' },
-  { label: 'PLEG Relist', value: monitor.value?.kubelet?.relistRate ?? null, unit: '次/s', decimals: 2, color: '#e6a23c' },
-  { label: '运行时操作错误', value: monitor.value?.kubelet?.runtimeErrorsRate ?? null, unit: '次/s', decimals: 2, color: '#f56c6c' },
+  { title: '系统负载 (load1)', series: [{ name: 'load1', data: monitor.value?.load1Trend || [], color: MC.grape, unit: '' }], yAxisName: '' },
+  { title: '磁盘 IOPS', series: [{ name: '读', data: monitor.value?.diskIopsTrend || [], color: MC.primary, unit: '次/s' }], yAxisName: '次/s' },
+  { title: '磁盘吞吐', series: [{ name: '读写合计', data: monitor.value?.diskThroughputTrend || [], color: MC.sky, unit: 'MB/s' }], yAxisName: 'MB/s' },
+  { title: '磁盘 IO 利用率', series: [{ name: 'IO 利用率', data: monitor.value?.ioUtilTrend || [], color: MC.sun, unit: '%' }], yAxisName: '%' },
+  { title: '网络丢包', series: [{ name: '丢包(收+发)', data: monitor.value?.netDropTrend || [], color: MC.coral, unit: '次/s' }], yAxisName: '次/s' },
+  { title: 'TCP 连接（Established）', series: [{ name: 'TCP', data: monitor.value?.tcpTrend || [], color: MC.primary, unit: '条' }], yAxisName: '条' },
 ])
 
 function fmtNum(v?: number | null): string {
@@ -362,10 +350,7 @@ const gauges = computed(() => {
 })
 
 function gaugeColor(pct: number | null | undefined) {
-  if (pct == null) return '#c0c6d1'
-  if (pct >= 85) return '#e5484d'
-  if (pct >= 70) return '#f5872b'
-  return '#2ba471'
+  return levelColor(pct)
 }
 
 const capacityRows = computed(() => {
@@ -377,14 +362,24 @@ const capacityRows = computed(() => {
     .map((r) => ({ resource: r, capacity: d.capacity[r], allocatable: d.allocatable[r] || '-' }))
 })
 
+// 镜像页签：一条镜像可能有多个 tag，逐行展开（与 Kuboard 一致），按体积降序（后端已排）
+function fmtBytes(b: number): string {
+  if (!b) return '-'
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+  let v = b
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++ }
+  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`
+}
+const imageRows = computed(() =>
+  (detail.value?.images || []).flatMap((img) =>
+    (img.names.length ? img.names : ['<none>']).map((n) => ({ name: n, sizeBytes: img.sizeBytes, sizeText: fmtBytes(img.sizeBytes) })),
+  ),
+)
+
 onMounted(() => {
   load()
-  loadMonitor() // 预加载监控数据，切到监控 tab 立即可见
-})
-
-// 切换到监控 tab 时若数据为空则重新加载
-watch(tab, (v) => {
-  if (v === 'monitor' && !monitor.value) loadMonitor()
+  loadMonitor() // 趋势图与仪表常驻「资源与指标」区，进入即加载
 })
 
 async function load() {
@@ -493,20 +488,25 @@ async function evictPod(pod: PodItem) {
   gap: 18px;
   margin-top: 14px;
   font-size: 13px;
-  color: #8a94a6;
+  color: var(--kc-mute);
 }
-.kc-strip-item b { color: #2f3b52; font-weight: 600; margin-left: 4px; }
+.kc-strip-item b { color: var(--kc-ink); font-weight: 600; margin-left: 4px; }
 .kc-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
 @media (max-width: 1200px) { .kc-two-col { grid-template-columns: 1fr; } }
 .kc-cond-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .kc-cond-row + .kc-more, .kc-cond-row + el-collapse { margin-top: 10px; }
 .kc-more { border-top: none; }
 .kc-more-title { color: var(--kc-link); font-size: 13.5px; }
+.usage-head { display: flex; align-items: center; gap: 10px; }
+.usage-head .spacer { flex: 1; }
+.kc-chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+@media (max-width: 1100px) { .kc-chart-grid { grid-template-columns: 1fr; } }
+.kc-chart-card { border: 1px solid var(--kc-border); border-radius: 4px; padding: 8px 10px; }
+.kc-chart-title { font-size: 13px; color: var(--kc-ink-2); font-weight: 600; margin-bottom: 4px; }
+.kc-kubelet-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
 .mono { font-family: var(--kc-mono); }
-.monitor-toolbar { margin-bottom: 12px; display: flex; justify-content: flex-end; }
-.kubelet-title { font-weight: 600; font-size: 14px; margin: 16px 0 8px; }
 .taint-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 .taint-actions { display: flex; gap: 8px; margin-top: 8px; }
-.taint-tip { color: #909399; font-size: 13px; margin-top: 10px; }
-.label-tip { color: #909399; font-size: 13px; margin-left: 10px; }
+.taint-tip { color: var(--el-text-color-secondary); font-size: 13px; margin-top: 10px; }
+.label-tip { color: var(--el-text-color-secondary); font-size: 13px; margin-left: 10px; }
 </style>

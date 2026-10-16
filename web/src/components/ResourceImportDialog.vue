@@ -93,5 +93,5 @@ defineExpose({ pick })
 </script>
 
 <style scoped>
-.pending { color: #909399; font-size: 13px; }
+.pending { color: var(--el-text-color-secondary); font-size: 13px; }
 </style>

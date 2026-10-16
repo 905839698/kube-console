@@ -32,6 +32,9 @@
     "vue-router": "^4.4.0"
   },
   "devDependencies": {
+    "@fontsource/chivo-mono": "^5.3.0",
+    "@fontsource/gabarito": "^5.3.0",
+    "@fontsource/hanken-grotesk": "^5.3.0",
     "@types/dagre": "^0.7.54",
     "@types/js-yaml": "^4.0.9",
     "@vitejs/plugin-vue": "^5.1.0",

@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" :title="title" width="860px" top="5vh" destroy-on-close>
+  <el-dialog v-model="visible" :title="dialogTitle" width="860px" top="5vh" destroy-on-close>
     <div class="yaml-dialog-body">
       <YamlEditor v-model="yaml" :readonly="readonly" />
     </div>
@@ -12,7 +12,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { k8sApi } from '../api'
 import YamlEditor from './YamlEditor.vue'
@@ -22,8 +22,12 @@ const props = defineProps<{
   /** 初始 YAML（打开时展示；为空则进入新建模式） */
   yaml?: string
   readonly?: boolean
+  /** 弹窗标题；不传则按只读与否取默认值 */
+  title?: string
 }>()
 const emit = defineEmits(['update:modelValue', 'applied'])
+
+const dialogTitle = computed(() => props.title || (props.readonly ?? true ? '查看 YAML' : '编辑 YAML'))
 
 const visible = ref(props.modelValue)
 const yaml = ref(props.yaml || '')

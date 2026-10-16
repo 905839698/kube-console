@@ -143,5 +143,5 @@ onBeforeUnmount(stop)
 <style scoped>
 .logs-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
 .log-box { height: calc(100vh - 180px); overflow-y: auto; background: #0d1117; border-radius: 6px; padding: 12px; }
-.log-content { color: #c9d1d9; font-family: Consolas, Menlo, monospace; font-size: 12.5px; line-height: 1.55; margin: 0; white-space: pre-wrap; word-break: break-all; }
+.log-content { color: #c9d1d9; font-family: Consolas, Menlo, monospace; font-size: 13px; line-height: 1.55; margin: 0; white-space: pre-wrap; word-break: break-all; }
 </style>

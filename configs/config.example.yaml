@@ -23,6 +23,8 @@ admin:
 
 k8s:
   # 终端调试容器镜像（内网集群需用私有仓库可拉取的镜像；env: KC_K8S_DEBUG_IMAGE）
+  # 节点 shell 由该容器 nsenter 进宿主机，控制台强制以 root 拉起（runAsUser: 0），
+  # 因此镜像自带非 root USER 也可用；要求：集群可拉取 + 内含 /bin/sh
   debugImage: busybox:1.36
 
 ci:

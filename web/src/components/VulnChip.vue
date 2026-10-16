@@ -20,7 +20,7 @@
     </el-tooltip>
   </span>
 
-  <el-dialog v-model="dlg" :title="`漏洞报告：${image}`" width="880px" top="4vh">
+  <el-dialog v-model="dlg" :title="`漏洞报告：${image}`" width="82%" top="5vh">
     <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap">
       <template v-if="report">
         <el-tag type="danger">Critical {{ countSev('Critical') }}</el-tag>
@@ -34,7 +34,7 @@
       </el-select>
       <el-button size="small" :loading="loading" @click="fetchReport">刷新</el-button>
     </div>
-    <el-table v-if="report" :data="filtered" size="small" border max-height="52vh">
+    <el-table v-if="report" :data="filtered" size="small" border max-height="70vh">
       <el-table-column label="级别" width="100" align="center">
         <template #default="{ row }"><el-tag size="small" :type="sevTag(row.severity)">{{ row.severity }}</el-tag></template>
       </el-table-column>
@@ -44,14 +44,20 @@
           <span v-else class="mono">{{ row.id }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="pkgName" label="受影响包" min-width="150" show-overflow-tooltip />
-      <el-table-column label="版本" width="190">
+      <el-table-column label="CVSS" width="80" align="center">
         <template #default="{ row }">
-          <span class="mono">{{ row.installedVersion }}</span>
-          <span v-if="row.fixedVersion" style="color: #67c23a"> → {{ row.fixedVersion }}</span>
+          <span v-if="row.cvssScore" :style="{ color: row.cvssScore >= 9 ? 'var(--kc-crit-text)' : row.cvssScore >= 7 ? 'var(--kc-warn-text)' : 'var(--kc-mute)' }">{{ row.cvssScore.toFixed(1) }}</span>
+          <span v-else>-</span>
         </template>
       </el-table-column>
-      <el-table-column prop="title" label="标题 / 描述" min-width="230" show-overflow-tooltip>
+      <el-table-column prop="pkgName" label="受影响包" min-width="220" show-overflow-tooltip />
+      <el-table-column label="版本（当前 → 修复）" width="280">
+        <template #default="{ row }">
+          <span class="mono ver">{{ row.installedVersion }}</span>
+          <span v-if="row.fixedVersion" class="ver-fix"> → {{ row.fixedVersion }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column prop="title" label="标题 / 描述" min-width="320" show-overflow-tooltip>
         <template #default="{ row }">{{ row.title || row.description || '-' }}</template>
       </el-table-column>
     </el-table>
@@ -126,5 +132,8 @@ onMounted(fetchReport)
 <style scoped>
 .vchip { display: inline-block; }
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
-.scan-meta { color: #909399; font-size: 13px; }
+.scan-meta { color: var(--el-text-color-secondary); font-size: 13px; }
+/* 版本列超长 dpkg 版本号允许折行（与镜像仓库漏洞弹窗同口径） */
+.ver { word-break: break-all; }
+.ver-fix { color: var(--el-color-success); word-break: break-all; }
 </style>

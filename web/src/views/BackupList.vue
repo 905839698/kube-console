@@ -83,7 +83,7 @@
         <el-table-column label="创建时间" width="150">
           <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="190" fixed="right">
+        <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" plain :disabled="!canAdmin || !restorable(row)" @click="openRestore(row)">恢复</el-button>
             <el-button size="small" text @click="openDetail('Backup', row)">详情</el-button>
@@ -164,7 +164,7 @@
         <el-table-column label="创建时间" width="150">
           <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="140" fixed="right">
+        <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
             <el-button size="small" text @click="openDetail('Restore', row)">详情</el-button>
             <el-button size="small" text type="danger" :disabled="!canAdmin" @click="delRestore(row)">删除</el-button>

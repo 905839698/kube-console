@@ -851,6 +851,7 @@ type NodeMonitor struct {
 	NetDropRate         float64         `json:"netDropRate"` // 丢包 次/s（收+发）
 	NetDropTrend        [][]float64     `json:"netDropTrend"`
 	TcpEstablished      float64         `json:"tcpEstablished"`
+	TcpTrend            [][]float64     `json:"tcpTrend"`
 	Kubelet             *KubeletMonitor `json:"kubelet,omitempty"`
 }
 
@@ -918,6 +919,7 @@ func (m *MonitorService) Node(ctx context.Context, c *kube.Client, cluster *mode
 	out.NetDropRate, _ = q(nodeAgg(`sum by(instance)(rate(node_network_receive_drop_total[5m])) + sum by(instance)(rate(node_network_transmit_drop_total[5m]))`, "sum", name))
 	out.NetDropTrend = qr(nodeAgg(`sum by(instance)(rate(node_network_receive_drop_total[5m])) + sum by(instance)(rate(node_network_transmit_drop_total[5m]))`, "sum", name))
 	out.TcpEstablished, _ = q(nodeSel(`node_netstat_Tcp_CurrEstab`, name))
+	out.TcpTrend = qr(nodeSel(`node_netstat_Tcp_CurrEstab`, name))
 
 	// ---- Kubelet 运行时（kube-prometheus-stack 会给 kubelet 指标打 node 标签；无标签时整块降级） ----
 	kb := &KubeletMonitor{}

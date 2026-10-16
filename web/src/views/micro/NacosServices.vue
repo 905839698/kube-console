@@ -33,7 +33,7 @@
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="140" fixed="right" align="center">
+        <el-table-column label="操作" width="132" fixed="right" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openInstances(row)">实例</el-button>
             <el-button link type="danger" size="small" @click="removeService(row)">删除</el-button>
@@ -207,6 +207,6 @@ onMounted(load)
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .header-right { display: flex; align-items: center; gap: 10px; }
-.muted { color: #909399; }
+.muted { color: var(--el-text-color-secondary); }
 .mono { font-family: Consolas, monospace; font-size: 13px; }
 </style>

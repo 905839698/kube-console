@@ -80,9 +80,9 @@ function addEntry() {
 </script>
 
 <style scoped>
-.rule-card { border: 1px solid #e4e7ed; border-radius: 6px; padding: 12px; width: 100%; margin-bottom: 8px; }
+.rule-card { border: 1px solid var(--el-border-color-light); border-radius: 6px; padding: 12px; width: 100%; margin-bottom: 8px; }
 .rule-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-weight: 600; }
 .kv-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
-.sep { color: #909399; }
-.form-tip { font-size: 13px; color: #909399; margin-bottom: 8px; line-height: 1.6; }
+.sep { color: var(--el-text-color-secondary); }
+.form-tip { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 8px; line-height: 1.6; }
 </style>

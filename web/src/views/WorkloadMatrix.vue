@@ -102,8 +102,8 @@ function goList(ns: string, kind: string) {
 
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
-.ns-name { font-weight: 600; color: #1f2937; }
-.ns-total { margin-left: 8px; font-size: 13px; color: #9ca3af; }
+.ns-name { font-weight: 600; color: var(--kc-ink); }
+.ns-total { margin-left: 8px; font-size: 13px; color: var(--kc-mute); }
 .cell {
   display: inline-flex;
   align-items: center;
@@ -115,10 +115,10 @@ function goList(ns: string, kind: string) {
   font-size: 13px;
 }
 .cell-ok { background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-weight: 600; }
-.cell-warn { background: #fdf6ec; color: #e6a23c; font-weight: 600; }
-.cell-error { background: #fef0f0; color: #f56c6c; font-weight: 600; }
-.cell-empty { color: #dcdfe6; }
+.cell-warn { background: var(--kc-tint-sun); color: var(--el-color-warning); font-weight: 600; }
+.cell-error { background: var(--kc-tint-coral); color: var(--el-color-danger); font-weight: 600; }
+.cell-empty { color: var(--el-border-color); }
 .cell-ready { font-weight: 700; }
 .cell-total { opacity: 0.7; }
-:deep(.row-empty td) { color: #c0c4cc; }
+:deep(.row-empty td) { color: var(--el-text-color-disabled); }
 </style>

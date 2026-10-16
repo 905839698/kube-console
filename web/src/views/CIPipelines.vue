@@ -58,9 +58,11 @@
           </el-table-column>
           <el-table-column label="操作" width="150" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" text type="primary" @click.stop="openDetail(row)">详情</el-button>
-              <el-button size="small" text type="warning" :disabled="!canRun" @click.stop="rerun(row)">重跑</el-button>
-              <el-button size="small" text type="danger" :disabled="!canRun || isFinished(row.status)" @click.stop="stopRun(row)">停止</el-button>
+              <div class="ops-cell">
+                <el-button size="small" text type="primary" @click.stop="openDetail(row)">详情</el-button>
+                <el-button size="small" text type="warning" :disabled="!canRun" @click.stop="rerun(row)">重跑</el-button>
+                <el-button size="small" text type="danger" :disabled="!canRun || isFinished(row.status)" @click.stop="stopRun(row)">停止</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -89,13 +91,15 @@
           <el-table-column label="版本" width="80" align="center">
             <template #default="{ row }"><el-tag v-if="row.latestVersion" size="small" type="primary">v{{ row.latestVersion }}</el-tag><span v-else class="dim">—</span></template>
           </el-table-column>
-          <el-table-column label="操作" width="300" fixed="right">
+          <el-table-column label="操作" width="252" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" type="primary" plain @click="openDesigner(row)">设计器</el-button>
-              <el-button v-if="row.latestVersion" size="small" text :disabled="!canRun" @click="openRun(row)">运行</el-button>
-              <el-button size="small" text @click="openPipeDlg(row)">编辑</el-button>
-              <el-button size="small" text type="warning" :disabled="!canWrite" @click="openDup(row)">复制</el-button>
-              <el-button size="small" text type="danger" :disabled="!canWrite" @click="delPipe(row)">删除</el-button>
+              <div class="ops-cell">
+                <el-button size="small" type="primary" plain @click="openDesigner(row)">设计器</el-button>
+                <el-button v-if="row.latestVersion" size="small" text :disabled="!canRun" @click="openRun(row)">运行</el-button>
+                <el-button size="small" text @click="openPipeDlg(row)">编辑</el-button>
+                <el-button size="small" text type="warning" :disabled="!canWrite" @click="openDup(row)">复制</el-button>
+                <el-button size="small" text type="danger" :disabled="!canWrite" @click="delPipe(row)">删除</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -130,7 +134,7 @@
           <el-table-column label="创建时间" width="160">
             <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="210" fixed="right">
+          <el-table-column label="操作" width="165" fixed="right">
             <template #default="{ row }">
               <el-button size="small" text @click="openCache(row)">缓存</el-button>
               <el-button size="small" text :disabled="!perm.canWriteNS(row.namespace)" @click="openProjDlg(row)">编辑</el-button>
@@ -464,7 +468,7 @@
       >
         <el-option v-for="r in (runMode === 'branch' ? runRefs.branches : runRefs.tags)" :key="r" :label="r" :value="r" />
       </el-select>
-      <div v-if="runRefs.err" style="margin-top: 8px; color: #e6a23c; font-size: 13px">{{ runRefs.err }}</div>
+      <div v-if="runRefs.err" style="margin-top: 8px; color: var(--el-color-warning); font-size: 13px">{{ runRefs.err }}</div>
       <template #footer>
         <el-button @click="runDlg = false">取消</el-button>
         <el-button type="primary" :loading="running" @click="doRun">运行</el-button>
@@ -903,11 +907,11 @@ const dagFlow = computed(() => {
   const statusOf: Record<string, string> = {}
   for (const t of detail.value?.tasks ?? []) statusOf[t.nodeId] = t.status
   const STYLE: Record<string, { bg: string; border: string }> = {
-    success: { bg: '#f6ffed', border: '#52c41a' },
-    running: { bg: '#e6f4ff', border: '#1677ff' },
-    failed: { bg: '#fff2f0', border: '#ff4d4f' },
-    cancelled: { bg: '#fffbe6', border: '#faad14' },
-    pending: { bg: '#fafafa', border: '#d9d9d9' },
+    success: { bg: 'var(--kc-tint-mint)', border: 'var(--kc-primary)' },
+    running: { bg: 'var(--kc-tint-sky)', border: 'var(--kc-sky)' },
+    failed: { bg: 'var(--kc-tint-coral)', border: 'var(--kc-coral)' },
+    cancelled: { bg: 'var(--kc-tint-sun)', border: 'var(--kc-sun)' },
+    pending: { bg: 'var(--kc-surface-2)', border: 'var(--kc-line)' },
   }
   const nodes = g.nodes.map((n) => {
     const st = STYLE[statusOf[n.id] ?? 'pending']
@@ -1315,36 +1319,41 @@ const RunStatusTag = {
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .toolbar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
 .stat-row { display: flex; gap: 12px; margin-bottom: 14px; }
-.stat-card { flex: 1; border: 1px solid var(--kc-border, #ebeef5); border-radius: 8px; padding: 10px 14px; text-align: center; }
+.stat-card { flex: 1; border: 1px solid var(--kc-border, var(--el-border-color-lighter)); border-radius: 8px; padding: 10px 14px; text-align: center; }
 .stat-num { font-size: 22px; font-weight: 700; }
-.stat-card.ok .stat-num { color: #67c23a; }
-.stat-card.bad .stat-num { color: #f56c6c; }
-.stat-label { font-size: 13px; color: #909399; }
+.stat-card.ok .stat-num { color: var(--el-color-success); }
+.stat-card.bad .stat-num { color: var(--el-color-danger); }
+.stat-label { font-size: 13px; color: var(--el-text-color-secondary); }
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
 /* 制品详情：长镜像引用必须可折行，否则把 descriptions 表格撑爆、标签列挤成竖排 */
 .artifact-desc :deep(.el-descriptions__content),
 .artifact-desc :deep(.el-descriptions__label) { word-break: break-all; white-space: normal; }
-.dim { color: #c0c4cc; }
-.empty-tip { color: #909399; font-size: 13px; padding: 18px 0; text-align: center; }
+.dim { color: var(--el-text-color-disabled); }
+.empty-tip { color: var(--el-text-color-secondary); font-size: 13px; padding: 18px 0; text-align: center; }
 .cursor-row { cursor: pointer; }
-.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #c0c4cc; }
-.dot.st-success { background: #67c23a; }
-.dot.st-failed { background: #f56c6c; }
-.dot.st-running { background: #409eff; }
-.dot.st-pending { background: #c0c4cc; }
-.dot.st-queued { background: #d3adf7; }
-.run-msg { color: #f56c6c; font-size: 13px; word-break: break-all; }
-.dot.st-cancelled { background: #e6a23c; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--el-text-color-disabled); }
+.dot.st-success { background: var(--el-color-success); }
+.dot.st-failed { background: var(--el-color-danger); }
+.dot.st-running { background: var(--kc-sky); }
+/* 行内操作：禁折行 + 收掉 EP 默认的 12px 兄弟间距，否则三个文本按钮就会顶出列宽 */
+.ops-cell { display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; }
+.ops-cell :deep(.el-button + .el-button) { margin-left: 0; }
+.ops-cell :deep(.el-button.is-text) { padding: 4px 6px; }
+.ops-cell :deep(.el-button:not(.is-text)) { padding: 4px 10px; }
+.dot.st-pending { background: var(--el-text-color-disabled); }
+.dot.st-queued { background: var(--kc-grape); }
+.run-msg { color: var(--el-color-danger); font-size: 13px; word-break: break-all; }
+.dot.st-cancelled { background: var(--el-color-warning); }
 .sec-title { font-weight: 600; margin: 10px 0 8px; }
 .task-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .task-name { font-weight: 600; }
-.task-type { color: #909399; font-size: 13px; }
-.task-dur { color: #909399; font-size: 13px; }
+.task-type { color: var(--el-text-color-secondary); font-size: 13px; }
+.task-dur { color: var(--el-text-color-secondary); font-size: 13px; }
 .task-results { margin-top: 8px; }
-.logs-box { margin: 0; max-height: 62vh; overflow: auto; padding: 10px; background: #0d1117; color: #c9d1d9; font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; border-radius: 6px; }
-.cfg-tip { color: #909399; font-size: 13px; }
+.logs-box { margin: 0; max-height: 62vh; overflow: auto; padding: 10px; background: #0d1117; color: #c9d1d9; font: 13px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; border-radius: 6px; }
+.cfg-tip { color: var(--el-text-color-secondary); font-size: 13px; }
 .cred-kv { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
-.dag-box { height: 480px; border: 1px solid #ebeef5; border-radius: 8px; overflow: hidden; }
+.dag-box { height: 480px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; overflow: hidden; }
 .dag-node { border-radius: 8px; font-size: 13px; white-space: nowrap; }
-.dag-legend { margin-top: 10px; font-size: 13px; color: #909399; display: flex; gap: 6px; align-items: center; }
+.dag-legend { margin-top: 10px; font-size: 13px; color: var(--el-text-color-secondary); display: flex; gap: 6px; align-items: center; }
 </style>

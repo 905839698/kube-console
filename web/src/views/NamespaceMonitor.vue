@@ -3,7 +3,7 @@
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
-          <el-page-header :content="`命名空间监控 / ${name}`" @back="router.back()" />
+          <el-page-header :content="`命名空间监控 / ${name}`" @back="router.push('/namespaces')" />
           <div class="header-right"><RangeSwitch v-model="range" @change="load" /><el-button :icon="Refresh" circle @click="load" style="margin-left: 12px" /></div>
         </div>
       </template>
@@ -18,6 +18,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { METRIC_COLORS as MC } from '../utils/chart-palette'
 import { useRoute, useRouter } from 'vue-router'
 import { k8sApi, type NamespaceMonitor } from '../api'
 import { Refresh } from '@element-plus/icons-vue'
@@ -35,14 +36,14 @@ const data = ref<NamespaceMonitor>()
 const loading = ref(false)
 
 const cards = computed<MetricCardDef[]>(() => [
-  { label: 'CPU 用量', value: data.value?.cpuUsage ?? null, unit: '核', decimals: 2, color: '#409eff', sub: pctOfLimit(data.value?.cpuUsagePctOfLimit) },
-  { label: '内存用量', value: data.value?.memUsageMi ?? null, unit: 'Mi', decimals: 0, color: '#67c23a', sub: pctOfLimit(data.value?.memUsagePctOfLimit) },
-  { label: 'CPU Requests', value: data.value?.cpuRequests ?? null, unit: '核', decimals: 2, color: '#409eff', sub: `Limits ${fmtNum(data.value?.cpuLimits)} 核` },
-  { label: '内存 Requests', value: data.value?.memRequestsMi ?? null, unit: 'Mi', decimals: 0, color: '#67c23a', sub: `Limits ${fmtNum(data.value?.memLimitsMi)} Mi` },
-  { label: 'Pod 数量', value: data.value?.podCount ?? null, unit: '个', decimals: 0, color: '#e6a23c' },
-  { label: '磁盘写', value: data.value?.diskWriteMBs ?? null, unit: 'MB/s', decimals: 2, color: '#909399' },
-  { label: '网络接收', value: data.value?.netRxMBs ?? null, unit: 'MB/s', decimals: 2, color: '#f56c6c' },
-  { label: '网络发送', value: data.value?.netTxMBs ?? null, unit: 'MB/s', decimals: 2, color: '#9254de' },
+  { label: 'CPU 用量', value: data.value?.cpuUsage ?? null, unit: '核', decimals: 2, color: MC.primary, sub: pctOfLimit(data.value?.cpuUsagePctOfLimit) },
+  { label: '内存用量', value: data.value?.memUsageMi ?? null, unit: 'Mi', decimals: 0, color: MC.sky, sub: pctOfLimit(data.value?.memUsagePctOfLimit) },
+  { label: 'CPU Requests', value: data.value?.cpuRequests ?? null, unit: '核', decimals: 2, color: MC.primary, sub: `Limits ${fmtNum(data.value?.cpuLimits)} 核` },
+  { label: '内存 Requests', value: data.value?.memRequestsMi ?? null, unit: 'Mi', decimals: 0, color: MC.sky, sub: `Limits ${fmtNum(data.value?.memLimitsMi)} Mi` },
+  { label: 'Pod 数量', value: data.value?.podCount ?? null, unit: '个', decimals: 0, color: MC.sun },
+  { label: '磁盘写', value: data.value?.diskWriteMBs ?? null, unit: 'MB/s', decimals: 2, color: MC.mute },
+  { label: '网络接收', value: data.value?.netRxMBs ?? null, unit: 'MB/s', decimals: 2, color: MC.coral },
+  { label: '网络发送', value: data.value?.netTxMBs ?? null, unit: 'MB/s', decimals: 2, color: MC.grape },
 ])
 
 function pctOfLimit(v?: number | null): string {
@@ -53,15 +54,15 @@ function fmtNum(v?: number | null): string {
 }
 
 const charts = computed<MetricChartDef[]>(() => [
-  { title: 'CPU 用量趋势', series: [{ name: 'CPU', data: data.value?.cpuUsageTrend || [], color: '#409eff', unit: '核' }], yAxisName: '核' },
-  { title: '内存用量趋势', series: [{ name: '内存', data: data.value?.memUsageTrend || [], color: '#67c23a', unit: 'Mi' }], yAxisName: 'Mi' },
-  { title: 'Pod 数量趋势', series: [{ name: 'Pod 数', data: data.value?.podCountTrend || [], color: '#e6a23c', unit: '个' }], yAxisName: '个' },
-  { title: '磁盘写趋势', series: [{ name: '磁盘写', data: data.value?.diskWriteTrend || [], color: '#909399', unit: 'MB/s' }], yAxisName: 'MB/s' },
+  { title: 'CPU 用量趋势', series: [{ name: 'CPU', data: data.value?.cpuUsageTrend || [], color: MC.primary, unit: '核' }], yAxisName: '核' },
+  { title: '内存用量趋势', series: [{ name: '内存', data: data.value?.memUsageTrend || [], color: MC.sky, unit: 'Mi' }], yAxisName: 'Mi' },
+  { title: 'Pod 数量趋势', series: [{ name: 'Pod 数', data: data.value?.podCountTrend || [], color: MC.sun, unit: '个' }], yAxisName: '个' },
+  { title: '磁盘写趋势', series: [{ name: '磁盘写', data: data.value?.diskWriteTrend || [], color: MC.mute, unit: 'MB/s' }], yAxisName: 'MB/s' },
   {
     title: '网络流量',
     series: [
-      { name: '接收', data: data.value?.netRxTrend || [], color: '#f56c6c', unit: 'MB/s' },
-      { name: '发送', data: data.value?.netTxTrend || [], color: '#9254de', unit: 'MB/s' },
+      { name: '接收', data: data.value?.netRxTrend || [], color: MC.coral, unit: 'MB/s' },
+      { name: '发送', data: data.value?.netTxTrend || [], color: MC.grape, unit: 'MB/s' },
     ],
     yAxisName: 'MB/s',
   },

@@ -121,11 +121,11 @@ function toVEs(edges: CIPEdge[]): Edge[] {
       sourceHandle: e.branch || undefined,
       animated: true,
       style: {
-        stroke: e.branch === 'yes' ? '#52c41a' : e.branch === 'no' ? '#ff4d4f' : '#999',
+        stroke: e.branch === 'yes' ? '#17b89a' : e.branch === 'no' ? '#ff7a59' : '#8ba29b',
         strokeWidth: isBranch ? 2 : 1.5,
       },
       label: isBranch ? (e.branch === 'yes' ? '是' : '否') : undefined,
-      labelStyle: { fontSize: 12, fill: e.branch === 'yes' ? '#52c41a' : '#ff4d4f' },
+      labelStyle: { fontSize: 13, fill: e.branch === 'yes' ? '#17b89a' : '#ff7a59' },
       labelBgStyle: { fill: '#fff' },
     }
   })
@@ -286,31 +286,31 @@ function idOf(d: CanvasData) { return d.selfId ?? '' }
 .ci-canvas :deep(.vue-flow) { width: 100%; height: 100%; }
 .layout-btn {
   position: absolute; top: 8px; right: 8px; z-index: 10;
-  padding: 4px 10px; border-radius: 6px; border: 1px solid #d9d9d9;
+  padding: 4px 10px; border-radius: 6px; border: 1px solid var(--kc-line);
   background: #fff; cursor: pointer; font-size: 13px;
 }
 .ci-node, .cond-node {
   position: relative; padding: 8px 12px; border-radius: 8px;
-  font-size: 13px; min-width: 120px; background: #e6f4ff; border: 1px solid #91caff;
+  font-size: 13px; min-width: 120px; background: var(--kc-tint-sky); border: 1px solid var(--kc-sky);
 }
-.ci-node.sel { border-color: #1677ff; background: #bae0ff; }
-.cond-node { min-width: 140px; background: #fff7e6; border-color: #ffd591; }
-.cond-node.sel { border-color: #fa8c16; background: #ffe7ba; }
+.ci-node.sel { border-color: var(--kc-sky); background: #d8ecff; }
+.cond-node { min-width: 140px; background: var(--kc-tint-sun); border-color: var(--kc-sun); }
+.cond-node.sel { border-color: var(--kc-warn-text); background: #ffe9b8; }
 /* 关闭的节点：置灰 + 虚线，一眼可见编译时会被跳过 */
-.ci-node.off, .cond-node.off { opacity: 0.55; border-style: dashed; border-color: #bfbfbf; background: #f5f5f5; filter: grayscale(0.9); }
-.ci-node.off .lbl, .cond-node.off .lbl { color: #8c8c8c; text-decoration: line-through; }
-.ci-node.off .sub, .cond-node.off .sub { color: #fa8c16; }
+.ci-node.off, .cond-node.off { opacity: 0.55; border-style: dashed; border-color: var(--kc-line); background: var(--kc-surface-2); filter: grayscale(0.9); }
+.ci-node.off .lbl, .cond-node.off .lbl { color: var(--kc-mute); text-decoration: line-through; }
+.ci-node.off .sub, .cond-node.off .sub { color: var(--kc-warn-text); }
 .lbl { font-weight: 600; }
-.sub { color: #999; font-size: 12px; }
+.sub { color: var(--kc-mute); font-size: 13px; }
 .del {
   position: absolute; top: -9px; right: -9px; width: 18px; height: 18px; border-radius: 50%;
-  background: #fff; border: 1px solid #ff4d4f; color: #ff4d4f; font-size: 13px;
+  background: #fff; border: 1px solid var(--kc-coral); color: var(--kc-coral); font-size: 13px;
   line-height: 15px; text-align: center; cursor: pointer; z-index: 2;
 }
-.dot { background: #1677ff; }
-.dot.green { background: #52c41a; }
-.dot.red { background: #ff4d4f; }
-.branch { position: absolute; right: -26px; font-size: 12px; }
-.branch.yes { top: 8px; color: #52c41a; }
-.branch.no { top: 30px; color: #ff4d4f; }
+.dot { background: var(--kc-sky); }
+.dot.green { background: var(--kc-primary-deep); }
+.dot.red { background: var(--kc-coral); }
+.branch { position: absolute; right: -26px; font-size: 13px; }
+.branch.yes { top: 8px; color: var(--kc-primary-deep); }
+.branch.no { top: 30px; color: var(--kc-coral); }
 </style>

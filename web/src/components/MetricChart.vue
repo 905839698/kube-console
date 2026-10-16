@@ -51,7 +51,7 @@ function render() {
               type: 'text',
               left: 'center',
               top: 'middle',
-              style: { text: '暂无数据', fill: '#c0c4cc', fontSize: 13 },
+              style: { text: '暂无数据', fill: '#a6bab4', fontSize: 13 },
             },
           ],
       color: seriesColors(series),

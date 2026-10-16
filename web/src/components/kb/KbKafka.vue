@@ -249,9 +249,9 @@ async function runConsume() {
 
 <style scoped>
 .ops-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.tip { font-size: 13px; color: #9ca3af; }
-.err-box { margin-top: 8px; padding: 8px 10px; background: #fef2f2; color: #b91c1c; font-size: 13px; white-space: pre-wrap; border-radius: 4px; }
+.tip { font-size: 13px; color: var(--kc-mute); }
+.err-box { margin-top: 8px; padding: 8px 10px; background: var(--kc-tint-coral); color: var(--kc-crit-text); font-size: 13px; white-space: pre-wrap; border-radius: 4px; }
 .cfg-tag { margin: 0 6px 4px 0; }
 .sub-table { margin: 6px 12px; width: calc(100% - 24px); }
-.out-box { margin-top: 10px; max-height: 320px; overflow: auto; background: #f8fafc; border: 1px solid #e5e7eb; padding: 8px; font-size: 13px; white-space: pre-wrap; }
+.out-box { margin-top: 10px; max-height: 320px; overflow: auto; background: var(--kc-surface-2); border: 1px solid var(--kc-line); padding: 8px; font-size: 13px; white-space: pre-wrap; }
 </style>

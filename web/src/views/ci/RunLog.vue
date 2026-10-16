@@ -137,12 +137,12 @@ watch(lines, () => {
 </script>
 
 <style scoped>
-.log-meta { font-size: 13px; color: #909399; margin-bottom: 4px; display: flex; justify-content: space-between; }
+.log-meta { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 4px; display: flex; justify-content: space-between; }
 .log-box {
   margin: 0; height: 420px; overflow-y: auto; background: #1e1e1e; color: #d4d4d4;
   padding: 12px; border-radius: 8px; font-size: 13px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-all;
 }
 .waiting { color: #888; }
-.warn { color: #faad14; white-space: normal; }
+.warn { color: var(--kc-warn-text); white-space: normal; }
 </style>

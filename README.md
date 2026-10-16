@@ -4,16 +4,16 @@
 
 资源数据不缓存、每次直连 kube-apiserver；外部系统（Prometheus / ES / Harbor / Tekton / ArgoCD / Velero / Nacos）未接入时相关页面优雅降级并给出配置指引，不报错。
 
-> 以下截图取自一套接入真实生产集群（14 节点 / 18 命名空间 / 124 Deployment）的部署实例。
+> 以下截图取自一套接入真实集群（3 节点 / 14 命名空间 / 39 工作负载，Kubernetes v1.36 + OpenEBS LVM + KubeBlocks + Velero）的部署实例，**截图仍是迁移前的深蓝主题，配色以 `web/src/styles/theme.css` 为准**。
 
 ## 界面与交互
 
-- **主题**：Kuboard 风格——深蓝主色（`#2B4B83`）+ 浅色侧边栏（白底、活动项浅蓝底 + 深蓝文字）+ 深蓝表头白字列表 + 分区卡片式详情页（状态胶囊、键值网格、资源用量进度条与环形仪表）；深色模式在用户菜单切换；主题色集中定义于 `web/src/styles/theme.css`
+- **主题**：Meadow 青野——晨露青绿主色（`#17b89a`）+ 浅色画布（`#f3f8f5`）+ 白卡柔影大圆角 + 浅灰绿表头墨字列表 + 分区卡片式详情页（浅底状态胶囊、键值网格、胶囊用量条与环形仪表）；信号色珊瑚橙/向日黄/冷蓝只标关键水位；深色模式在用户菜单切换；令牌集中定义于 `web/src/styles/theme.css`，契约见 [DESIGN.md](DESIGN.md)
 - **全局搜索**：顶栏搜索框，输入即搜（Pod / 工作负载 / Service / ConfigMap / 命名空间 / 节点），结果按类型分组，点击直达详情
 - **全局命名空间选择**：顶栏命名空间多选（含「全选」），命名空间相关页面联动跟随；筛选状态与 URL 同步（`?namespace=` 刷新/分享可复现）
 - **全局集群切换**：顶栏下拉切换已注册集群（`X-Cluster` 请求头）；集群不可达时展示告警面板与「重新检测」，不会把请求挂死
-- **左树右面板**：工作负载 / Pod 详情页左侧资源树（工作负载 → Pod → 容器，状态色点），右侧面板联动
-- **进详情与文本复制**：工作负载 / Pod 列表**不绑定行点击跳转**（否则想选中或双击复制名称、IP、镜像时会被带进详情页），进详情走蓝色名称链接或操作 → 详情；其余列表（资源 / 节点 / CI 运行 / ArgoCD 应用）仍支持行点击直达详情，且**只要拖选出选区就不跳转**，复制不受影响。Service 列表点名称展示 **selector 匹配的后端 Pod 列表**（状态/就绪/重启/IP/节点），YAML 详情走操作列
+- **详情页分区卡片**：工作负载详情为 Kuboard 式三栏（历史版本时间线 → 容器组列表 → 选中容器组详情），非 Deployment 类型左栏退回资源树（工作负载 → Pod → 容器，状态色点）；节点 / Pod 详情为状态胶囊 + 键值网格 + 资源进度条/仪表的分区卡片
+- **进详情与文本复制**：工作负载 / Pod 列表**不绑定行点击跳转**（否则想选中或双击复制名称、IP、镜像时会被带进详情页），进详情走青绿色名称链接（操作列已摊平成 编辑 / YAML / 缩放 / 重启 / 历史 / 镜像 / 删除 文本按钮，不再放「详情」；Pod 行为 日志 / 终端 / 驱除 / 删除）；其余列表（资源 / 节点 / CI 运行 / ArgoCD 应用）仍支持行点击直达详情，且**只要拖选出选区就不跳转**，复制不受影响。Service 列表点名称展示 **selector 匹配的后端 Pod 列表**（状态/就绪/重启/IP/节点），YAML 详情走操作列
 - **个人能力**：修改密码、**个人 API Token**（创建 / 吊销，脚本化调用 `Authorization: Bearer`）、深色模式
 
 ### 集群总览（监控下钻的第一级）
@@ -24,13 +24,13 @@
 
 ## 菜单结构
 
-一级菜单 13 项（总览 + 12 个分组）：
+导航分两层：**左侧导轨只放一级分组**（总览 + 12 个分组），**选中分组的子项横排在内容区顶部页签**（与 CI 流水线页的页签同一观感，子项多时页签条自带横向滚动）。点分组直达它的第一个可见子项；进详情页（节点 / Pod / 工作负载详情）时按路径前缀回推分组与页签，高亮不丢。
 
 ```
 集群总览
 集群          集群管理（仅平台角色）· 命名空间 / 节点 / 自定义资源
 工作负载       矩阵视图 / Deployment / StatefulSet / DaemonSet / CronJob / Job / Pod / HPA
-服务与网络     服务与路由（服务 / EndpointSlice / 路由 / Ingress 类）· 网关（Gateway API 全量）· 网络策略
+服务与网络     服务 / EndpointSlice / 路由 / Ingress 类 / 网关（Gateway API 全量）/ 网络策略（原三级分组已摊平进顶部页签）
 配置中心       ConfigMap / Secret / ServiceAccount
 存储           PVC / PV / StorageClass
 可观测性       监控 / 控制平面组件 / 告警 / Grafana 面板 / 事件中心 / 日志检索
@@ -46,7 +46,7 @@ CI / CD       CI 流水线 / ArgoCD 应用 / ArgoCD 仓库 / Helm Releases / Cha
 
 隐藏路由（不在菜单，由列表跳转进入）：工作负载详情 `/workloads/:kind/:name`、Pod 详情 `/pods/:ns/:name`、节点详情 `/nodes/:name`、命名空间监控 `/monitor/namespace/:name`、Helm Release 详情 `/helm/releases/:name`、CRD 浏览 `/crd/:group/:version/:resource`、流水线设计器 `/ci/pipelines/:id/design`。
 
-上面每一项都**不是写死显示**的：后端按「该用户在当前集群能读哪些资源」推导出可见菜单键集合（`/rbac/my-permissions` 的 `menus` 字段），侧边栏与路由守卫都只渲染这份集合，直接敲 URL 也会被 redirected 到他自己能看的第一个页面。详见 [权限管理 → 菜单按能力显隐](#菜单按能力显隐与接口收口)。
+上面每一项都**不是写死显示**的：后端按「该用户在当前集群能读哪些资源」推导出可见菜单键集合（`/rbac/my-permissions` 的 `menus` 字段），侧边栏导轨、顶部页签与路由守卫都只渲染这份集合，直接敲 URL 也会被 redirected 到他自己能看的第一个页面。详见 [权限管理 → 菜单按能力显隐](#菜单按能力显隐与接口收口)。
 
 ## 功能全景
 
@@ -56,9 +56,11 @@ CI / CD       CI 流水线 / ArgoCD 应用 / ArgoCD 仓库 / Helm Releases / Cha
 | --- | --- |
 | 集群管理 | kubeconfig 粘贴注册 / 编辑 / 删除 / 连通性测试，多集群界面切换；Prometheus 地址按集群配置 + 连通性测试；**Grafana 地址按集群配置**（iframe 内嵌面板）；**熔断**：连接异常的集群自动标记，避免请求长时间挂起；**权限**：页面与 `/clusters` 完整列表仅 platform-admin（viewer 只读），普通用户经 `/my-clusters` 只取顶栏切换所需最小字段（名称/状态/Grafana 地址） |
 | 命名空间 | 列表 / 创建 / 删除 / 搜索，一键进入**命名空间监控**独立页 |
-| 节点 | 列表与详情（容量、Conditions、污点、节点上 Pod、监控面板）；**运维操作**：封锁/解除封锁（cordon）、排水（drain，可选 force / 忽略 DaemonSet / emptyDir 处理 / 宽限期 / 超时）、污点与标签编辑；**节点终端**：自动创建 nsenter 调试 Pod 进入宿主机 shell（**需集群级写权限**） |
+| 节点 | 列表与详情（**Kuboard 式分区卡片**：状态胶囊与运行时信息条、节点条件胶囊行、关联事件、内存/临时存储/容器组数量用量条与 CPU/内存/磁盘/负载/TCP 连接环形仪表 + 趋势图同区展示、污点/标签编辑、节点上 Pod、**镜像列表**（kubelet status.images，按体积降序））；**运维操作**：封锁/解除封锁（cordon）、排水（drain，可选 force / 忽略 DaemonSet / emptyDir 处理 / 宽限期 / 超时）、污点与标签编辑；**节点终端**：详情页 Shell 按钮或列表行内入口，自动创建 nsenter 调试 Pod 进入宿主机 shell（**需集群级写权限**） |
 | 自定义资源 | discovery 驱动的**资源浏览器**：按 API group 折叠展示全部官方资源与 CRD（KubeBlocks / Elastic / Tekton / Gateway API 等），搜索 / 强刷 / 浏览 / 删除 / YAML 编辑 |
 | 配额 | ResourceQuota 总览（按命名空间汇总 used/hard，可编辑）+ LimitRange |
+
+![节点详情](docs/images/13-node-detail.png)
 
 ### 工作负载与 Pod
 
@@ -69,7 +71,7 @@ CI / CD       CI 流水线 / ArgoCD 应用 / ArgoCD 仓库 / Helm Releases / Cha
 | --- | --- |
 | 控制器列表 | Deployment / StatefulSet / DaemonSet / CronJob / Job / HPA：搜索、**批量删除 / 批量重启**、行内缩放 / 滚动重启 / 回滚 / 删除、**导出 / 导入**、新建（表单 + YAML）；Pod 融入同一列表框架（状态 / 就绪 / 重启 / IP / 节点 / 镜像列） |
 | 矩阵视图 | 命名空间 × 工作负载类型二维矩阵（ready/total 着色），点格子直达对应列表。列为 Deployment / StatefulSet / DaemonSet / **InstanceSet** / **Pod**：InstanceSet 是 KubeBlocks 副本的实际载体（读 `spec.replicas` 与 `status.readyReplicas`，格子跳通用 CRD 页），**只在装了 addon 的集群出现**；Pod 列按容器就绪计（`Running`/`Completed` 记就绪），不参与行合计，免得与控制器副本重复计数 |
-| 工作负载详情 | 左树右面板：关联 Pod 与事件、**缩放 / 滚动重启 / 发布历史与一键回滚**（rollouts 时间线）、**调整镜像**（Tag 下拉来自已配置仓库，可手填）、容器级监控面板、日志采集开关、YAML / 表单编辑 |
+| 工作负载详情 | **Kuboard 式三栏**：发布进度状态条（期望/就绪/可用/最新/不可用）+ 关联事件卡；左栏 Deployment **历史版本时间线**（正常/非当前/已缩容标记，行内**回滚 / YAML / 删 RS**），中栏容器组列表（Ready 胶囊、IP/节点/重启），右栏选中容器组详情（**Prometheus CPU/内存趋势**、容器组事件、条件时间线、容器卡片：状态 chips / 端口 chips / 日志 / 终端 / 文件）；底部工作负载级监控；另有**缩放 / 滚动重启 / 调整镜像**（Tag 下拉来自已配置仓库）、日志采集开关、YAML / 表单编辑 |
 | Pod 详情 | 容器与初始化容器状态、Conditions、事件、**容忍**、Pod 监控；**Web 终端**、**日志**、**容器文件浏览器**（浏览 / 下载 / 上传 / 新建 / 重命名 / 删除）、**镜像 CVE 徽标**（点击弹明细）、驱除（Eviction API，尊重 PDB）与删除 |
 
 ![工作负载详情](docs/images/03-workload-detail.png)
@@ -90,13 +92,13 @@ CI / CD       CI 流水线 / ArgoCD 应用 / ArgoCD 仓库 / Helm Releases / Cha
 | --- | --- |
 | 集群 | 集群总览（见上文截图） |
 | 命名空间 | `/monitor/namespace/:name` 独立页 |
-| 节点 | 节点详情 → 监控 |
-| 工作负载 | 工作负载详情 → 监控（按容器聚合） |
+| 节点 | 节点详情 → 资源与指标（用量条 + 仪表 + 趋势图同区） |
+| 工作负载 | 工作负载详情 → 选中容器组的 Prometheus CPU/内存趋势（Pod 级） |
 | Pod | Pod 详情 → 监控 |
 
 「可观测性 → 监控」页提供 **PromQL 控制台**：表达式输入 + 即时/区间图（ECharts）+ 结果指标表 + 时间范围 `1h/6h/24h/7d`，内置快捷查询（集群 CPU / 集群内存 / 节点 CPU 使用率 / Pod 数量 / API 请求 QPS / 节点负载），用于临时验证指标与容量。
 
-**控制平面组件**（可观测性独立页 `/monitor/controlplane`）：从集群总览迁出，做成**两级按需查询**——列表只查 `up` + 每组件 1 个概要指标（API Server / Controller Manager / Scheduler / kube-proxy / CoreDNS / etcd / Prometheus 就绪状态与健康色），点开抽屉才查该组件**全部指标卡 + 趋势图**（ECharts，`1h/6h/24h` 档位，step 由后端放宽，点数封顶）。指标更全：apiserver 加在途读写/Goroutine/RSS，etcd 加后端 commit P99/提案失败/实例数，coredns 加缓存命中率/P99 解析延迟等。**分级的目的**：总览每次刷新不再背着 ~18 个控制面 instant + 3 个 range 查询，未点开的组件零成本，对 Prometheus 压力反而低于旧的整块拉取。
+**控制平面组件**（可观测性独立页 `/monitor/controlplane`）：从集群总览迁出，**全部组件平摊展开**——每个组件一张卡片，头部给就绪状态与实例数，卡内给全部指标瓦片 + 趋势图（ECharts，`1h/6h/24h` 档位，step 由后端放宽，点数封顶）；时间档位与刷新是全局的，改档位即整页重查。指标覆盖：apiserver 在途读写/Goroutine/RSS，etcd 后端 commit P99/提案失败/实例数，coredns 缓存命中率/P99 解析延迟等。**开销口径**：页面先由列表接口渲染 7 个组件的状态与概要指标，再逐组件请求详情、**并发限 3**、先到先填，避免一次性把 Prometheus 打满；总览页不再背着这些控制面查询。
 
 ![PromQL 监控查询](docs/images/05-monitor.png)
 ![命名空间监控](docs/images/07-namespace-monitor.png)
@@ -256,8 +258,10 @@ OpenAPI 客户端**自动探测版本风格**：1.x/2.x 走 v1 API，3.x 走 `/v
 | 角色管理 | 内置角色只读展示；自定义角色按授权项目录勾选生成 |
 | 审计日志 | 写操作审计，过滤与分页，按保留期自动清理 |
 | 日志源 | 按集群配置 Elasticsearch：连接信息（ns/svc/port 或直连地址、basic auth）、**行日志索引前缀**（标准输出 + 单行文本采集，支持 `{namespace}` 占位符）、**JSON 采集索引前缀**（默认 `logstash-`）、事件归档开关与前缀 |
-| 通知 / 镜像仓库 / Nacos / 备份 | 分别见对应章节；备份概览汇聚 **Velero** 备份任务 / 计划 / 恢复（进度条、快照数、耗时、失败信息与关联事件、计划下次执行时间；**平台管理员可视化新建备份、新建计划、发起恢复、启停计划、删备份**，未安装 / 未配置存储位置时分别提示引导） |
+| 通知 / 镜像仓库 / Nacos / 备份 | 分别见对应章节；备份概览汇聚 **Velero** 备份任务 / 计划 / 恢复（进度条、快照数、耗时、**卷备份明细**——按 PodVolumeBackup 定位「部分失败」坏在哪个 Pod 哪个卷、关联事件、计划下次执行时间；**平台管理员可视化新建备份、新建/编辑/删除计划、发起恢复、启停计划、删备份**；表单含 **PV 快照与卷文件备份两个独立开关**（`snapshotVolumes` / `defaultVolumesToFsBackup`），模板摘要与详情同时透出，未安装 / 未配置存储位置时分别提示引导） |
 | 用量报表 | 基于 Prometheus 历史指标（container_cpu/memory + kube-state-metrics）的命名空间用量区间报表（平均/峰值），**导出 CSV** |
+
+![备份概览](docs/images/14-backups.png)
 
 ## 技术栈
 

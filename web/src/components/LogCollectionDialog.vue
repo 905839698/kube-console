@@ -135,7 +135,7 @@ watch(() => props.modelValue, (v) => {
 
 <style scoped>
 .status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; }
-.status-path { font-family: ui-monospace, Consolas, monospace; color: #606266; font-size: 13px; word-break: break-all; }
+.status-path { font-family: ui-monospace, Consolas, monospace; color: var(--el-text-color-regular); font-size: 13px; word-break: break-all; }
 .tips { margin-bottom: 14px; }
 .tip-line { font-size: 13px; line-height: 1.7; }
 </style>

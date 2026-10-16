@@ -29,7 +29,7 @@
       <el-table-column prop="docsDeleted" label="已删" width="90" />
       <el-table-column prop="storeSize" label="存储" width="100" />
       <el-table-column prop="segmentsCount" label="段" width="80" />
-      <el-table-column label="操作" width="90">
+      <el-table-column label="操作" width="84">
         <template #default="{ row }">
           <el-button size="small" type="danger" :disabled="!writable" @click="drop(row)">删除</el-button>
         </template>
@@ -194,10 +194,10 @@ function pretty(s: string) {
 
 <style scoped>
 .ops-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.tip { font-size: 13px; color: #9ca3af; }
-.meta { font-size: 13px; color: #6b7280; }
-.warn { color: #b45309; }
+.tip { font-size: 13px; color: var(--kc-mute); }
+.meta { font-size: 13px; color: var(--kc-ink-2); }
+.warn { color: var(--kc-warn-text); }
 .head { font-weight: 600; }
-.err-box { margin-top: 8px; padding: 8px 10px; background: #fef2f2; color: #b91c1c; font-size: 13px; white-space: pre-wrap; border-radius: 4px; }
-.out-box { margin-top: 10px; max-height: 340px; overflow: auto; background: #f8fafc; border: 1px solid #e5e7eb; padding: 8px; font-size: 13px; white-space: pre-wrap; }
+.err-box { margin-top: 8px; padding: 8px 10px; background: var(--kc-tint-coral); color: var(--kc-crit-text); font-size: 13px; white-space: pre-wrap; border-radius: 4px; }
+.out-box { margin-top: 10px; max-height: 340px; overflow: auto; background: var(--kc-surface-2); border: 1px solid var(--kc-line); padding: 8px; font-size: 13px; white-space: pre-wrap; }
 </style>

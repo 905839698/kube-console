@@ -66,6 +66,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { k8sApi, type PromQueryResult } from '../api'
+import { CHART_PALETTE } from '../utils/chart-palette'
 import { Refresh } from '@element-plus/icons-vue'
 import MetricChart, { type ChartSeries } from '../components/MetricChart.vue'
 import RangeSwitch from '../components/RangeSwitch.vue'
@@ -94,7 +95,6 @@ const presets = [
 
 const GRAPH_MAX = 30
 const TABLE_MAX = 100
-const PALETTE = ['#00aa55', '#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9254de', '#00c1de', '#ff7f50', '#87ceeb', '#7c889a', '#d4b106', '#c059cf']
 
 // Prometheus 风格图例：metric{label="value", ...}
 function seriesName(r: PromQueryResult): string {
@@ -121,7 +121,7 @@ const chartSeries = computed<ChartSeries[]>(() =>
     .map((r, i) => ({
       name: seriesName(r),
       data: (r.values || []).map(([ts, v]) => [ts, parseFloat(v)] as [number, number]),
-      color: PALETTE[i % PALETTE.length],
+      color: CHART_PALETTE[i % CHART_PALETTE.length],
     }))
     .filter((s) => s.data.length > 0),
 )
@@ -203,13 +203,13 @@ onMounted(execute)
   font-size: 13px;
 }
 .preset-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.preset-label { font-size: 13px; color: #909399; }
+.preset-label { font-size: 13px; color: var(--el-text-color-secondary); }
 .preset-tag { cursor: pointer; }
 .preset-tag:hover { color: var(--el-color-primary); border-color: var(--el-color-primary); }
 .result-card { margin-top: 16px; }
-.result-meta { font-size: 13px; color: #909399; }
-.empty-tip { color: #909399; font-size: 13px; padding: 32px 0; text-align: center; }
+.result-meta { font-size: 13px; color: var(--el-text-color-secondary); }
+.empty-tip { color: var(--el-text-color-secondary); font-size: 13px; padding: 32px 0; text-align: center; }
 .instant-table { margin-top: 16px; }
-.cap-note { font-size: 13px; color: #e6a23c; margin-top: 8px; }
+.cap-note { font-size: 13px; color: var(--el-color-warning); margin-top: 8px; }
 .metric-name { font-size: 13px; word-break: break-all; }
 </style>

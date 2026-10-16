@@ -34,6 +34,6 @@ const remove = (i: number) => {
 </script>
 
 <style scoped>
-.tip { font-size: 13px; color: #909399; margin-bottom: 6px; }
+.tip { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 6px; }
 .match-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 </style>

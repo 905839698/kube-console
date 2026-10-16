@@ -34,7 +34,7 @@
         </template>
       </el-table-column>
       <el-table-column prop="createdAt" label="创建时间" width="160" />
-      <el-table-column label="操作" width="150" fixed="right">
+      <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="openDetail(row)">详情</el-button>
           <el-button size="small" text type="danger" :disabled="!canWriteNS(row.namespace)" @click="del(row)">删除</el-button>
@@ -1046,17 +1046,17 @@ async function saveCfg() {
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .title { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
 .title-icon { font-size: 16px; color: var(--el-color-primary); }
-.tip { font-size: 13px; color: #909399; }
-.scope-line { font-size: 13px; color: #606266; margin-bottom: 8px; }
+.tip { font-size: 13px; color: var(--el-text-color-secondary); }
+.scope-line { font-size: 13px; color: var(--el-text-color-regular); margin-bottom: 8px; }
 .detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.meta { font-size: 13px; color: #606266; }
+.meta { font-size: 13px; color: var(--el-text-color-regular); }
 /* 调度摘要可能很长（多条容忍 + 亲和），截断并用 tooltip 看全文 */
 .sched-meta { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .ops-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
 .metric-line { font-size: 13px; }
 .sec-title { font-weight: 600; margin: 12px 0 6px; font-size: 13px; }
-.err-box { background: #fef0f0; color: #c45656; padding: 8px 10px; border-radius: 4px; font-size: 13px; white-space: pre-wrap; }
-.json-box { background: #f5f7fa; padding: 8px 10px; border-radius: 4px; max-height: 260px; overflow: auto; margin: 0; }
-.help { font-style: normal; font-size: 13px; color: #909399; cursor: help; margin-left: 4px; }
+.err-box { background: var(--kc-tint-coral); color: var(--kc-crit-text); padding: 8px 10px; border-radius: 4px; font-size: 13px; white-space: pre-wrap; }
+.json-box { background: var(--el-fill-color-light); padding: 8px 10px; border-radius: 4px; max-height: 260px; overflow: auto; margin: 0; }
+.help { font-style: normal; font-size: 13px; color: var(--el-text-color-secondary); cursor: help; margin-left: 4px; }
 </style>

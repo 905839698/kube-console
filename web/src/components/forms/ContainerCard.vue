@@ -347,16 +347,16 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.container-card { border: 1px solid #e4e7ed; border-radius: 6px; padding: 12px; margin-bottom: 12px; }
+.container-card { border: 1px solid var(--el-border-color-light); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
 .container-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.container-title { font-weight: 600; color: #303133; }
+.container-title { font-weight: 600; color: var(--el-text-color-primary); }
 .kv-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; width: 100%; }
 .env-list, .port-list, .mount-list { width: 100%; }
 .env-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; width: 100%; }
 .res-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; width: 100%; }
 .sec-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; width: 100%; align-items: center; }
 .res-item { display: flex; flex-direction: column; gap: 2px; }
-.res-item > span { font-size: 13px; color: #909399; }
-.qty-err :deep(.el-input__inner) { color: #f56c6c; }
-.qty-msg { color: #f56c6c; font-size: 12px; font-style: normal; line-height: 1.4; }
+.res-item > span { font-size: 13px; color: var(--el-text-color-secondary); }
+.qty-err :deep(.el-input__inner) { color: var(--el-color-danger); }
+.qty-msg { color: var(--el-color-danger); font-size: 12px; font-style: normal; line-height: 1.4; }
 </style>

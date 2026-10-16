@@ -21,7 +21,7 @@
         <el-table-column prop="group" label="分组" width="150" show-overflow-tooltip />
         <el-table-column prop="type" label="格式" width="100" align="center" />
         <el-table-column prop="namespace" label="命名空间" min-width="130" show-overflow-tooltip />
-        <el-table-column label="操作" width="140" fixed="right" align="center">
+        <el-table-column label="操作" width="132" fixed="right" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openEditor(row)">编辑</el-button>
             <el-button link type="danger" size="small" @click="removeConfig(row)">删除</el-button>
@@ -341,7 +341,7 @@ onMounted(load)
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .header-right { display: flex; align-items: center; gap: 10px; }
-.hint { color: #909399; font-size: 13px; margin-top: 10px; }
-.hint-inline { color: #909399; font-size: 13px; }
-.content-area :deep(textarea) { font-family: Consolas, monospace; font-size: 12.5px; }
+.hint { color: var(--el-text-color-secondary); font-size: 13px; margin-top: 10px; }
+.hint-inline { color: var(--el-text-color-secondary); font-size: 13px; }
+.content-area :deep(textarea) { font-family: Consolas, monospace; font-size: 13px; }
 </style>

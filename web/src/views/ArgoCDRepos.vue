@@ -40,7 +40,7 @@
         </template>
       </el-table-column>
       <el-table-column prop="namespace" label="命名空间" width="110" />
-      <el-table-column label="操作" width="130" fixed="right">
+      <el-table-column label="操作" width="118" fixed="right">
         <template #default="{ row }">
           <el-button size="small" text type="primary" :disabled="!userStore.isAdmin" @click="openEdit(row)">编辑</el-button>
           <el-button size="small" text type="danger" :disabled="!userStore.isAdmin" @click="remove(row)">删除</el-button>
@@ -289,6 +289,6 @@ onMounted(load)
 
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
-.muted { color: #909399; font-size: 13px; }
-.form-tip { color: #909399; font-size: 13px; line-height: 1.5; margin-top: 4px; }
+.muted { color: var(--el-text-color-secondary); font-size: 13px; }
+.form-tip { color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.5; margin-top: 4px; }
 </style>

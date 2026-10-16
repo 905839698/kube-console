@@ -1,15 +1,17 @@
 <template>
   <div v-loading="loading" class="kc-page">
-    <!-- 顶部：概况 + 操作 -->
+    <!-- 头部：标题 + 操作 + 状态条 + 信息网格 -->
     <el-card shadow="never">
       <div class="kc-top-head">
-        <span class="kc-section-title"><el-icon><Grid /></el-icon>Pod 详情 / <span class="mono">{{ name }}</span></span>
+        <span class="kc-section-title">
+          <DetailBack to="/workloads/pods" label="容器组列表" :query="{ namespace }" />
+          <el-icon><Cherry /></el-icon>容器组详情 / <span class="mono">{{ name }}</span>
+        </span>
         <div class="actions">
+          <el-button v-if="detail?.ownerKind" size="small" type="primary" @click="goOwner">查看归属 {{ ownerLabel }}</el-button>
+          <el-button size="small" @click="showYaml">YAML</el-button>
+          <el-button size="small" type="danger" :disabled="noWrite" @click="doDelete">删除</el-button>
           <el-button size="small" @click="load">刷新</el-button>
-          <el-button size="small" type="success" :disabled="!perm.canWriteNS(namespace)" @click="openTerminal()">终端</el-button>
-          <el-button size="small" type="primary" @click="logsVisible = true">日志</el-button>
-          <el-button size="small" :disabled="!perm.canWriteNS(namespace)" @click="filesVisible = true">文件</el-button>
-          <el-button size="small" type="danger" :disabled="!perm.canWriteNS(namespace)" @click="doDelete">删除</el-button>
         </div>
       </div>
 
@@ -24,157 +26,169 @@
         <div class="kc-info-item"><span class="kc-info-label">集群:</span><span class="kc-info-value">{{ clusterStore.current }}</span></div>
         <div class="kc-info-item"><span class="kc-info-label">名称空间:</span><span class="kc-info-value mono">{{ detail?.namespace }}</span></div>
         <div class="kc-info-item"><span class="kc-info-label">名称:</span><span class="kc-info-value mono">{{ detail?.name }}</span></div>
+        <div class="kc-info-item"><span class="kc-info-label">创建时间:</span><span class="kc-info-value">{{ detail?.age || '-' }} 前</span></div>
         <div class="kc-info-item"><span class="kc-info-label">类型:</span><span class="kc-info-value">Pod <el-tag size="small" type="info" effect="plain">pods</el-tag></span></div>
-        <div class="kc-info-item"><span class="kc-info-label">Phase:</span><span class="kc-info-value">{{ detail?.phase }}</span></div>
-        <div class="kc-info-item"><span class="kc-info-label">IP:</span><span class="kc-info-value mono">{{ detail?.ip || '-' }}</span></div>
-        <div class="kc-info-item"><span class="kc-info-label">节点:</span><span class="kc-info-value mono">{{ detail?.nodeName || '-' }}</span></div>
-        <div class="kc-info-item"><span class="kc-info-label">ServiceAccount:</span><span class="kc-info-value mono">{{ detail?.serviceAccount || '-' }}</span></div>
-        <div class="kc-info-item"><span class="kc-info-label">启动时间:</span><span class="kc-info-value">{{ detail?.startTime || '-' }}</span></div>
       </div>
-    </el-card>
 
-    <el-card shadow="never">
-
-      <div class="detail-layout">
-        <!-- 左侧资源树 -->
-        <aside class="detail-side">
-          <div class="side-title">资源导航</div>
-          <el-tree
-            :data="treeData"
-            node-key="id"
-            :props="{ label: 'label', children: 'children' }"
-            highlight-current
-            default-expand-all
-            @node-click="onTreeClick"
-          >
-            <template #default="{ data }">
-              <span class="tree-node">
-                <span class="status-dot" :class="'dot-' + detail?.status"></span>
-                <el-icon v-if="data.type === 'container'" size="12"><Box /></el-icon>
-                <el-icon v-else size="14"><Grid /></el-icon>
-                <span class="tree-label">{{ data.label }}</span>
+      <el-collapse v-model="moreOpen" class="kc-more">
+        <el-collapse-item name="more">
+          <template #title><span class="kc-more-title">更多细节</span></template>
+          <div class="kc-info-grid" style="margin-top: 0">
+            <div class="kc-info-item"><span class="kc-info-label">Phase:</span><span class="kc-info-value">{{ detail?.phase || '-' }}</span></div>
+            <div class="kc-info-item"><span class="kc-info-label">启动时间:</span><span class="kc-info-value">{{ detail?.startTime || '-' }}</span></div>
+            <div class="kc-info-item"><span class="kc-info-label">ServiceAccount:</span><span class="kc-info-value mono">{{ detail?.serviceAccount || '-' }}</span></div>
+            <div class="kc-info-item"><span class="kc-info-label">重启策略:</span><span class="kc-info-value">{{ detail?.restartPolicy || '-' }}</span></div>
+            <div class="kc-info-item" style="grid-column: 1 / -1"><span class="kc-info-label">容忍:</span>
+              <span class="kc-info-value">
+                <template v-if="detail?.tolerations?.length"><el-tag v-for="t in detail.tolerations" :key="t" size="small" style="margin-right: 4px">{{ t }}</el-tag></template>
+                <template v-else>无</template>
               </span>
-            </template>
-          </el-tree>
-        </aside>
-
-        <!-- 右侧面板 -->
-        <section class="detail-main">
-          <template v-if="selectedType === 'pod'">
-            <el-tabs v-model="tab">
-              <!-- 容器 -->
-              <el-tab-pane label="容器" name="containers">
-                <el-table border :data="detail?.containers || []" size="small" stripe>
-                  <el-table-column prop="name" label="名称" min-width="140" />
-                  <el-table-column label="状态" width="120">
-                    <template #default="{ row }"><StatusTag :status="row.state" :text="row.reason || row.state" /></template>
-                  </el-table-column>
-                  <el-table-column prop="ready" label="就绪" width="70" align="center" />
-                  <el-table-column prop="restartCount" label="重启" width="70" align="center" />
-                  <el-table-column prop="message" label="信息" min-width="220" show-overflow-tooltip />
-                  <el-table-column prop="image" label="镜像" min-width="200" show-overflow-tooltip>
-                    <template #default="{ row }"><span class="mono-img">{{ row.image }}</span></template>
-                  </el-table-column>
-                  <el-table-column label="镜像 CVE" width="180">
-                    <template #default="{ row }">
-                      <VulnChip :image="row.image" />
-                    </template>
-                  </el-table-column>
-                </el-table>
-                <div v-if="detail?.initContainers?.length" style="margin-top: 12px">
-                  <div class="sub-title">Init 容器</div>
-                  <el-table border :data="detail.initContainers" size="small" stripe>
-                    <el-table-column prop="name" label="名称" min-width="140" />
-                    <el-table-column label="状态" width="120">
-                      <template #default="{ row }"><StatusTag :status="row.state" :text="row.reason || row.state" /></template>
-                    </el-table-column>
-                    <el-table-column prop="ready" label="就绪" width="70" align="center" />
-                    <el-table-column prop="restartCount" label="重启" width="70" align="center" />
-                  </el-table>
-                </div>
-              </el-tab-pane>
-
-              <!-- 条件 -->
-              <el-tab-pane label="Conditions" name="conditions">
-                <el-table border :data="detail?.conditions || []" size="small" stripe>
-                  <el-table-column prop="type" label="类型" min-width="180" />
-                  <el-table-column label="状态" width="100">
-                    <template #default="{ row }"><StatusTag :status="row.status === 'True' ? 'Ready' : 'NotReady'" :text="row.status" /></template>
-                  </el-table-column>
-                  <el-table-column prop="reason" label="原因" min-width="140" />
-                  <el-table-column prop="message" label="消息" min-width="260" show-overflow-tooltip />
-                  <el-table-column prop="updated" label="更新时间" width="170" />
-                </el-table>
-              </el-tab-pane>
-
-              <!-- 事件 -->
-              <el-tab-pane label="事件" name="events">
-                <EventTable :events="detail?.events || []" />
-              </el-tab-pane>
-
-              <!-- 污点容忍 -->
-              <el-tab-pane label="容忍" name="tolerations">
-                <el-empty v-if="!detail?.tolerations?.length" description="无容忍配置" :image-size="60" />
-                <el-tag v-for="t in detail?.tolerations" :key="t" style="margin: 4px">{{ t }}</el-tag>
-              </el-tab-pane>
-
-              <!-- 监控 -->
-              <el-tab-pane label="监控" name="monitor" lazy>
-                <div class="monitor-toolbar">
-                  <RangeSwitch v-model="range" @change="loadMonitor" />
-                </div>
-                <MetricPanel :cards="monitorCards" :charts="monitorCharts" :loading="monitorLoading" />
-              </el-tab-pane>
-            </el-tabs>
-          </template>
-
-          <!-- 容器视图 -->
-          <template v-else>
-            <div class="pod-view">
-              <div class="view-header">
-                <span class="view-title">
-                  <el-icon><Box /></el-icon>
-                  {{ selectedContainer?.name }}
-                </span>
-                <el-button size="small" type="success" plain :disabled="!perm.canWriteNS(namespace)" @click="openTerminal(selectedContainer?.name)">终端</el-button>
-                <el-button size="small" @click="openContainerLogs">查看日志</el-button>
-              </div>
-              <el-descriptions :column="2" border size="small">
-                <el-descriptions-item label="状态">
-                  <StatusTag :status="selectedContainer?.state || ''" :text="selectedContainer?.reason || selectedContainer?.state || '-'" />
-                </el-descriptions-item>
-                <el-descriptions-item label="就绪">{{ selectedContainer?.ready ?? '-' }}</el-descriptions-item>
-                <el-descriptions-item label="重启次数">{{ selectedContainer?.restartCount ?? '-' }}</el-descriptions-item>
-                <el-descriptions-item label="信息">{{ selectedContainer?.message || '-' }}</el-descriptions-item>
-              </el-descriptions>
             </div>
-          </template>
-        </section>
-      </div>
+            <div class="kc-info-item" style="grid-column: 1 / -1"><span class="kc-info-label">标签:</span>
+              <span class="kc-info-value"><el-tag v-for="(v, k) in detail?.labels" :key="k" size="small" style="margin-right: 4px">{{ k }}={{ v }}</el-tag><span v-if="!Object.keys(detail?.labels || {}).length">-</span></span>
+            </div>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
     </el-card>
 
-    <PodLogsDrawer v-model="logsVisible" :pod="podItem" :container="logsContainer" />
-    <WebTerminal v-model:visible="terminalVisible" :namespace="namespace" :pod="name" :container="terminalContainer || undefined" />
-    <el-dialog v-model="filesVisible" title="容器文件" width="900px">
-      <FileBrowser :namespace="namespace" :pod="name" :containers="detail?.containers || []" />
-    </el-dialog>
+    <!-- 关联事件 -->
+    <el-card shadow="never">
+      <template #header><span class="kc-section-title">关联事件</span></template>
+      <el-table v-if="detail?.events?.length" border :data="detail.events" size="small" max-height="300">
+        <el-table-column prop="reason" label="原因" width="150" />
+        <el-table-column prop="lastSeen" label="时间" width="170" />
+        <el-table-column prop="count" label="次数" width="70" align="center" />
+        <el-table-column prop="message" label="信息" min-width="260" show-overflow-tooltip />
+      </el-table>
+      <el-empty v-else :image-size="56" :description="`没有与 ${name} 关联的事件`" />
+    </el-card>
+
+    <!-- Prometheus 趋势 -->
+    <div class="pd-charts">
+      <div class="pd-chart">
+        <div class="pd-chart-title"><el-tag size="small" type="success" effect="plain">Prometheus</el-tag> CPU（核）</div>
+        <MetricChart :series="[{ name: 'CPU', data: monitor?.cpuUsageTrend || [], color: MC.primary, unit: '核' }]" height="170px" y-axis-name="核" />
+      </div>
+      <div class="pd-chart">
+        <div class="pd-chart-title"><el-tag size="small" type="success" effect="plain">Prometheus</el-tag> 内存（Mi）</div>
+        <MetricChart :series="[{ name: '内存', data: monitor?.memUsageTrend || [], color: MC.sky, unit: 'Mi' }]" height="170px" y-axis-name="Mi" />
+      </div>
+    </div>
+
+    <!-- 容器组标题栏（深蓝条） -->
+    <div class="pod-bar">
+      <span class="pod-bar-label">容器组:</span>
+      <span class="pod-bar-name mono">{{ name }}</span>
+      <span class="pod-bar-age">{{ detail?.age }} 前</span>
+      <span class="spacer"></span>
+      <el-button size="small" text @click="showYaml">YAML</el-button>
+      <el-button size="small" text type="danger" :disabled="noWrite" @click="doDelete">删除</el-button>
+      <el-dropdown trigger="click" @command="onMore">
+        <el-button size="small" text>更多<el-icon><ArrowDown /></el-icon></el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="logs">日志</el-dropdown-item>
+            <el-dropdown-item command="terminal">终端</el-dropdown-item>
+            <el-dropdown-item command="files">文件</el-dropdown-item>
+            <el-dropdown-item command="evict" divided :disabled="noWrite">驱除（尊重 PDB）</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+    </div>
+
+    <!-- 所在节点 / IP / 状态 / 重启策略 -->
+    <div class="pd-info-row">
+      <span>所在节点: <el-link type="primary" class="mono" @click="goNode">{{ detail?.nodeName || '-' }}</el-link></span>
+      <span>容器组IP: <b class="mono">{{ detail?.ip || '-' }}</b></span>
+      <span>状态: <b>{{ detail?.phase || detail?.status }}</b></span>
+      <span>重启策略: <b>{{ detail?.restartPolicy || '-' }}</b></span>
+    </div>
+
+    <!-- 条件时间线 -->
+    <div class="pd-timeline">
+      <span v-for="t in timeline" :key="t.label" class="pd-tl-item" :class="{ 'pd-tl-bad': !t.ok }">
+        <span class="pd-tl-dot"></span>{{ t.label }}
+        <small v-if="t.time">{{ t.time }}</small>
+      </span>
+    </div>
+
+    <!-- 容器卡片 -->
+    <div v-for="c in detail?.containers || []" :key="c.name" class="ctr-card">
+      <div class="ctr-head">
+        <el-icon :size="18" color="var(--kc-primary-deep)"><Ship /></el-icon>
+        <el-tag size="small" effect="dark">容器</el-tag>
+        <span class="ctr-name"><b>{{ c.name }}</b></span>
+        <span class="spacer"></span>
+        <el-tag v-if="c.state === 'Running'" size="small" type="success" effect="dark">running</el-tag>
+        <StatusTag v-else :status="c.state" :text="c.reason || c.state" />
+      </div>
+      <div class="ctr-line">
+        <span class="ctr-label">镜像抓取策略: {{ c.imagePullPolicy || '-' }}</span>
+        <span class="ctr-label">镜像: <span class="mono ctr-img">{{ c.image || '-' }}</span></span>
+        <VulnChip v-if="c.image" :image="c.image" />
+      </div>
+      <div class="ctr-line">
+        <span class="ctr-label">当前状态</span>
+        <el-tag size="small" :type="c.state === 'Running' ? 'success' : 'info'" effect="plain">{{ c.state === 'Running' ? 'Started' : c.state }}</el-tag>
+        <el-tag size="small" :type="c.ready ? 'success' : 'warning'" effect="plain">{{ c.ready ? 'Ready' : 'NotReady' }}</el-tag>
+        <el-tag size="small" type="info" effect="plain">{{ c.state }}</el-tag>
+        <el-tag v-if="c.startedAt" size="small" type="info" effect="plain">StartedAt {{ c.startedAt }}</el-tag>
+        <el-tag size="small" type="info" effect="plain">重启 {{ c.restartCount }} 次</el-tag>
+      </div>
+      <div class="ctr-line">
+        <span class="ctr-label">端口</span>
+        <el-tag v-for="p in c.ports || []" :key="p" size="small" class="port-chip">{{ p }}</el-tag>
+        <span v-if="!c.ports?.length" class="ctr-label">-</span>
+        <span class="spacer"></span>
+        <el-button size="small" type="success" :disabled="noWrite" @click="openFiles(c.name)">文件浏览器</el-button>
+        <el-button size="small" @click="openLogs(c.name)">下载日志</el-button>
+        <el-button size="small" @click="openLogs(c.name)">追踪日志</el-button>
+        <el-button size="small" type="danger" :disabled="noWrite" @click="openTerminal(c.name)">bash</el-button>
+      </div>
+      <div v-if="c.message" class="ctr-msg">{{ c.message }}</div>
+    </div>
+
+    <!-- Init 容器卡片 -->
+    <div v-for="c in detail?.initContainers || []" :key="'init-' + c.name" class="ctr-card ctr-init">
+      <div class="ctr-head">
+        <el-icon :size="18" color="var(--kc-mute)"><Ship /></el-icon>
+        <el-tag size="small" type="info" effect="dark">Init 容器</el-tag>
+        <span class="ctr-name"><b>{{ c.name }}</b></span>
+        <span class="spacer"></span>
+        <StatusTag :status="c.state" :text="c.reason || c.state" />
+      </div>
+      <div class="ctr-line">
+        <span class="ctr-label">镜像: <span class="mono ctr-img">{{ c.image || '-' }}</span></span>
+        <el-tag size="small" type="info" effect="plain">重启 {{ c.restartCount }} 次</el-tag>
+      </div>
+      <div v-if="c.message" class="ctr-msg">{{ c.message }}</div>
+    </div>
   </div>
+
+  <YamlDialog v-model="yamlVisible" :yaml="yamlText" :readonly="true" />
+  <PodLogsDrawer v-model="logsVisible" :pod="podItem" :container="logsContainer" />
+  <WebTerminal v-model:visible="terminalVisible" :namespace="namespace" :pod="name" :container="terminalContainer || undefined" />
+  <el-dialog v-model="filesVisible" title="容器文件" width="900px">
+    <FileBrowser :namespace="namespace" :pod="name" :containers="(detail?.containers || []).map((c) => c.name)" />
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { METRIC_COLORS as MC } from '../utils/chart-palette'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown, Cherry, Ship } from '@element-plus/icons-vue'
 import { k8sApi, type PodDetail, type PodItem, type PodMonitor } from '../api'
 import StatusTag from '../components/StatusTag.vue'
-import EventTable from '../components/EventTable.vue'
+import DetailBack from '../components/DetailBack.vue'
+import MetricChart from '../components/MetricChart.vue'
+import YamlDialog from '../components/YamlDialog.vue'
 import PodLogsDrawer from '../components/PodLogsDrawer.vue'
 import WebTerminal from '../components/WebTerminal.vue'
 import FileBrowser from '../components/FileBrowser.vue'
 import VulnChip from '../components/VulnChip.vue'
-import MetricPanel, { type MetricCardDef, type MetricChartDef } from '../components/MetricPanel.vue'
-import RangeSwitch from '../components/RangeSwitch.vue'
-import { Box, Grid } from '@element-plus/icons-vue'
 import { useClusterStore } from '../store/cluster'
 import { usePerm } from '../store/perm'
 import { confirmDelete } from '../utils/confirm'
@@ -182,105 +196,25 @@ import { confirmDelete } from '../utils/confirm'
 const route = useRoute()
 const router = useRouter()
 const clusterStore = useClusterStore()
-
-// 写权限：只读用户禁用删除按钮（后端仍强制判定）
 const perm = usePerm()
 
 const namespace = computed(() => String(route.params.namespace))
 const name = computed(() => String(route.params.name))
+const noWrite = computed(() => !perm.canWriteNS(namespace.value))
+
 const detail = ref<PodDetail>()
-const tab = ref('containers')
 const loading = ref(false)
+const moreOpen = ref<string[]>([])
+
+const monitor = ref<PodMonitor>()
+
+const yamlVisible = ref(false)
+const yamlText = ref('')
 const logsVisible = ref(false)
-const filesVisible = ref(false)
 const logsContainer = ref('')
 const terminalVisible = ref(false)
 const terminalContainer = ref('')
-
-// 打开终端（不指定容器时使用第一个容器）
-function openTerminal(container?: string) {
-  terminalContainer.value = container || ''
-  terminalVisible.value = true
-}
-
-// 左侧树选择
-const selectedType = ref<'pod' | 'container'>('pod')
-const selectedContainer = ref<{ name: string; state?: string; reason?: string; ready?: boolean; restartCount?: number; message?: string }>()
-
-interface TreeNode {
-  id: string
-  label: string
-  type: 'pod' | 'container'
-  container?: string
-  children?: TreeNode[]
-}
-
-const treeData = computed<TreeNode[]>(() => {
-  const d = detail.value
-  if (!d) return []
-  const containers: TreeNode[] = [
-    ...(d.containers || []).map((c) => ({ id: 'container-' + c.name, label: c.name, type: 'container' as const, container: c.name })),
-    ...(d.initContainers || []).map((c) => ({ id: 'init-' + c.name, label: c.name + ' (init)', type: 'container' as const, container: c.name })),
-  ]
-  return [{ id: 'pod', label: name.value, type: 'pod' as const, children: containers }]
-})
-
-function onTreeClick(node: TreeNode) {
-  selectedType.value = node.type
-  if (node.type === 'container') {
-    const status =
-      (detail.value?.containers || []).find((c) => c.name === node.container) ||
-      (detail.value?.initContainers || []).find((c) => c.name === node.container)
-    selectedContainer.value = {
-      name: node.container || '',
-      state: status?.state,
-      reason: status?.reason,
-      ready: status?.ready,
-      restartCount: status?.restartCount,
-      message: status?.message,
-    }
-  }
-}
-
-function openContainerLogs() {
-  logsContainer.value = selectedContainer.value?.name || ''
-  logsVisible.value = true
-}
-
-// 监控
-const range = ref('6h')
-const monitor = ref<PodMonitor>()
-const monitorLoading = ref(false)
-
-// 空闲 Pod CPU 用量可低至 ~0.0000x 核：固定 2 位小数会显示 0.00，看起来像没数据
-const cpuCardDecimals = computed(() => {
-  const v = monitor.value?.cpuUsage ?? 0
-  return v > 0 && v < 0.01 ? 4 : 2
-})
-
-const monitorCards = computed<MetricCardDef[]>(() => [
-  { label: 'CPU 使用量', value: monitor.value?.cpuUsage ?? null, unit: '核', decimals: cpuCardDecimals, color: '#409eff' },
-  { label: '内存使用', value: monitor.value?.memUsageMi ?? null, unit: 'Mi', color: '#67c23a' },
-  { label: '网络接收', value: monitor.value?.netRxMBs ?? null, unit: 'MB/s', color: '#e6a23c' },
-  { label: '网络发送', value: monitor.value?.netTxMBs ?? null, unit: 'MB/s', color: '#f56c6c' },
-  { label: '磁盘写', value: monitor.value?.diskWriteMBs ?? null, unit: 'MB/s', decimals: 2, color: '#909399' },
-  { label: '文件系统', value: monitor.value?.fsUsageMi ?? null, unit: 'Mi', decimals: 1, color: '#9254de' },
-])
-
-const monitorCharts = computed<MetricChartDef[]>(() => [
-  { title: 'CPU 使用量趋势', series: [{ name: 'CPU', data: monitor.value?.cpuUsageTrend || [], color: '#409eff', unit: '核' }], yAxisName: '核' },
-  { title: '内存使用量趋势', series: [{ name: '内存', data: monitor.value?.memUsageTrend || [], color: '#67c23a', unit: 'Mi' }], yAxisName: 'Mi' },
-  {
-    title: '网络流量',
-    series: [
-      { name: '接收', data: monitor.value?.netRxTrend || [], color: '#409eff', unit: 'MB/s' },
-      { name: '发送', data: monitor.value?.netTxTrend || [], color: '#67c23a', unit: 'MB/s' },
-    ],
-    yAxisName: 'MB/s',
-  },
-  { title: '磁盘写趋势', series: [{ name: '磁盘写', data: monitor.value?.diskWriteTrend || [], color: '#909399', unit: 'MB/s' }], yAxisName: 'MB/s' },
-  { title: '文件系统使用趋势', series: [{ name: '文件系统', data: monitor.value?.fsUsageTrend || [], color: '#9254de', unit: 'Mi' }], yAxisName: 'Mi' },
-])
+const filesVisible = ref(false)
 
 const podItem = computed<PodItem | undefined>(() =>
   detail.value
@@ -288,15 +222,38 @@ const podItem = computed<PodItem | undefined>(() =>
     : undefined,
 )
 
-onMounted(() => {
-  load()
-  loadMonitor() // 预加载监控数据，切到监控 tab 立即可见
+const ownerKindAlias: Record<string, string> = {
+  replicaset: 'replicasets', statefulset: 'statefulsets', daemonset: 'daemonsets',
+  job: 'jobs', cronjob: 'cronjobs', replicationcontroller: 'replicationcontrollers',
+}
+const ownerKindDisplay: Record<string, string> = {
+  replicaset: 'ReplicaSet', statefulset: 'StatefulSet', daemonset: 'DaemonSet',
+  job: 'Job', cronjob: 'CronJob', replicationcontroller: 'ReplicationController',
+}
+const ownerLabel = computed(() => {
+  const k = detail.value?.ownerKind || ''
+  return `${ownerKindDisplay[k] || k} ${detail.value?.ownerName || ''}`
 })
+function goOwner() {
+  const kindPath = ownerKindAlias[detail.value?.ownerKind || '']
+  if (!kindPath) return
+  router.push({ path: `/workloads/${kindPath}/${detail.value!.ownerName}`, query: { namespace: namespace.value } })
+}
+function goNode() {
+  if (detail.value?.nodeName) router.push(`/nodes/${detail.value.nodeName}`)
+}
 
-// 切换到监控 tab 时若数据为空则重新加载
-watch(tab, (v) => {
-  if (v === 'monitor' && !monitor.value) loadMonitor()
-})
+const condLabelMap: Record<string, string> = {
+  Initialized: '已初始化',
+  PodScheduled: '已调度',
+  ContainersReady: '可启动容器',
+  Ready: '容器组已就绪',
+}
+const timeline = computed(() =>
+  (detail.value?.conditions || [])
+    .filter((c) => condLabelMap[c.type])
+    .map((c) => ({ label: condLabelMap[c.type], ok: c.status === 'True', time: c.updated })),
+)
 
 async function load() {
   if (!clusterStore.current) return
@@ -308,18 +265,47 @@ async function load() {
   } finally {
     loading.value = false
   }
+  loadMonitor()
 }
 
 async function loadMonitor() {
-  if (!clusterStore.current) return
-  monitorLoading.value = true
   try {
-    monitor.value = await k8sApi.monitorPod(namespace.value, name.value, range.value)
+    monitor.value = await k8sApi.monitorPod(namespace.value, name.value, '1h')
   } catch {
-    /* 拦截器已提示 */
-  } finally {
-    monitorLoading.value = false
+    monitor.value = undefined
   }
+}
+
+async function showYaml() {
+  const { yaml } = await k8sApi.getYaml('pods', namespace.value, name.value)
+  yamlText.value = yaml
+  yamlVisible.value = true
+}
+
+function openLogs(container?: string) {
+  logsContainer.value = container || ''
+  logsVisible.value = true
+}
+function openTerminal(container?: string) {
+  terminalContainer.value = container || ''
+  terminalVisible.value = true
+}
+function openFiles(_container?: string) {
+  filesVisible.value = true
+}
+
+function onMore(cmd: string) {
+  if (cmd === 'logs') openLogs()
+  else if (cmd === 'terminal') openTerminal()
+  else if (cmd === 'files') openFiles()
+  else if (cmd === 'evict') doEvict()
+}
+
+async function doEvict() {
+  await ElMessageBox.confirm(`驱除 Pod「${name.value}」？将触发控制器重建（若有）。`, '驱除 Pod', { type: 'warning' })
+  await k8sApi.evictPod(namespace.value, name.value)
+  ElMessage.success('已发起驱除')
+  router.back()
 }
 
 async function doDelete() {
@@ -332,10 +318,13 @@ async function doDelete() {
   ElMessage.success('已发起删除')
   router.back()
 }
+
+onMounted(load)
 </script>
 
 <style scoped>
 .kc-page { display: flex; flex-direction: column; gap: 12px; }
+.mono { font-family: var(--kc-mono); }
 .kc-top-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .kc-status-strip {
@@ -345,44 +334,63 @@ async function doDelete() {
   gap: 14px;
   margin-top: 14px;
   font-size: 13px;
-  color: #8a94a6;
+  color: var(--kc-mute);
 }
-.kc-strip-item b { color: #2f3b52; font-weight: 600; margin-left: 4px; }
-.mono { font-family: var(--kc-mono); }
-.sub-title { font-weight: 600; color: #606266; margin-bottom: 8px; }
-.monitor-toolbar { margin-bottom: 12px; display: flex; justify-content: flex-end; }
+.kc-strip-item b { color: var(--kc-ink); font-weight: 600; margin-left: 4px; }
+.kc-more { border-top: none; }
+.kc-more-title { color: var(--kc-link); font-size: 13.5px; }
 
-/* 左树右面板布局 */
-.detail-layout { display: flex; gap: 16px; min-height: 480px; }
-.detail-side {
-  width: 240px;
-  flex-shrink: 0;
-  border: 1px solid var(--kc-border);
-  border-radius: var(--kc-card-radius);
-  padding: 8px;
+.pd-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 1100px) { .pd-charts { grid-template-columns: 1fr; } }
+.pd-chart { border: 1px solid var(--kc-border); border-radius: 4px; padding: 8px 10px; background: var(--kc-header-bg); }
+.pd-chart-title { font-size: 13px; color: var(--kc-ink-2); font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+
+.pod-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--kc-table-head-bg);
+  color: #fff;
+  border-radius: 4px;
+  padding: 6px 12px;
+}
+.pod-bar-label { font-size: 13px; opacity: 0.85; }
+.pod-bar-name { font-weight: 700; font-size: 14px; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pod-bar-age { font-size: 13px; opacity: 0.8; }
+.pod-bar .spacer { flex: 1; }
+.pod-bar :deep(.el-button) { color: #fff; }
+.pod-bar :deep(.el-button--danger:hover) { color: var(--kc-coral); }
+
+.pd-info-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  font-size: 13px;
+  color: var(--kc-ink-2);
   background: var(--kc-header-bg);
-  max-height: 700px;
-  overflow-y: auto;
+  border: 1px solid var(--kc-border);
+  border-radius: 4px;
+  padding: 10px 14px;
 }
-.side-title { font-size: 13px; font-weight: 600; color: #6b7280; padding: 6px 8px 10px; }
-.detail-main { flex: 1; min-width: 0; }
-.tree-node { display: flex; align-items: center; gap: 6px; font-size: 13px; }
-.tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-  flex-shrink: 0;
-}
-.dot-Running { background: #67c23a; }
-.dot-Pending, .dot-Waiting, .dot-Terminating { background: #e6a23c; }
-.dot-Failed, .dot-Error, .dot-CrashLoopBackOff, .dot-ImagePullBackOff { background: #f56c6c; }
-.dot-Completed { background: #909399; }
-.pod-view { padding: 4px 2px; }
-.view-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.view-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; color: #1f2937; }
-</style>
-<style>
-.mono-img { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+.pd-info-row b { color: var(--kc-ink); }
+
+.pd-timeline { display: flex; flex-wrap: wrap; gap: 8px 22px; background: var(--kc-header-bg); border: 1px solid var(--kc-border); border-radius: 4px; padding: 10px 14px; }
+.pd-tl-item { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--kc-ink); }
+.pd-tl-item small { color: var(--kc-mute); }
+.pd-tl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-success); display: inline-block; }
+.pd-tl-bad .pd-tl-dot { background: var(--el-color-danger); }
+.pd-tl-bad { color: var(--el-color-danger); }
+
+.ctr-card { border: 1px solid var(--kc-border); border-radius: 4px; padding: 10px 14px; background: var(--kc-header-bg); }
+.ctr-init { opacity: 0.92; }
+.ctr-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ctr-name { font-size: 14px; color: var(--kc-ink); }
+.ctr-head .spacer { flex: 1; }
+.ctr-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; font-size: 13px; }
+.ctr-line .spacer { flex: 1; }
+.ctr-label { color: var(--kc-mute); flex-shrink: 0; }
+.ctr-img { color: var(--kc-ink); word-break: break-all; font-size: 13px; }
+.port-chip { font-family: var(--kc-mono); }
+.ctr-msg { font-size: 13px; color: var(--kc-crit-text); word-break: break-all; }
 </style>

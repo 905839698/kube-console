@@ -268,7 +268,7 @@ function destroyTerminal() {
   color: #8b949e;
 }
 .terminal-status.warn {
-  color: #e6a23c;
+  color: var(--el-color-warning);
 }
 .term-box {
   flex: 1;

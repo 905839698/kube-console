@@ -22,7 +22,7 @@
       <el-table-column prop="cpuCores" label="CPU(核)" width="80" align="center"  sortable :sort-by="(row) => Number(row.cpuCores || 0)" />
       <el-table-column prop="memGi" label="内存(Gi)" width="90" align="center"  sortable :sort-by="(row) => Number(row.memGi || 0)" />
       <el-table-column prop="age" label="运行时长" width="80" align="center" sortable :sort-by="(row) => parseDuration(row.age)" />
-      <el-table-column label="操作" width="290" fixed="right">
+      <el-table-column label="操作" width="250" fixed="right">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="goDetail(row)">详情</el-button>
           <el-button size="small" text type="success" :disabled="!perm.canWriteCluster()" @click="openTerminal(row)">终端</el-button>
@@ -165,7 +165,7 @@ function goDetail(row: NodeDetail) {
 .kc-list { display: flex; flex-direction: column; gap: 12px; }
 .kc-list-head { display: flex; align-items: center; gap: 10px; }
 .kc-list-head .spacer { flex: 1; }
-.kc-count { color: #8a94a6; font-size: 13px; }
-.drain-result { margin-top: 10px; color: #606266; font-size: 13px; line-height: 1.8; }
-.drain-fail { color: #f56c6c; }
+.kc-count { color: var(--kc-mute); font-size: 13px; }
+.drain-result { margin-top: 10px; color: var(--el-text-color-regular); font-size: 13px; line-height: 1.8; }
+.drain-fail { color: var(--el-color-danger); }
 </style>

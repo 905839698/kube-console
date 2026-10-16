@@ -109,6 +109,6 @@ function fmtTime(ts?: string): string {
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sub { margin-left: 10px; font-size: 13px; }
 .group-name { font-weight: 600; font-family: monospace; font-size: 13px; }
-.muted { color: #c0c4cc; }
+.muted { color: var(--el-text-color-disabled); }
 .sev-tag { margin-right: 4px; }
 </style>

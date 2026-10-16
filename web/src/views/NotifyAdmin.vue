@@ -24,7 +24,7 @@
           <el-table-column label="启用" width="70" align="center">
             <template #default="{ row }"><el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '是' : '否' }}</el-tag></template>
           </el-table-column>
-          <el-table-column label="操作" width="170" fixed="right">
+          <el-table-column label="操作" width="160" fixed="right">
             <template #default="{ row }">
               <el-button size="small" text type="primary" @click="testCh(row)">测试</el-button>
               <el-button size="small" text @click="openEdit(row)">编辑</el-button>
@@ -163,5 +163,5 @@ onMounted(load)
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .msg-pre { margin: 0; padding: 8px 16px; font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; }
-.msg-err { padding: 4px 16px; color: #f56c6c; font-size: 13px; }
+.msg-err { padding: 4px 16px; color: var(--el-color-danger); font-size: 13px; }
 </style>

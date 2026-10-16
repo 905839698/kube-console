@@ -35,7 +35,7 @@
       <el-table-column prop="size" label="大小" width="110" align="right" />
       <el-table-column prop="mtime" label="修改时间" width="150" />
       <el-table-column prop="mode" label="权限" width="110" />
-      <el-table-column label="操作" width="130" fixed="right">
+      <el-table-column label="操作" width="118" fixed="right">
         <template #default="{ row }">
           <el-button v-if="row.type !== 'dir'" size="small" text type="primary" @click="download(row)">下载</el-button>
           <el-button size="small" text type="danger" @click="remove(row)">删除</el-button>
@@ -144,6 +144,6 @@ onMounted(() => cd('/'))
 .fb-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
 .fb-crumb { flex: 1; }
 .fb-actions { display: flex; gap: 8px; align-items: center; }
-.link-target { color: #909399; font-size: 13px; }
-.empty { text-align: center; color: #909399; padding: 30px 0; }
+.link-target { color: var(--el-text-color-secondary); font-size: 13px; }
+.empty { text-align: center; color: var(--el-text-color-secondary); padding: 30px 0; }
 </style>

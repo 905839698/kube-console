@@ -82,6 +82,10 @@ export interface ContainerStatus {
   state: string
   reason: string
   message: string
+  image?: string
+  imagePullPolicy?: string
+  ports?: string[]
+  startedAt?: string
 }
 
 export interface EventItem {
@@ -103,6 +107,9 @@ export interface PodDetail extends PodItem {
   serviceAccount: string
   tolerations: string[]
   startTime: string
+  restartPolicy: string
+  ownerKind?: string
+  ownerName?: string
 }
 
 export interface CondItem {
@@ -201,7 +208,12 @@ export interface NodeDetail extends NodeSummary {
   taintItems: { key: string; value: string; effect: string }[]
   schedulable: boolean
   pods: PodItem[]
+  images: NodeImage[]
   osImage: string
+}
+export interface NodeImage {
+  names: string[]
+  sizeBytes: number
 }
 
 export interface ResourceDef {
@@ -364,6 +376,7 @@ export interface NodeMonitor {
   netDropRate: number
   netDropTrend: TrendPoint[]
   tcpEstablished: number
+  tcpTrend: TrendPoint[]
   kubelet?: KubeletMonitor
 }
 

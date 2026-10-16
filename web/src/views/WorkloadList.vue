@@ -25,7 +25,7 @@
 
     <el-table border :data="paged" v-loading="loading" stripe @selection-change="(rows: WorkloadItem[]) => (selected = rows)">
       <el-table-column type="selection" width="42" />
-      <el-table-column label="名称" prop="name" min-width="200" sortable>
+      <el-table-column label="名称" prop="name" min-width="170" sortable>
         <template #default="{ row }">
           <el-link type="primary" @click="goDetail(row)">{{ row.name }}</el-link>
         </template>
@@ -47,39 +47,41 @@
         <el-table-column prop="nodeName" label="节点" min-width="150" show-overflow-tooltip sortable />
       </template>
       <el-table-column v-if="hasExtra" prop="extra" label="调度/完成" min-width="200" show-overflow-tooltip />
-      <el-table-column prop="images" label="镜像" min-width="220" show-overflow-tooltip sortable>
+      <el-table-column prop="images" label="镜像" min-width="180" show-overflow-tooltip sortable>
         <template #default="{ row }">{{ row.images.join(', ') }}</template>
       </el-table-column>
-      <el-table-column label="标签" min-width="150">
+      <el-table-column label="标签" width="190">
         <template #default="{ row }">
-          <el-tag v-for="(v, k) in row.labels" :key="k" size="small" style="margin-right: 4px">{{ k }}={{ v }}</el-tag>
+          <!-- 标签最多露两个，其余收进 +N（悬停看全量）：整列被长标签串撑开会挤掉操作列 -->
+          <span class="labels">
+            <el-tag v-for="kv in labelPairs(row).slice(0, 2)" :key="kv" size="small">{{ kv }}</el-tag>
+            <el-tooltip v-if="labelPairs(row).length > 2" :content="labelPairs(row).slice(2).join('  ·  ')" placement="top">
+              <el-tag size="small" type="info">+{{ labelPairs(row).length - 2 }}</el-tag>
+            </el-tooltip>
+          </span>
         </template>
       </el-table-column>
       <el-table-column prop="age" label="运行时长" width="80" align="center" sortable :sort-by="(row) => parseDuration(row.age)" />
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" :width="isPod ? 208 : 366" fixed="right">
         <template #default="{ row }">
-          <el-dropdown trigger="click" @command="(cmd: string) => onCommand(cmd, row)">
-            <el-button size="small" type="primary" plain>操作<el-icon><ArrowDown /></el-icon></el-button>
-            <template #dropdown>
-              <el-dropdown-menu v-if="isPod">
-                <el-dropdown-item command="detail">详情</el-dropdown-item>
-                <el-dropdown-item command="logs">日志</el-dropdown-item>
-                <el-dropdown-item command="terminal">终端</el-dropdown-item>
-                <el-dropdown-item command="evict" divided :disabled="noWrite(row)">驱除（尊重 PDB）</el-dropdown-item>
-                <el-dropdown-item command="delete" divided :disabled="noWrite(row)">删除</el-dropdown-item>
-              </el-dropdown-menu>
-              <el-dropdown-menu v-else>
-                <el-dropdown-item command="detail">详情</el-dropdown-item>
-                <el-dropdown-item command="edit" :disabled="noWrite(row)">可视化编辑</el-dropdown-item>
-                <el-dropdown-item command="yaml" divided :disabled="noWrite(row)">编辑 YAML</el-dropdown-item>
-                <el-dropdown-item command="scale" :disabled="noWrite(row) || kind === 'daemonsets' || kind === 'cronjobs'">缩放</el-dropdown-item>
-                <el-dropdown-item command="restart" :disabled="noWrite(row) || kind === 'cronjobs' || kind === 'jobs'">重启</el-dropdown-item>
-                <el-dropdown-item command="rollouts" v-if="kind === 'deployments'">历史版本/回滚</el-dropdown-item>
-                <el-dropdown-item command="image" :disabled="noWrite(row)">调整镜像</el-dropdown-item>
-                <el-dropdown-item command="delete" divided :disabled="noWrite(row)">删除</el-dropdown-item>
-              </el-dropdown-menu>
+          <!-- 详情走名称链接，这里只放真正要点的操作；不适用该资源类型的直接不给按钮 -->
+          <div class="row-ops">
+            <template v-if="isPod">
+              <el-button size="small" text type="primary" @click="onCommand('logs', row)">日志</el-button>
+              <el-button size="small" text type="primary" @click="onCommand('terminal', row)">终端</el-button>
+              <el-button size="small" text type="warning" :disabled="noWrite(row)" title="调用 Eviction API，尊重 PodDisruptionBudget" @click="onCommand('evict', row)">驱除</el-button>
+              <el-button size="small" text type="danger" :disabled="noWrite(row)" @click="onCommand('delete', row)">删除</el-button>
             </template>
-          </el-dropdown>
+            <template v-else>
+              <el-button size="small" text type="primary" :disabled="noWrite(row)" @click="onCommand('edit', row)">编辑</el-button>
+              <el-button size="small" text type="primary" :disabled="noWrite(row)" @click="onCommand('yaml', row)">YAML</el-button>
+              <el-button v-if="kind !== 'daemonsets' && kind !== 'cronjobs'" size="small" text type="primary" :disabled="noWrite(row)" @click="onCommand('scale', row)">缩放</el-button>
+              <el-button v-if="kind !== 'cronjobs' && kind !== 'jobs'" size="small" text type="warning" :disabled="noWrite(row)" @click="onCommand('restart', row)">重启</el-button>
+              <el-button v-if="kind === 'deployments'" size="small" text type="primary" @click="onCommand('rollouts', row)">历史</el-button>
+              <el-button size="small" text type="primary" :disabled="noWrite(row)" @click="onCommand('image', row)">镜像</el-button>
+              <el-button size="small" text type="danger" :disabled="noWrite(row)" @click="onCommand('delete', row)">删除</el-button>
+            </template>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -189,6 +191,11 @@ const kindTitle = computed(() => {
 const hasExtra = computed(() => ['cronjobs', 'jobs'].includes(kind.value))
 // Pod 与控制器同页融合：列与操作按类型切换
 const isPod = computed(() => kind.value === 'pods')
+
+// 标签列只露前两个，其余收进 +N 悬停查看：整列被长标签串撑开会把操作列挤没
+function labelPairs(row: WorkloadItem): string[] {
+  return Object.entries(row.labels || {}).map(([k, v]) => (v ? `${k}=${v}` : k))
+}
 
 const items = ref<WorkloadItem[]>([])
 const page = ref(1)
@@ -331,9 +338,6 @@ function openCreate() {
 async function onCommand(cmd: string, row: WorkloadItem) {
   const ns = row.namespace || namespace.value[0] || 'default'
   switch (cmd) {
-    case 'detail':
-      goDetail(row)
-      break
     case 'logs':
       logsPod.value = row
       logsVisible.value = true
@@ -433,10 +437,15 @@ function onCreated() {
 .kc-list { display: flex; flex-direction: column; gap: 12px; }
 .kc-list-head { display: flex; align-items: center; gap: 10px; }
 .kc-list-head .spacer { flex: 1; }
-.kc-count { color: #8a94a6; font-size: 13px; }
+.kc-count { color: var(--kc-mute); font-size: 13px; }
 .kc-filter-bar { margin-bottom: 12px; background: transparent; border: none; padding: 0; }
 .kc-filter-bar .spacer { flex: 1; }
-.ready-ok { color: #2ba471; font-weight: 600; }
-.ready-warn { color: #e6a23c; font-weight: 600; }
+.ready-ok { color: var(--kc-ok-text); font-weight: 600; }
+.ready-warn { color: var(--el-color-warning); font-weight: 600; }
 .pager { margin-top: 12px; display: flex; justify-content: flex-end; }
+/* 行内操作：文本按钮紧凑排一行，删除靠 danger 色区分 */
+.row-ops { display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; }
+.row-ops :deep(.el-button.is-text) { margin-left: 0; padding: 4px 6px; font-size: 13px; }
+.labels { display: flex; align-items: center; gap: 4px; overflow: hidden; }
+.labels :deep(.el-tag) { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
 </style>

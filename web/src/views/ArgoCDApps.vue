@@ -87,7 +87,7 @@
                     <el-dropdown-item command="autosync">{{ row.autoSync ? '关闭自动同步' : '开启自动同步' }}</el-dropdown-item>
                     <el-dropdown-item command="edit" divided>编辑（表单/YAML）</el-dropdown-item>
                     <el-dropdown-item command="yaml">查看 YAML</el-dropdown-item>
-                    <el-dropdown-item command="delete" style="color: #f56c6c">删除应用…</el-dropdown-item>
+                    <el-dropdown-item command="delete" style="color: var(--kc-crit-text)">删除应用…</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -223,6 +223,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { METRIC_COLORS as MC } from '../utils/chart-palette'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowDown, Refresh, Search } from '@element-plus/icons-vue'
@@ -291,12 +292,12 @@ function healthType(s: string) {
   return 'info'
 }
 function healthColor(h?: string) {
-  if (h === 'Healthy') return '#00aa55'
-  if (h === 'Degraded') return '#f56c6c'
-  if (h === 'Progressing') return '#409eff'
-  if (h === 'Suspended') return '#e6a23c'
-  if (h === 'Missing') return '#909399'
-  return '#c0c4cc'
+  if (h === 'Healthy') return MC.primary
+  if (h === 'Degraded') return MC.coral
+  if (h === 'Progressing') return MC.sky
+  if (h === 'Suspended') return MC.sun
+  if (h === 'Missing') return 'var(--kc-mute)'
+  return 'var(--kc-mute)'
 }
 function shortRev(r?: string) {
   return r ? r.slice(0, 7) : '-'
@@ -475,11 +476,11 @@ onMounted(load)
 
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
-.spec-hint { color: #909399; }
-.spec-bad { color: #f56c6c; }
+.spec-hint { color: var(--el-text-color-secondary); }
+.spec-bad { color: var(--el-color-danger); }
 .filter-bar { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
 .filter-right { margin-left: auto; display: flex; gap: 8px; }
-.chip-count { margin-left: 4px; color: #909399; font-size: 13px; }
+.chip-count { margin-left: 4px; color: var(--el-text-color-secondary); font-size: 13px; }
 .app-row { cursor: pointer; }
 .app-icon { margin-right: 6px; font-size: 14px; vertical-align: -2px; }
 .app-name { font-weight: 600; }
@@ -490,14 +491,14 @@ onMounted(load)
 .tree-filter { margin-bottom: 8px; max-width: 320px; }
 .tree-node { display: flex; align-items: center; gap: 6px; }
 .h-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: 0 0 8px; }
-.tree-kind { color: #909399; font-size: 13px; }
+.tree-kind { color: var(--el-text-color-secondary); font-size: 13px; }
 .tree-name { font-weight: 600; }
 .tree-jump { margin-left: 8px; }
 .sec { margin: 14px 0 6px; font-size: 13px; }
 .cond { display: flex; gap: 8px; margin-bottom: 6px; align-items: flex-start; }
-.cond-msg { font-size: 13px; color: #606266; word-break: break-all; }
-.op-msg { font-size: 13px; color: #909399; word-break: break-all; }
+.cond-msg { font-size: 13px; color: var(--el-text-color-regular); word-break: break-all; }
+.op-msg { font-size: 13px; color: var(--el-text-color-secondary); word-break: break-all; }
 .mb12 { margin-bottom: 12px; }
-.cascade-warn { color: #f56c6c; font-size: 13px; margin-top: 6px; }
-.confirm-tip { margin: 12px 0 4px; font-size: 13px; color: #606266; }
+.cascade-warn { color: var(--el-color-danger); font-size: 13px; margin-top: 6px; }
+.confirm-tip { margin: 12px 0 4px; font-size: 13px; color: var(--el-text-color-regular); }
 </style>

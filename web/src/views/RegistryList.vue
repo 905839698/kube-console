@@ -76,7 +76,7 @@
           <el-table-column label="推送时间" width="160">
             <template #default="{ row }">{{ fmtTime(row.push_time) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="210" fixed="right">
+          <el-table-column label="操作" width="190" fixed="right">
             <template #default="{ row }">
               <el-button v-if="row.tags?.length" size="small" text type="primary" @click="copyRef(row.tags[0].name)">复制地址</el-button>
               <el-button size="small" text type="warning" @click="triggerScan(row)">扫描</el-button>
@@ -91,7 +91,7 @@
     </el-empty>
 
     <!-- 漏洞报告 -->
-    <el-dialog v-model="vulnDlg" :title="`漏洞报告：${vulnRefLabel}`" width="900px" top="4vh">
+    <el-dialog v-model="vulnDlg" :title="`漏洞报告：${vulnRefLabel}`" width="82%" top="5vh">
       <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap">
         <template v-if="vulnReport">
           <el-tag type="danger">Critical {{ countSev('Critical') }}</el-tag>
@@ -105,7 +105,7 @@
         </el-select>
         <el-button size="small" @click="reloadVulns">刷新</el-button>
       </div>
-      <el-table v-if="vulnReport" :data="filteredVulns" size="small" border max-height="55vh">
+      <el-table v-if="vulnReport" :data="filteredVulns" size="small" border max-height="70vh">
         <el-table-column label="级别" width="100" align="center">
           <template #default="{ row }">
             <el-tag size="small" :type="sevTag(row.severity)">{{ row.severity }}</el-tag>
@@ -119,23 +119,23 @@
         </el-table-column>
         <el-table-column label="CVSS" width="80" align="center">
           <template #default="{ row }">
-            <span v-if="row.cvssScore" :style="{ color: row.cvssScore >= 9 ? '#f56c6c' : row.cvssScore >= 7 ? '#e6a23c' : '#909399' }">{{ row.cvssScore.toFixed(1) }}</span>
+            <span v-if="row.cvssScore" :style="{ color: row.cvssScore >= 9 ? 'var(--kc-crit-text)' : row.cvssScore >= 7 ? 'var(--kc-warn-text)' : 'var(--kc-mute)' }">{{ row.cvssScore.toFixed(1) }}</span>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="pkgName" label="受影响包" min-width="160" show-overflow-tooltip />
-        <el-table-column label="版本" width="190">
+        <el-table-column label="受影响包" prop="pkgName" min-width="220" show-overflow-tooltip />
+        <el-table-column label="版本（当前 → 修复）" width="280">
           <template #default="{ row }">
-            <span class="mono">{{ row.installedVersion }}</span>
-            <span v-if="row.fixedVersion" style="color: #67c23a"> → {{ row.fixedVersion }}</span>
+            <span class="mono ver">{{ row.installedVersion }}</span>
+            <span v-if="row.fixedVersion" class="ver-fix"> → {{ row.fixedVersion }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="title" label="标题 / 描述" min-width="240" show-overflow-tooltip>
+        <el-table-column prop="title" label="标题 / 描述" min-width="320" show-overflow-tooltip>
           <template #default="{ row }">{{ row.title || row.description || '-' }}</template>
         </el-table-column>
       </el-table>
       <el-empty v-else-if="!vulnLoading" description="尚无扫描报告：先点「扫描」触发，完成后查看" />
-      <div v-if="vulnLoading" style="text-align: center; padding: 20px; color: #909399">加载中...</div>
+      <div v-if="vulnLoading" style="text-align: center; padding: 20px; color: var(--kc-mute)">加载中...</div>
     </el-dialog>
 
     <!-- 连接设置 -->
@@ -373,5 +373,8 @@ onMounted(init)
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
 .tag-header { font-size: 13px; margin-bottom: 8px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.untagged { color: #909399; }
+.untagged { color: var(--el-text-color-secondary); }
+/* 漏洞报告版本列：dpkg 风格的超长版本号要可折行，不再挤成一团 */
+.ver { word-break: break-all; }
+.ver-fix { color: var(--el-color-success); word-break: break-all; }
 </style>

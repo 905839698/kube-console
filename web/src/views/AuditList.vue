@@ -93,12 +93,12 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.audit-body { margin: 0; padding: 8px 16px; font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; color: #606266; }
+.audit-body { margin: 0; padding: 8px 16px; font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; color: var(--el-text-color-regular); }
 </style>
 <style scoped>
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
 .path { font-family: monospace; font-size: 13px; word-break: break-all; }
-.ok { color: #67c23a; }
-.err { color: #f56c6c; font-weight: 600; }
+.ok { color: var(--el-color-success); }
+.err { color: var(--el-color-danger); font-weight: 600; }
 .pager { margin-top: 12px; display: flex; justify-content: flex-end; }
 </style>

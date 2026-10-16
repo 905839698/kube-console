@@ -131,16 +131,16 @@ function sevLabel(s: string) {
 .card-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sub { margin-left: 10px; font-size: 13px; }
 .sub2 { font-size: 13px; margin-top: 2px; }
-.muted { color: #c0c4cc; }
+.muted { color: var(--el-text-color-disabled); }
 .rule-name { font-weight: 600; font-family: monospace; font-size: 13px; }
 
 .issue-row { margin-bottom: 14px; }
 .issue-card { text-align: center; }
-.issue-num { font-size: 26px; font-weight: 700; color: #67c23a; }
-.issue-card.warn .issue-num { color: #f56c6c; }
-.issue-label { color: #909399; font-size: 13px; margin-top: 4px; }
+.issue-num { font-size: 26px; font-weight: 700; color: var(--el-color-success); }
+.issue-card.warn .issue-num { color: var(--el-color-danger); }
+.issue-label { color: var(--el-text-color-secondary); font-size: 13px; margin-top: 4px; }
 
-.ok { color: #67c23a; }
+.ok { color: var(--el-color-success); }
 .link { color: var(--el-color-primary); }
 .issue-tag { margin-right: 4px; }
 </style>

@@ -11,7 +11,9 @@ import (
 
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	typedcore "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 
@@ -355,19 +357,40 @@ func mustJSON(v any) []byte {
 
 // ------------------- 节点终端（node shell） -------------------
 
-// EnsureNodeDebugPod 在目标节点创建 nsenter 调试 Pod（幂等：存在且镜像一致则复用）
-func (s *K8sService) EnsureNodeDebugPod(ctx context.Context, c *kube.Client, nodeName string) (string, error) {
-	name := "kc-node-shell-" + nodeName
-	pod, err := c.Clientset.CoreV1().Pods("kube-system").Get(ctx, name, metav1.GetOptions{})
-	if err == nil && pod.Spec.Containers[0].Image == s.debugImage {
-		return name, nil
+// nodeShellPodMatches 判断已存在的调试 Pod 是否仍是我们要的那种规格。
+// 只比镜像字符串不够：旧版本残留的（或规格被改过的）Pod 若缺 hostPID / privileged /
+// 以镜像自带非 root 用户起步，nsenter 打不开宿主 /proc/1/ns/* 只会得到 EACCES，
+// 而 Pod 名固定，会被无限复用、永远不自愈。
+func nodeShellPodMatches(pod *corev1.Pod, image string) bool {
+	if len(pod.Spec.Containers) == 0 || !pod.Spec.HostPID {
+		return false
 	}
-	// 已存在但镜像不同：先删再建
-	if err == nil {
-		_ = c.Clientset.CoreV1().Pods("kube-system").Delete(ctx, name, metav1.DeleteOptions{})
-		time.Sleep(1 * time.Second)
+	sc := pod.Spec.Containers[0].SecurityContext
+	if sc == nil || sc.Privileged == nil || !*sc.Privileged {
+		return false
 	}
+	// 必须显式以 root 起步：busybox:1.37 等镜像自带 USER 65532，特权只放开能力界，
+	// 进程拿不到 effective caps，nsenter 照样 EACCES
+	if sc.RunAsUser == nil || *sc.RunAsUser != 0 {
+		return false
+	}
+	return pod.Spec.Containers[0].Image == image
+}
+
+// fatalWaitingReason 这些等待原因不可能自愈，立刻报错而不是白等 90s
+func fatalWaitingReason(r string) bool {
+	switch r {
+	case "ErrImagePull", "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull",
+		"CreateContainerConfigError", "RunContainerError":
+		return true
+	}
+	return false
+}
+
+func createNodeShellPod(ctx context.Context, pods typedcore.PodInterface, nodeName, name, image string) error {
 	privileged := true
+	root := int64(0)
+	asRoot := false
 	newPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kube-system", Labels: map[string]string{"app": "kc-node-shell"}},
 		Spec: corev1.PodSpec{
@@ -377,33 +400,80 @@ func (s *K8sService) EnsureNodeDebugPod(ctx context.Context, c *kube.Client, nod
 			RestartPolicy: corev1.RestartPolicyOnFailure,
 			Tolerations:   []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 			Containers: []corev1.Container{{
-				Name:            "shell",
-				Image:           s.debugImage,
-				Command:         []string{"/bin/sh", "-c", "sleep 7200"},
-				SecurityContext: &corev1.SecurityContext{Privileged: &privileged},
+				Name:    "shell",
+				Image:   image,
+				Command: []string{"/bin/sh", "-c", "sleep 7200"},
+				SecurityContext: &corev1.SecurityContext{
+					Privileged:   &privileged,
+					RunAsUser:    &root,
+					RunAsGroup:   &root,
+					RunAsNonRoot: &asRoot,
+				},
 			}},
 		},
 	}
-	if _, err := c.Clientset.CoreV1().Pods("kube-system").Create(ctx, newPod, metav1.CreateOptions{}); err != nil {
+	_, err := pods.Create(ctx, newPod, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	return err
+}
+
+// EnsureNodeDebugPod 在目标节点创建 nsenter 调试 Pod（幂等：规格一致且在跑才复用，否则重建）
+func (s *K8sService) EnsureNodeDebugPod(ctx context.Context, c *kube.Client, nodeName string) (string, error) {
+	name := "kc-node-shell-" + nodeName
+	pods := c.Clientset.CoreV1().Pods("kube-system")
+
+	existing, err := pods.Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		if err := createNodeShellPod(ctx, pods, nodeName, name, s.debugImage); err != nil {
+			return "", err
+		}
+	case err != nil:
+		return "", err
+	case !nodeShellPodMatches(existing, s.debugImage):
+		_ = pods.Delete(ctx, name, metav1.DeleteOptions{})
+		time.Sleep(1 * time.Second)
+		if err := createNodeShellPod(ctx, pods, nodeName, name, s.debugImage); err != nil {
+			return "", err
+		}
+	case existing.Status.Phase == corev1.PodRunning:
+		return name, nil
+	}
+
+	if err := s.waitNodeShellPod(ctx, c, name); err != nil {
 		return "", err
 	}
-	// 等待 Running（镜像已在节点缓存时秒级；首次拉取最多 90s）
+	return name, nil
+}
+
+// waitNodeShellPod 等容器进入 Running；镜像拉不下来等硬失败立刻带原因返回
+func (s *K8sService) waitNodeShellPod(ctx context.Context, c *kube.Client, name string) error {
+	pods := c.Clientset.CoreV1().Pods("kube-system")
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
-		p, err := c.Clientset.CoreV1().Pods("kube-system").Get(ctx, name, metav1.GetOptions{})
+		p, err := pods.Get(ctx, name, metav1.GetOptions{})
 		if err == nil {
 			for _, st := range p.Status.ContainerStatuses {
-				if st.Name == "shell" && st.State.Running != nil {
-					return name, nil
+				if st.Name != "shell" {
+					continue
+				}
+				if st.State.Running != nil {
+					return nil
+				}
+				if w := st.State.Waiting; w != nil && fatalWaitingReason(w.Reason) {
+					return fmt.Errorf("调试镜像 %s 起不来（%s：%s）——内网集群请把 k8s.debugImage 配成集群可拉取、含 /bin/sh 的私有仓库镜像",
+						s.debugImage, w.Reason, strings.TrimSpace(w.Message))
 				}
 			}
 		}
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return ctx.Err()
 		}
 		time.Sleep(2 * time.Second)
 	}
-	return "", fmt.Errorf("节点调试 Pod 未就绪（超时）")
+	return fmt.Errorf("节点调试 Pod 90s 内未就绪（镜像 %s）：可能仍在拉取镜像或调度受阻", s.debugImage)
 }
 
 // ExecNode 通过 WebSocket 进入节点 shell：nsenter 到宿主机 1 号进程命名空间

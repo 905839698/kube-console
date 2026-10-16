@@ -55,7 +55,7 @@
         </template>
       </el-table-column>
       <el-table-column prop="age" label="运行时长" width="80" align="center" sortable :sort-by="(row) => parseDuration(row.age)" />
-      <el-table-column label="操作" width="160" fixed="right">
+      <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="viewDetail(row)">详情</el-button>
           <el-button size="small" text type="danger" :disabled="!canWrite(row)" @click="remove(row)">删除</el-button>
@@ -437,13 +437,13 @@ function kindTitle(kind: string): string {
 .kc-list { display: flex; flex-direction: column; gap: 12px; }
 .kc-list-head { display: flex; align-items: center; gap: 10px; }
 .kc-list-head .spacer { flex: 1; }
-.kc-count { color: #8a94a6; font-size: 13px; }
-.summary { color: #606266; }
-.mono-addr { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: #303133; }
+.kc-count { color: var(--kc-mute); font-size: 13px; }
+.summary { color: var(--el-text-color-regular); }
+.mono-addr { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--el-text-color-primary); }
 .addr-list { display: flex; flex-direction: column; gap: 2px; }
 .addr-line { display: flex; align-items: center; gap: 2px; }
 /* 详情/新建对话框内容自适应：高度随视口，内容超出时滚动 */
 .detail-body { height: calc(100vh - 240px); min-height: 400px; overflow-y: auto; }
-.pods-hint { margin-bottom: 10px; font-size: 12.5px; color: #606266; }
+.pods-hint { margin-bottom: 10px; font-size: 13px; color: var(--el-text-color-regular); }
 .pager { margin-top: 12px; display: flex; justify-content: flex-end; }
 </style>

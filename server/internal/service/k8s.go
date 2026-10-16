@@ -343,8 +343,15 @@ type NodeDetail struct {
 	TaintItems  []TaintItem       `json:"taintItems"`
 	Schedulable bool              `json:"schedulable"`
 	Pods        []PodItem         `json:"pods"`
+	Images      []NodeImage       `json:"images"`
 	// KernelVersion / ContainerRuntime 由内嵌 NodeSummary 提供
 	OSImage string `json:"osImage"`
+}
+
+// NodeImage 节点上已拉取的镜像（kubelet status.images，同一条目的多个 tag 合并展示）
+type NodeImage struct {
+	Names     []string `json:"names"`
+	SizeBytes int64    `json:"sizeBytes"`
 }
 
 // TaintItem 结构化污点（供可视化编辑）
@@ -417,6 +424,11 @@ func (s *K8sService) buildNodeDetail(ctx context.Context, c *kube.Client, n *cor
 			d.Pods = append(d.Pods, s.podItem(&pods.Items[i]))
 		}
 	}
+	// 节点镜像列表（按体积降序，与 kubectl describe node 的 Images 段同源）
+	for _, img := range n.Status.Images {
+		d.Images = append(d.Images, NodeImage{Names: img.Names, SizeBytes: img.SizeBytes})
+	}
+	sort.Slice(d.Images, func(i, j int) bool { return d.Images[i].SizeBytes > d.Images[j].SizeBytes })
 	return d, nil
 }
 
@@ -485,6 +497,9 @@ type PodDetail struct {
 	ServiceAccount string                     `json:"serviceAccount"`
 	Tolerations    []string                   `json:"tolerations"`
 	StartTime      string                     `json:"startTime"`
+	RestartPolicy  string                     `json:"restartPolicy"`
+	OwnerKind      string                     `json:"ownerKind,omitempty"`
+	OwnerName      string                     `json:"ownerName,omitempty"`
 }
 
 func (s *K8sService) GetPodDetail(ctx context.Context, c *kube.Client, namespace, name string) (*PodDetail, error) {
@@ -496,6 +511,11 @@ func (s *K8sService) GetPodDetail(ctx context.Context, c *kube.Client, namespace
 	d := &PodDetail{
 		PodItem: item, Phase: string(pod.Status.Phase),
 		Containers: kube.ContainerStatuses(pod), ServiceAccount: pod.Spec.ServiceAccountName,
+		RestartPolicy: string(pod.Spec.RestartPolicy),
+	}
+	if len(pod.OwnerReferences) > 0 {
+		ref := pod.OwnerReferences[0]
+		d.OwnerKind, d.OwnerName = strings.ToLower(ref.Kind), ref.Name
 	}
 	if pod.Status.StartTime != nil {
 		d.StartTime = pod.Status.StartTime.Format("2006-01-02 15:04:05")

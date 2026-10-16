@@ -133,10 +133,10 @@ async function doUninstall() {
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .title { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .meta { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
-.meta-item { color: #606266; font-size: 13px; }
+.meta-item { color: var(--el-text-color-regular); font-size: 13px; }
 .actions { display: flex; gap: 8px; }
-.editor-wrap { border: 1px solid #dcdfe6; border-radius: 4px; overflow: hidden; }
+.editor-wrap { border: 1px solid var(--el-border-color); border-radius: 4px; overflow: hidden; }
 .editor-wrap.tall { height: 60vh; }
-.notes { background: #f5f7fa; border: 1px solid #ebeef5; border-radius: 4px; padding: 14px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
-.empty { color: #909399; font-size: 13px; padding: 20px 0; }
+.notes { background: var(--el-fill-color-light); border: 1px solid var(--el-border-color-lighter); border-radius: 4px; padding: 14px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+.empty { color: var(--el-text-color-secondary); font-size: 13px; padding: 20px 0; }
 </style>

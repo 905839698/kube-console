@@ -165,17 +165,17 @@ async function access() {
 
 <style scoped>
 .ops-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.tip { font-size: 13px; color: #909399; }
+.tip { font-size: 13px; color: var(--el-text-color-secondary); }
 .chart-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 10px; margin-top: 10px; }
 .chart-card :deep(.el-card__body) { padding: 6px 10px 8px; }
 .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .chart-head .name { font-size: 13px; font-weight: 600; }
-.chart-head .val { font-size: 13px; color: #303133; font-variant-numeric: tabular-nums; }
-.chart-head .val.empty { color: #c0c4cc; }
+.chart-head .val { font-size: 13px; color: var(--el-text-color-primary); font-variant-numeric: tabular-nums; }
+.chart-head .val.empty { color: var(--el-text-color-disabled); }
 .vals { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 2px; }
-.val-item { font-size: 12px; color: #606266; display: inline-flex; align-items: center; gap: 4px; }
+.val-item { font-size: 13px; color: var(--el-text-color-regular); display: inline-flex; align-items: center; gap: 4px; }
 .val-item i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.val.multi { font-size: 12px; color: #a8abb2; }
-.cap { font-size: 12px; color: #a8abb2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.val.multi { font-size: 13px; color: var(--kc-mute); }
+.cap { font-size: 13px; color: var(--kc-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cap.mono { font-family: ui-monospace, Consolas, monospace; }
 </style>

@@ -215,6 +215,6 @@ const syncOptionsText = computed({
 </script>
 
 <style scoped>
-.hint { color: #909399; font-size: 13px; margin-left: 10px; }
+.hint { color: var(--el-text-color-secondary); font-size: 13px; margin-left: 10px; }
 .warn { margin: 0 0 12px 0; }
 </style>

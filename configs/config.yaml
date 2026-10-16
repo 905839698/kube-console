@@ -23,4 +23,6 @@ admin:
 
 k8s:
   # 终端调试容器镜像（内网集群需用私有仓库可拉取的镜像）
-  debugImage: busybox:1.36
+  # 节点 shell 靠这个容器 nsenter 进宿主机，控制台会以 root 拉起它，
+  # 所以镜像自带 USER 65532（如 busybox:1.37）也不影响；但必须集群能拉到且含 /bin/sh
+  debugImage: harbor.cqyxpt.site:8443/library/busybox:latest

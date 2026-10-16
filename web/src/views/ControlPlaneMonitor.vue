@@ -1,96 +1,84 @@
 <!-- 控制平面组件监控（可观测性）：从集群总览迁出。
-     列表 = 每组件就绪状态 + 1 个概要指标（轻量，手动刷新）；
-     点开抽屉 = 该组件全部指标卡 + 趋势图（趋势按 1h/6h/24h 档位查询，
-     step 由后端放宽，只在点开时付费——对 Prometheus 的压力比旧总览整块拉取更低）。 -->
+     全部组件平摊展开：每个组件一张卡片，头部给状态与实例数，卡内给指标瓦片 + 趋势图；
+     时间档位与刷新是全局的（改档位即整页重查）。
+     详情按组件逐个查询，并发限 3、先到先渲染，避免一次性把 Prometheus 打满。 -->
 <template>
-  <el-card shadow="never">
+  <div class="cp-toolbar">
+    <span class="kc-section-title">控制平面组件</span>
+    <span class="dim">{{ items.length }} 个组件 · 全部展开</span>
+    <div class="cp-tools">
+      <el-radio-group v-model="range" size="small" @change="loadAll">
+        <el-radio-button value="1h">1 小时</el-radio-button>
+        <el-radio-button value="6h">6 小时</el-radio-button>
+        <el-radio-button value="24h">24 小时</el-radio-button>
+      </el-radio-group>
+      <el-button size="small" :icon="Refresh" circle :loading="loading" @click="loadAll" />
+    </div>
+  </div>
+
+  <el-alert v-if="promIssue" type="warning" :closable="false" style="margin-bottom: 12px" :title="promIssue" />
+
+  <el-card v-for="cp in items" :key="cp.name" shadow="never" class="cp-block">
     <template #header>
-      <div class="card-header">
-        <span>控制平面组件</span>
-        <div>
-          <span class="dim" style="margin-right: 12px">API Server / etcd / 调度器 / 控制器 / DNS / proxy / Prometheus</span>
-          <el-button size="small" :icon="Refresh" circle :loading="loading" @click="load" />
-        </div>
+      <div class="d-head">
+        <span class="kc-section-title">{{ view(cp).title }}</span>
+        <el-tag size="small" :type="cpTagType(view(cp))">{{ cpTagText(view(cp)) }}</el-tag>
+        <span class="dim mono">{{ cp.name }}</span>
+        <span v-if="view(cp).total > 0" class="dim">实例 {{ view(cp).ready }}/{{ view(cp).total }}</span>
+        <span v-if="view(cp).total > 0" class="d-health" :class="view(cp).ready < view(cp).total ? 'txt-bad' : 'txt-ok'">
+          {{ view(cp).ready < view(cp).total ? `${view(cp).total - view(cp).ready} 个实例不可用` : '实例全部就绪' }}
+        </span>
       </div>
     </template>
 
-    <el-alert v-if="promIssue" type="warning" :closable="false" style="margin-bottom: 12px"
-      :title="promIssue" />
+    <div v-loading="!!pending[cp.name]" class="detail">
+      <div v-if="view(cp).desc" class="d-desc">{{ view(cp).desc }}</div>
 
-    <div v-loading="loading" class="cp-grid">
-      <el-card v-for="cp in items" :key="cp.name" shadow="hover" class="cp-item" @click="openDetail(cp)">
-        <div class="cp-head">
-          <span class="cp-name">{{ cp.title }}</span>
-          <el-tag size="small" :type="cpTagType(cp)">{{ cpTagText(cp) }}</el-tag>
+      <div v-if="view(cp).cards?.length" class="d-cards">
+        <div v-for="c in view(cp).cards" :key="c.label" class="d-card">
+          <div class="cp-h-label">{{ c.label }}</div>
+          <div class="d-card-value mono">{{ fmtCard(c) }}</div>
         </div>
-        <div class="cp-sub">{{ cp.name }}<span v-if="cp.total > 0" class="dim"> · 实例 {{ cp.ready }}/{{ cp.total }}</span></div>
-        <div v-if="cp.cards.length" class="cp-headline">
-          <div class="cp-h-label">{{ cp.cards[0].label }}</div>
-          <div class="cp-h-value">{{ fmtCard(cp.cards[0]) }}</div>
+      </div>
+      <div v-else-if="!pending[cp.name]" class="cp-empty">
+        {{ view(cp).total === 0 ? '未接入 Prometheus 采集' : '已接入，暂无可用指标' }}
+      </div>
+
+      <div v-if="view(cp).charts?.length" class="kc-chart-grid">
+        <div v-for="ch in view(cp).charts" :key="ch.name" class="kc-chart-card">
+          <div class="kc-chart-title">{{ ch.name }}<span class="dim">{{ ch.unit }}</span></div>
+          <MetricChart :series="[{ name: ch.name, data: ch.points as [number, number][], color: MC.primary, unit: ch.unit }]"
+            height="200px" :y-axis-name="ch.unit" />
         </div>
-        <div v-else class="cp-empty">{{ cp.total === 0 ? '未接入 Prometheus 采集' : '已接入，概要暂无数据' }}</div>
-        <div v-if="cp.cards.length && cp.total > 0" class="cp-health" :class="cp.ready < cp.total ? 'txt-bad' : 'txt-ok'">
-          {{ cp.ready < cp.total ? `${cp.total - cp.ready} 个实例不可用` : '实例全部就绪' }}
-        </div>
-      </el-card>
-      <div v-if="!items.length && !loading" class="cp-empty-all">
-        暂无控制面组件数据（Prometheus 未采集 kube-apiserver/etcd 等组件指标时此处为空）
       </div>
     </div>
   </el-card>
 
-  <!-- 详情抽屉：点开才查询 -->
-  <el-drawer v-model="drawer" size="62%" :title="detail?.title || '组件详情'">
-    <div v-loading="detailLoading" class="detail">
-      <template v-if="detail">
-        <div class="d-sub">
-          <span class="dim mono">{{ detail.name }}</span>
-          <el-tag size="small" :type="cpTagType(detail)" style="margin-left: 8px">{{ cpTagText(detail) }}</el-tag>
-          <span v-if="detail.total > 0" class="dim" style="margin-left: 8px">实例 {{ detail.ready }}/{{ detail.total }}</span>
-        </div>
-        <div v-if="detail.desc" class="d-desc">{{ detail.desc }}</div>
-
-        <div class="d-cards" v-if="detail.cards.length">
-          <div v-for="c in detail.cards" :key="c.label" class="d-card">
-            <div class="cp-h-label">{{ c.label }}</div>
-            <div class="d-card-value">{{ fmtCard(c) }}</div>
-          </div>
-        </div>
-        <div v-else-if="!detailLoading" class="cp-empty">该组件未采集到可用指标。</div>
-
-        <template v-if="detail.charts.length">
-          <div class="d-toolbar">
-            <span class="sec-title" style="margin: 0">趋势</span>
-            <el-radio-group v-model="range" size="small" @change="loadDetail">
-              <el-radio-button value="1h">1 小时</el-radio-button>
-              <el-radio-button value="6h">6 小时</el-radio-button>
-              <el-radio-button value="24h">24 小时</el-radio-button>
-            </el-radio-group>
-          </div>
-          <el-row :gutter="16">
-            <el-col v-for="ch in detail.charts" :key="ch.name" :span="12">
-              <el-card shadow="never" class="d-chart">
-                <template #header>{{ ch.name }}</template>
-                <MetricChart :series="[{ name: ch.name, data: ch.points as [number, number][], color: '#409eff', unit: ch.unit }]"
-                  height="220px" :y-axis-name="ch.unit" />
-              </el-card>
-            </el-col>
-          </el-row>
-        </template>
-      </template>
-    </div>
-  </el-drawer>
+  <el-card v-if="!items.length && !loading" shadow="never">
+    <el-empty :image-size="56" description="暂无控制面组件数据（Prometheus 未采集 kube-apiserver / etcd 等组件指标时此处为空）" />
+  </el-card>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
+import { METRIC_COLORS as MC } from '../utils/chart-palette'
 import { Refresh } from '@element-plus/icons-vue'
 import { k8sApi, type ControlPlaneSummary, type ControlPlaneDetail, type ControlCard } from '../api'
 import MetricChart from '../components/MetricChart.vue'
 
+type CpView = ControlPlaneSummary & Partial<ControlPlaneDetail>
+
 const items = ref<ControlPlaneSummary[]>([])
+const details = reactive<Record<string, ControlPlaneDetail>>({})
+const pending = reactive<Record<string, boolean>>({})
 const loading = ref(false)
 const promIssue = ref('')
+const range = ref('6h')
+
+// 概要先行渲染（列表接口就有状态与 1 个指标），详情到达后覆盖同名组件
+function view(cp: ControlPlaneSummary): CpView {
+  return details[cp.name] || cp
+}
 
 async function load() {
   loading.value = true
@@ -107,32 +95,29 @@ async function load() {
     loading.value = false
   }
 }
-onMounted(load)
 
-// ---- 详情 ----
-const drawer = ref(false)
-const detailLoading = ref(false)
-const detail = ref<ControlPlaneDetail | null>(null)
-const range = ref('6h')
-let current = ''
-
-async function openDetail(cp: ControlPlaneSummary) {
-  current = cp.name
-  range.value = '6h'
-  detail.value = { ...cp, desc: '', range: '6h', charts: [] } as ControlPlaneDetail
-  drawer.value = true
-  await loadDetail()
+async function loadAll() {
+  const r = range.value
+  for (const k of Object.keys(details)) delete details[k]
+  items.value.forEach((cp) => { pending[cp.name] = true })
+  const queue = [...items.value]
+  // 并发限 3：一次 7 个组件 × 十余条 range 查询会把 Prometheus 打满
+  await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
+    for (let cp = queue.shift(); cp; cp = queue.shift()) {
+      try {
+        const d = await k8sApi.controlPlaneDetail(cp.name, r)
+        if (r === range.value) details[cp.name] = d
+      } catch { /* http 层已 toast；该卡留概要 */ } finally {
+        pending[cp.name] = false
+      }
+    }
+  }))
 }
 
-async function loadDetail() {
-  detailLoading.value = true
-  try {
-    const d = await k8sApi.controlPlaneDetail(current, range.value)
-    if (d.name === current) detail.value = d
-  } catch { /* http 层已 toast；保持已渲染的卡片不闪空 */ } finally {
-    detailLoading.value = false
-  }
-}
+onMounted(async () => {
+  await load()
+  void loadAll()
+})
 
 // ---- 展示 ----
 type CpLike = { ready: number; total: number }
@@ -149,35 +134,31 @@ function cpTagText(cp: CpLike) {
   return '正常'
 }
 function fmtCard(c: ControlCard) {
+  if (c.value == null || Number.isNaN(Number(c.value))) return '--'
   return `${Number(c.value).toFixed(c.dec)}${c.unit ? ' ' + c.unit : ''}`
 }
 </script>
 
 <style scoped>
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.dim { color: var(--el-text-color-secondary); }
-.mono { font-family: Consolas, 'Courier New', monospace; }
-.cp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; min-height: 120px; }
-.cp-item { cursor: pointer; }
-.cp-item:hover { border-color: var(--el-color-primary); }
-.cp-head { display: flex; justify-content: space-between; align-items: center; }
-.cp-name { font-weight: 600; font-size: 14px; }
-.cp-sub { margin: 2px 0 8px; }
-.cp-headline { margin-top: 4px; }
-.cp-h-label { color: var(--el-text-color-secondary); }
-.cp-h-value { font-size: 18px; font-weight: 600; }
-.cp-health { margin-top: 6px; }
-.cp-empty { color: var(--el-text-color-secondary); margin-top: 8px; }
-.cp-empty-all { grid-column: 1 / -1; text-align: center; color: var(--el-text-color-secondary); padding: 40px 0; }
-.txt-ok { color: var(--el-color-success); }
-.txt-bad { color: var(--el-color-danger); }
-.detail { min-height: 200px; }
-.d-sub { display: flex; align-items: center; }
-.d-desc { color: var(--el-text-color-secondary); margin: 8px 0 12px; }
-.d-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 8px; }
-.d-card { background: var(--el-fill-color-light); border-radius: 6px; padding: 10px 12px; }
-.d-card-value { font-size: 17px; font-weight: 600; }
-.d-toolbar { display: flex; justify-content: space-between; align-items: center; margin: 14px 0 10px; }
-.sec-title { font-weight: 600; }
-.d-chart { margin-bottom: 16px; }
+.cp-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.cp-tools { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.dim { color: var(--kc-mute); }
+.mono { font-family: var(--kc-mono); }
+.cp-block + .cp-block { margin-top: 12px; }
+.cp-block :deep(.el-card__header) { background: var(--kc-surface-2); }
+.d-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.d-health { margin-left: auto; font-size: 13px; font-weight: 600; }
+.detail { min-height: 96px; }
+.d-desc { color: var(--kc-ink-2); font-size: 13px; margin: 2px 0 14px; }
+.d-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.d-card { background: var(--kc-surface-2); border: 1px solid var(--kc-line); border-radius: var(--kc-radius-md); padding: 10px 12px; }
+.cp-h-label { color: var(--kc-mute); font-size: 13px; }
+.d-card-value { font-size: 19px; font-weight: 700; letter-spacing: -0.02em; color: var(--kc-ink); }
+.cp-empty { color: var(--kc-mute); font-size: 13px; }
+.txt-ok { color: var(--kc-ok-text); }
+.txt-bad { color: var(--kc-crit-text); }
+.kc-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-top: 14px; }
+.kc-chart-card { border: 1px solid var(--kc-line); border-radius: var(--kc-radius-md); background: var(--kc-surface); padding: 12px 14px; }
+.kc-chart-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--kc-ink-2); margin-bottom: 6px; }
+.kc-chart-title .dim { margin-left: auto; font-family: var(--kc-mono); font-size: 13px; }
 </style>

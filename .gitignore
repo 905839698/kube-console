@@ -24,3 +24,6 @@ gui-test-screenshots/
 # 本地工具状态（Mimosa 安全钩子 / ZCode 会话）
 .mimosa/
 .zcode/
+
+# Design QA 生成物
+.design-qa/

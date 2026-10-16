@@ -497,6 +497,6 @@ function addVolume() {
 .kv-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; width: 100%; }
 .kv-row-column { width: 100%; }
 .vct-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; width: 100%; }
-.monitor-hint { color: #909399; font-size: 13px; margin-left: 10px; }
-.hint { color: #909399; font-size: 13px; }
+.monitor-hint { color: var(--el-text-color-secondary); font-size: 13px; margin-left: 10px; }
+.hint { color: var(--el-text-color-secondary); font-size: 13px; }
 </style>

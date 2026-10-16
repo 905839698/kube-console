@@ -3,7 +3,10 @@
     <!-- 顶部：标题 + 操作 + 发布进度 -->
     <el-card shadow="never">
       <div class="kc-top-head">
-        <span class="kc-section-title"><el-icon><Box /></el-icon>{{ kindTitle }}详情 / <span class="mono">{{ name }}</span></span>
+        <span class="kc-section-title">
+          <DetailBack :to="`/workloads/${kind}`" label="列表" :query="{ namespace: namespace }" />
+          <el-icon><Box /></el-icon>{{ kindTitle }}详情 / <span class="mono">{{ name }}</span>
+        </span>
         <div class="actions">
           <el-button size="small" @click="refresh">刷新</el-button>
           <el-button size="small" type="primary" @click="openFormEdit">编辑</el-button>
@@ -153,15 +156,29 @@
       <!-- 列 3：选中容器组详情 -->
       <el-card shadow="never" class="kc-pod-detail" v-loading="podLoading">
         <template v-if="selectedPod">
-          <!-- CPU / 内存趋势 -->
+          <!-- CPU / 内存 / 网络 / 磁盘趋势 -->
           <div class="pd-charts">
             <div class="pd-chart">
               <div class="pd-chart-title"><el-tag size="small" type="success" effect="plain">Prometheus</el-tag> CPU（核）</div>
-              <MetricChart :series="[{ name: 'CPU', data: podMonitor?.cpuUsageTrend || [], color: '#2ba471', unit: '核' }]" height="150px" y-axis-name="核" />
+              <MetricChart :series="[{ name: 'CPU', data: podMonitor?.cpuUsageTrend || [], color: MC.primary, unit: '核' }]" height="150px" y-axis-name="核" />
             </div>
             <div class="pd-chart">
               <div class="pd-chart-title"><el-tag size="small" type="success" effect="plain">Prometheus</el-tag> 内存（Mi）</div>
-              <MetricChart :series="[{ name: '内存', data: podMonitor?.memUsageTrend || [], color: '#2b4b83', unit: 'Mi' }]" height="150px" y-axis-name="Mi" />
+              <MetricChart :series="[{ name: '内存', data: podMonitor?.memUsageTrend || [], color: MC.sky, unit: 'Mi' }]" height="150px" y-axis-name="Mi" />
+            </div>
+            <div class="pd-chart">
+              <div class="pd-chart-title"><el-tag size="small" type="success" effect="plain">Prometheus</el-tag> 网络流量（MB/s）</div>
+              <MetricChart
+                :series="[
+                  { name: '接收', data: podMonitor?.netRxTrend || [], color: MC.sky, unit: 'MB/s' },
+                  { name: '发送', data: podMonitor?.netTxTrend || [], color: MC.primary, unit: 'MB/s' },
+                ]"
+                height="150px" y-axis-name="MB/s"
+              />
+            </div>
+            <div class="pd-chart">
+              <div class="pd-chart-title"><el-tag size="small" type="success" effect="plain">Prometheus</el-tag> 磁盘写（MB/s）</div>
+              <MetricChart :series="[{ name: '磁盘写', data: podMonitor?.diskWriteTrend || [], color: MC.sun, unit: 'MB/s' }]" height="150px" y-axis-name="MB/s" />
             </div>
           </div>
 
@@ -248,18 +265,6 @@
       </el-card>
     </div>
 
-    <!-- 工作负载级监控 -->
-    <el-card shadow="never">
-      <template #header>
-        <div class="rs-head">
-          <span class="kc-section-title">资源监控</span>
-          <span class="spacer"></span>
-          <RangeSwitch v-model="range" @change="loadMonitor" />
-        </div>
-      </template>
-      <MetricPanel :cards="monitorCards" :charts="monitorCharts" :loading="monitorLoading" />
-    </el-card>
-
     <YamlDialog v-model="editVisible" :yaml="editYaml" :readonly="false" @applied="load" />
     <!-- 只读 YAML 查看（RS / Pod） -->
     <YamlDialog v-model="viewVisible" :yaml="viewYaml" :readonly="true" />
@@ -312,12 +317,14 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { METRIC_COLORS as MC } from '../utils/chart-palette'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Box, Odometer, ArrowDown } from '@element-plus/icons-vue'
-import { k8sApi, type PodDetail, type PodItem, type PodMonitor, type RolloutItem, type WorkloadDetail, type WorkloadMonitor } from '../api'
+import { k8sApi, type PodDetail, type PodItem, type PodMonitor, type RolloutItem, type WorkloadDetail } from '../api'
 import { cronNextRun } from '../utils/kube-validators'
 import StatusTag from '../components/StatusTag.vue'
+import DetailBack from '../components/DetailBack.vue'
 import YamlDialog from '../components/YamlDialog.vue'
 import ObjectEditor from '../components/ObjectEditor.vue'
 import PodLogsDrawer from '../components/PodLogsDrawer.vue'
@@ -325,9 +332,7 @@ import WebTerminal from '../components/WebTerminal.vue'
 import FileBrowser from '../components/FileBrowser.vue'
 import ImageUpdateDialog from '../components/ImageUpdateDialog.vue'
 import LogCollectionDialog from '../components/LogCollectionDialog.vue'
-import MetricPanel, { type MetricCardDef, type MetricChartDef } from '../components/MetricPanel.vue'
 import MetricChart from '../components/MetricChart.vue'
-import RangeSwitch from '../components/RangeSwitch.vue'
 import { useClusterStore } from '../store/cluster'
 import { usePerm } from '../store/perm'
 import { confirmDelete } from '../utils/confirm'
@@ -571,53 +576,9 @@ function onTreeClick(node: TreeNode) {
   if (node.type === 'pod' && node.pod) selectPod(node.pod)
 }
 
-// ---------- 工作负载级监控 ----------
-const range = ref('6h')
-const monitor = ref<WorkloadMonitor>()
-const monitorLoading = ref(false)
-
-const monitorCards = computed<MetricCardDef[]>(() => {
-  const m = monitor.value
-  const cpuPct = m?.cpuUsagePct ?? null
-  const memPct = m?.memUsagePct ?? null
-  return [
-    cpuPct != null
-      ? { label: 'CPU 使用率', value: cpuPct, unit: '%', color: '#2b4b83' }
-      : { label: 'CPU 用量', value: m?.cpuUsage ?? null, unit: '核', decimals: 2, color: '#2b4b83' },
-    memPct != null
-      ? { label: '内存使用率', value: memPct, unit: '%', color: '#2ba471' }
-      : { label: '内存用量', value: m?.memUsageMi ?? null, unit: 'Mi', decimals: 0, color: '#2ba471' },
-    { label: 'Pod 数量', value: m?.podCount ?? null, unit: '个', decimals: 0, color: '#f5872b' },
-    { label: '磁盘写', value: m?.diskWriteMBs ?? null, unit: 'MB/s', decimals: 2, color: '#74829b' },
-    { label: '网络接收', value: m?.netRxMBs ?? null, unit: 'MB/s', decimals: 2, color: '#e5484d' },
-    { label: '网络发送', value: m?.netTxMBs ?? null, unit: 'MB/s', decimals: 2, color: '#9254de' },
-  ]
-})
-
-const monitorCharts = computed<MetricChartDef[]>(() => {
-  const cpuIsPct = monitor.value?.cpuTrendIsPct ?? false
-  const memIsPct = monitor.value?.memTrendIsPct ?? false
-  const cpuUnit = cpuIsPct ? '%' : '核'
-  const memUnit = memIsPct ? '%' : 'Mi'
-  return [
-    { title: cpuIsPct ? 'CPU 使用率趋势' : 'CPU 用量趋势', series: [{ name: 'CPU', data: monitor.value?.cpuUsageTrend || [], color: '#2b4b83', unit: cpuUnit }], yAxisName: cpuUnit },
-    { title: memIsPct ? '内存使用率趋势' : '内存用量趋势', series: [{ name: '内存', data: monitor.value?.memUsageTrend || [], color: '#2ba471', unit: memUnit }], yAxisName: memUnit },
-    { title: '磁盘写趋势', series: [{ name: '磁盘写', data: monitor.value?.diskWriteTrend || [], color: '#74829b', unit: 'MB/s' }], yAxisName: 'MB/s' },
-    {
-      title: '网络流量',
-      series: [
-        { name: '接收', data: monitor.value?.netRxTrend || [], color: '#e5484d', unit: 'MB/s' },
-        { name: '发送', data: monitor.value?.netTxTrend || [], color: '#9254de', unit: 'MB/s' },
-      ],
-      yAxisName: 'MB/s',
-    },
-  ]
-})
-
 // ---------- 数据加载 ----------
 onMounted(() => {
   load()
-  loadMonitor()
   loadRollouts()
   // 列表页跳转过来时自动选中当前版本
   if (route.query.rollouts && kind.value === 'deployments') loadRollouts()
@@ -641,18 +602,6 @@ async function load() {
     /* 拦截器已提示 */
   } finally {
     loading.value = false
-  }
-}
-
-async function loadMonitor() {
-  if (!clusterStore.current) return
-  monitorLoading.value = true
-  try {
-    monitor.value = await k8sApi.monitorWorkload(kind.value, namespace.value, name.value, range.value)
-  } catch {
-    /* 拦截器已提示 */
-  } finally {
-    monitorLoading.value = false
   }
 }
 
@@ -743,16 +692,16 @@ const collectVisible = ref(false)
   gap: 14px;
   margin-top: 14px;
   font-size: 13px;
-  color: #8a94a6;
+  color: var(--kc-mute);
 }
-.kc-strip-label { color: #6b7689; }
-.kc-strip-item b { color: #2f3b52; font-weight: 600; margin-left: 4px; }
+.kc-strip-label { color: var(--kc-ink-2); }
+.kc-strip-item b { color: var(--kc-ink); font-weight: 600; margin-left: 4px; }
 .kc-progress-mini { display: flex; align-items: center; gap: 8px; width: 180px; }
 .kc-progress-track {
   flex: 1;
   height: 6px;
   border-radius: 3px;
-  background: #e3e8f1;
+  background: var(--kc-surface-2);
   overflow: hidden;
 }
 .kc-progress-track i {
@@ -762,7 +711,7 @@ const collectVisible = ref(false)
   border-radius: 3px;
   transition: width 0.4s;
 }
-.kc-progress-text { font-size: 13px; color: #2f3b52; font-weight: 600; }
+.kc-progress-text { font-size: 13px; color: var(--kc-ink); font-weight: 600; }
 .kc-two-col { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; align-items: start; }
 @media (max-width: 1200px) { .kc-two-col { grid-template-columns: 1fr; } }
 .kc-more { border-top: none; }
@@ -795,7 +744,7 @@ const collectVisible = ref(false)
   position: relative;
 }
 .rs-item:hover { border-color: var(--el-color-primary-light-5); }
-.rs-current { border-color: var(--el-color-success); background: #f4fbf7; }
+.rs-current { border-color: var(--el-color-success); background: var(--kc-tint-mint); }
 html.dark .rs-current { background: rgba(43, 164, 113, 0.08); }
 .rs-item::before {
   content: '';
@@ -805,16 +754,16 @@ html.dark .rs-current { background: rgba(43, 164, 113, 0.08); }
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #c0c6d1;
+  background: var(--kc-mute);
 }
 .rs-current::before { background: var(--el-color-success); }
-.rs-top { display: flex; justify-content: space-between; font-size: 12.5px; color: #8a94a6; }
-.rs-rev { color: #8a94a6; }
+.rs-top { display: flex; justify-content: space-between; font-size: 13px; color: var(--kc-mute); }
+.rs-rev { color: var(--kc-mute); }
 .rs-name { font-size: 13px; color: var(--kc-link); margin: 4px 0; word-break: break-all; }
-.rs-meta { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #6b7689; flex-wrap: wrap; }
+.rs-meta { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--kc-ink-2); flex-wrap: wrap; }
 .rs-img {
-  font-size: 12px;
-  color: #8a94a6;
+  font-size: 13px;
+  color: var(--kc-mute);
   margin-top: 4px;
   white-space: nowrap;
   overflow: hidden;
@@ -833,14 +782,14 @@ html.dark .rs-current { background: rgba(43, 164, 113, 0.08); }
 .pod-item:hover { border-color: var(--el-color-primary-light-5); }
 .pod-active { border-color: var(--el-color-primary); background: var(--el-color-primary-light-9); }
 .pod-item-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.pod-item-name { font-size: 13px; color: #2f3b52; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pod-item-meta { font-size: 12.5px; color: #8a94a6; margin-top: 4px; }
+.pod-item-name { font-size: 13px; color: var(--kc-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pod-item-meta { font-size: 13px; color: var(--kc-mute); margin-top: 4px; }
 
 /* 选中容器组详情 */
 .pd-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 1100px) { .pd-charts { grid-template-columns: 1fr; } }
 .pd-chart { border: 1px solid var(--kc-border); border-radius: 4px; padding: 8px 10px; }
-.pd-chart-title { font-size: 13px; color: #6b7689; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.pd-chart-title { font-size: 13px; color: var(--kc-ink-2); font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
 .pod-bar {
   display: flex;
   align-items: center;
@@ -854,23 +803,23 @@ html.dark .rs-current { background: rgba(43, 164, 113, 0.08); }
 }
 .pod-bar-label { font-size: 13px; opacity: 0.85; }
 .pod-bar-name { font-weight: 700; font-size: 14px; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pod-bar-age { font-size: 12.5px; opacity: 0.8; }
+.pod-bar-age { font-size: 13px; opacity: 0.8; }
 .pod-bar .spacer { flex: 1; }
 .pod-bar :deep(.el-button) { color: #fff; }
-.pod-bar :deep(.el-button--danger:hover) { color: #ffb3b3; }
+.pod-bar :deep(.el-button--danger:hover) { color: var(--kc-coral); }
 .pd-info-row {
   display: flex;
   flex-wrap: wrap;
   gap: 24px;
   font-size: 13px;
-  color: #6b7689;
+  color: var(--kc-ink-2);
   padding-bottom: 10px;
   border-bottom: 1px solid var(--kc-border);
 }
-.pd-info-row b { color: #2f3b52; }
+.pd-info-row b { color: var(--kc-ink); }
 .pd-timeline { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 12px 0; }
-.pd-tl-item { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #2f3b52; }
-.pd-tl-item small { color: #8a94a6; }
+.pd-tl-item { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--kc-ink); }
+.pd-tl-item small { color: var(--kc-mute); }
 .pd-tl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-success); display: inline-block; }
 .pd-tl-bad .pd-tl-dot { background: var(--el-color-danger); }
 .pd-tl-bad { color: var(--el-color-danger); }
@@ -883,15 +832,15 @@ html.dark .rs-current { background: rgba(43, 164, 113, 0.08); }
   margin-bottom: 10px;
 }
 .ctr-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.ctr-name { font-size: 14px; color: #2f3b52; }
+.ctr-name { font-size: 14px; color: var(--kc-ink); }
 .ctr-head .spacer { flex: 1; }
 .ctr-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; font-size: 13px; }
 .ctr-line .spacer { flex: 1; }
-.ctr-label { color: #8a94a6; flex-shrink: 0; }
-.ctr-img { color: #2f3b52; word-break: break-all; font-size: 12.5px; }
+.ctr-label { color: var(--kc-mute); flex-shrink: 0; }
+.ctr-img { color: var(--kc-ink); word-break: break-all; font-size: 13px; }
 .port-chip { font-family: var(--kc-mono); }
-.ctr-msg { font-size: 12.5px; color: #e5484d; word-break: break-all; }
-.pd-init { font-size: 13px; color: #6b7689; margin-top: 6px; }
+.ctr-msg { font-size: 13px; color: var(--kc-crit-text); word-break: break-all; }
+.pd-init { font-size: 13px; color: var(--kc-ink-2); margin-top: 6px; }
 
 /* 树（非 Deployment） */
 .tree-node { display: flex; align-items: center; gap: 6px; font-size: 13px; flex: 1; }
@@ -903,8 +852,8 @@ html.dark .rs-current { background: rgba(43, 164, 113, 0.08); }
   display: inline-block;
   flex-shrink: 0;
 }
-.dot-Running { background: #2ba471; }
-.dot-Pending, .dot-Waiting, .dot-Terminating { background: #f5872b; }
-.dot-Failed, .dot-Error, .dot-CrashLoopBackOff, .dot-ImagePullBackOff { background: #e5484d; }
-.dot-Completed { background: #909399; }
+.dot-Running { background: var(--kc-primary); }
+.dot-Pending, .dot-Waiting, .dot-Terminating { background: var(--kc-sun); }
+.dot-Failed, .dot-Error, .dot-CrashLoopBackOff, .dot-ImagePullBackOff { background: var(--kc-coral); }
+.dot-Completed { background: var(--el-text-color-secondary); }
 </style>

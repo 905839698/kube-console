@@ -7,5 +7,5 @@ defineProps<{ age: string }>()
 </script>
 
 <style scoped>
-.age-text { color: #909399; font-size: 13px; }
+.age-text { color: var(--el-text-color-secondary); font-size: 13px; }
 </style>

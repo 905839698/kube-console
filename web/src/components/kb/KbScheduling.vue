@@ -69,8 +69,8 @@ const summary = computed(() => kbSchedulingSummary(state))
 <style scoped>
 .sched { width: 100%; }
 .sec { font-weight: 600; margin: 12px 0 6px; }
-.sub-tip { font-size: 13px; color: #909399; line-height: 1.6; margin-top: 4px; }
-.summary { margin-top: 10px; font-size: 13px; color: #606266; background: var(--el-fill-color-light); padding: 6px 8px; border-radius: 4px; }
+.sub-tip { font-size: 13px; color: var(--el-text-color-secondary); line-height: 1.6; margin-top: 4px; }
+.summary { margin-top: 10px; font-size: 13px; color: var(--el-text-color-regular); background: var(--el-fill-color-light); padding: 6px 8px; border-radius: 4px; }
 .mono { font-family: var(--el-font-family-mono, monospace); }
 .tol-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 </style>

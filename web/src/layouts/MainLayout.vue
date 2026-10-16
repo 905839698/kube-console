@@ -1,7 +1,7 @@
 <template>
   <el-container class="layout">
-    <!-- 白色侧边栏 -->
-    <el-aside width="212px" class="aside">
+    <!-- 一级分组导轨：子菜单移到内容区顶部页签 -->
+    <el-aside width="208px" class="aside">
       <div class="logo">
         <div class="logo-icon">
           <el-icon :size="18"><Ship /></el-icon>
@@ -9,119 +9,18 @@
         <span>Kube Console</span>
       </div>
       <el-scrollbar class="menu-scroll">
-        <el-menu :default-active="activeMenu" router class="menu">
-          <el-menu-item v-if="canMenu('/overview')" index="/overview"><el-icon><Odometer /></el-icon><span>集群总览</span></el-menu-item>
-          <el-sub-menu v-if="canGroup('cluster-group')" index="cluster-group">
-            <template #title><el-icon><Connection /></el-icon><span>集群</span></template>
-            <el-menu-item v-if="canMenu('/clusters')" index="/clusters"><el-icon><Coordinate /></el-icon><span>集群管理</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/namespaces')" index="/namespaces"><el-icon><Folder /></el-icon><span>命名空间</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/nodes')" index="/nodes"><el-icon><Cpu /></el-icon><span>节点</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/resources')" index="/resources"><el-icon><Files /></el-icon><span>自定义资源</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="canGroup('workload-group')" index="workload-group">
-            <template #title><el-icon><Suitcase /></el-icon><span>工作负载</span></template>
-            <el-menu-item v-if="canMenu('/workloads/matrix')" index="/workloads/matrix"><el-icon><Grid /></el-icon><span>矩阵视图</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/workloads/deployments')" index="/workloads/deployments"><el-icon><Box /></el-icon><span>Deployment</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/workloads/statefulsets')" index="/workloads/statefulsets"><el-icon><Collection /></el-icon><span>StatefulSet</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/workloads/daemonsets')" index="/workloads/daemonsets"><el-icon><Operation /></el-icon><span>DaemonSet</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/workloads/cronjobs')" index="/workloads/cronjobs"><el-icon><Timer /></el-icon><span>CronJob</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/workloads/jobs')" index="/workloads/jobs"><el-icon><Tickets /></el-icon><span>Job</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/workloads/pods')" index="/workloads/pods"><el-icon><Cherry /></el-icon><span>Pod</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/resources/horizontalpodautoscalers')" index="/resources/horizontalpodautoscalers"><el-icon><Sort /></el-icon><span>HPA</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="canGroup('network-group')" index="network-group">
-            <template #title><el-icon><Share /></el-icon><span>服务与网络</span></template>
-            <el-sub-menu v-if="canGroup('net-route-group')" index="net-route-group">
-              <template #title><el-icon><Position /></el-icon><span class="sub-title">服务与路由</span></template>
-              <el-menu-item v-if="canMenu('/resources/services')" index="/resources/services"><el-icon><Connection /></el-icon><span>服务</span></el-menu-item>
-              <el-menu-item v-if="canMenu('/resources/endpointslices')" index="/resources/endpointslices"><el-icon><Guide /></el-icon><span>EndpointSlice</span></el-menu-item>
-              <el-menu-item v-if="canMenu('/resources/routes')" index="/resources/routes"><el-icon><Share /></el-icon><span>路由</span></el-menu-item>
-              <el-menu-item v-if="canMenu('/resources/ingresses')" index="/resources/ingresses"><el-icon><Link /></el-icon><span>Ingress 类</span></el-menu-item>
-            </el-sub-menu>
-            <el-sub-menu v-if="canGroup('net-gateway-group')" index="net-gateway-group">
-              <template #title><el-icon><Collection /></el-icon><span class="sub-title">网关</span></template>
-              <el-menu-item v-if="canMenu('/resources/gatewayclasses')" index="/resources/gatewayclasses"><el-icon><Files /></el-icon><span>网关类</span></el-menu-item>
-              <el-menu-item v-if="canMenu('/resources/gateways')" index="/resources/gateways"><el-icon><OfficeBuilding /></el-icon><span>网关</span></el-menu-item>
-              <el-menu-item v-if="canMenu('/resources/httproutes')" index="/resources/httproutes"><el-icon><Link /></el-icon><span>HTTP 路由</span></el-menu-item>
-              <el-menu-item v-if="canMenu('/resources/tcproutes')" index="/resources/tcproutes"><el-icon><Connection /></el-icon><span>TCP 路由</span></el-menu-item>
-              <el-menu-item v-if="canMenu('/resources/tlsroutes')" index="/resources/tlsroutes"><el-icon><Lock /></el-icon><span>TLS 路由</span></el-menu-item>
-              <el-menu-item v-if="canMenu('/resources/udproutes')" index="/resources/udproutes"><el-icon><Message /></el-icon><span>UDP 路由</span></el-menu-item>
-              <el-menu-item v-if="canMenu('/resources/grpcroutes')" index="/resources/grpcroutes"><el-icon><ChatDotRound /></el-icon><span>GRPC 路由</span></el-menu-item>
-              <el-menu-item v-if="canMenu('/resources/referencegrants')" index="/resources/referencegrants"><el-icon><Unlock /></el-icon><span>跨命名空间引用</span></el-menu-item>
-            </el-sub-menu>
-            <el-sub-menu v-if="canGroup('net-policy-group')" index="net-policy-group">
-              <template #title><el-icon><Lock /></el-icon><span class="sub-title">网络策略</span></template>
-              <el-menu-item v-if="canMenu('/resources/networkpolicies')" index="/resources/networkpolicies"><el-icon><Filter /></el-icon><span>NetworkPolicy</span></el-menu-item>
-            </el-sub-menu>
-          </el-sub-menu>
-          <el-sub-menu v-if="canGroup('config-group')" index="config-group">
-            <template #title><el-icon><Setting /></el-icon><span>配置中心</span></template>
-            <el-menu-item v-if="canMenu('/resources/configmaps')" index="/resources/configmaps"><el-icon><Document /></el-icon><span>ConfigMap</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/resources/secrets')" index="/resources/secrets"><el-icon><Key /></el-icon><span>Secret</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/resources/serviceaccounts')" index="/resources/serviceaccounts"><el-icon><User /></el-icon><span>ServiceAccount</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="canGroup('storage-group')" index="storage-group">
-            <template #title><el-icon><Coin /></el-icon><span>存储</span></template>
-            <el-menu-item v-if="canMenu('/resources/persistentvolumeclaims')" index="/resources/persistentvolumeclaims"><el-icon><Files /></el-icon><span>PVC</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/resources/persistentvolumes')" index="/resources/persistentvolumes"><el-icon><FolderOpened /></el-icon><span>PV</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/resources/storageclasses')" index="/resources/storageclasses"><el-icon><Collection /></el-icon><span>StorageClass</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="canGroup('observe-group')" index="observe-group">
-            <template #title><el-icon><TrendCharts /></el-icon><span>可观测性</span></template>
-            <el-menu-item v-if="canMenu('/monitor')" index="/monitor"><el-icon><DataLine /></el-icon><span>监控</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/monitor/controlplane')" index="/monitor/controlplane"><el-icon><Cpu /></el-icon><span>控制平面组件</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/monitor/alerts')" index="/monitor/alerts"><el-icon><Bell /></el-icon><span>告警</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/monitor/grafana')" index="/monitor/grafana"><el-icon><DataBoard /></el-icon><span>Grafana 面板</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/events')" index="/events"><el-icon><Warning /></el-icon><span>事件中心</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/logsearch')" index="/logsearch"><el-icon><Document /></el-icon><span>日志检索</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="canGroup('cicd-group')" index="cicd-group">
-            <template #title><el-icon><Promotion /></el-icon><span>CI / CD</span></template>
-            <el-menu-item v-if="canMenu('/ci')" index="/ci"><el-icon><SetUp /></el-icon><span>CI 流水线</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/argocd')" index="/argocd"><el-icon><Compass /></el-icon><span>ArgoCD 应用</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/argocd/repos')" index="/argocd/repos"><el-icon><FolderChecked /></el-icon><span>ArgoCD 仓库</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/helm/releases')" index="/helm/releases"><el-icon><Download /></el-icon><span>Helm Releases</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/helm/repos')" index="/helm/repos"><el-icon><FolderOpened /></el-icon><span>Chart 仓库</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="canGroup('micro-group')" index="micro-group">
-            <template #title><el-icon><Coin /></el-icon><span>微服务</span></template>
-            <el-menu-item v-if="canMenu('/micro/services')" index="/micro/services"><el-icon><Connection /></el-icon><span>服务发现</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/micro/configs')" index="/micro/configs"><el-icon><Document /></el-icon><span>配置管理</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="canGroup('kb-group')" index="kb-group">
-            <template #title><el-icon><component :is="KB_GROUP_ICON" /></el-icon><span>数据库</span></template>
-            <el-menu-item v-for="e in visibleEngines" :key="e.key" :index="`/kb/${e.key}`">
-              <el-icon><component :is="e.icon" /></el-icon><span>{{ e.label }}</span>
-            </el-menu-item>
-            <el-menu-item v-if="canMenu('/kb/repos')" index="/kb/repos">
-              <el-icon><component :is="KB_REPO_ICON" /></el-icon><span>备份仓库</span>
-            </el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="canGroup('security-group')" index="security-group">
-            <template #title><el-icon><UserFilled /></el-icon><span>安全 (RBAC)</span></template>
-            <el-menu-item v-if="canMenu('/resources/roles')" index="/resources/roles"><el-icon><Avatar /></el-icon><span>Role</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/resources/rolebindings')" index="/resources/rolebindings"><el-icon><Connection /></el-icon><span>RoleBinding</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/resources/clusterroles')" index="/resources/clusterroles"><el-icon><User /></el-icon><span>ClusterRole</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/resources/clusterrolebindings')" index="/resources/clusterrolebindings"><el-icon><Link /></el-icon><span>ClusterRoleBinding</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="canGroup('quota-group')" index="quota-group">
-            <template #title><el-icon><ScaleToOriginal /></el-icon><span>配额</span></template>
-            <el-menu-item v-if="canMenu('/quotas')" index="/quotas"><el-icon><PieChart /></el-icon><span>ResourceQuota</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/resources/limitranges')" index="/resources/limitranges"><el-icon><Filter /></el-icon><span>LimitRange</span></el-menu-item>
-          </el-sub-menu>
-          <el-sub-menu v-if="canGroup('platform-group')" index="platform-group">
-            <template #title><el-icon><Tools /></el-icon><span>平台管理</span></template>
-            <el-menu-item v-if="canMenu('/users')" index="/users"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/authz')" index="/authz"><el-icon><Key /></el-icon><span>授权管理</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/roles')" index="/roles"><el-icon><Stamp /></el-icon><span>角色管理</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/audit')" index="/audit"><el-icon><Tickets /></el-icon><span>审计日志</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/notify')" index="/notify"><el-icon><Bell /></el-icon><span>通知管理</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/nacos')" index="/nacos"><el-icon><Connection /></el-icon><span>Nacos 管理</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/registry')" index="/registry"><el-icon><Picture /></el-icon><span>镜像仓库</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/usage')" index="/usage"><el-icon><DataAnalysis /></el-icon><span>用量报表</span></el-menu-item>
-            <el-menu-item v-if="canMenu('/backups')" index="/backups"><el-icon><CopyDocument /></el-icon><span>备份概览</span></el-menu-item>
-          </el-sub-menu>
-        </el-menu>
+        <nav class="rail">
+          <button
+            v-for="g in navGroups"
+            :key="g.key"
+            class="rail-item"
+            :class="{ 'is-on': activeGroupKey === g.key }"
+            @click="onGroupClick(g)"
+          >
+            <el-icon><component :is="g.icon" /></el-icon>
+            <span>{{ g.title }}</span>
+          </button>
+        </nav>
       </el-scrollbar>
     </el-aside>
 
@@ -167,6 +66,15 @@
           </el-dropdown>
         </div>
       </el-header>
+
+      <!-- 二级导航：当前分组的子项，横排在内容区顶部（与 CI 流水线页的页签同口径） -->
+      <div v-if="subItems.length > 1" class="subnav">
+        <!-- 用 tab-click 而非 tab-change：详情页里对应页签已是激活态，
+             el-tabs 不会再发 change，点它就无法回列表 -->
+        <el-tabs :model-value="activeMenu" @tab-click="onTabClick">
+          <el-tab-pane v-for="it in subItems" :key="it.path" :label="it.label" :name="it.path" />
+        </el-tabs>
+      </div>
 
       <!-- 修改密码对话框 -->
       <el-dialog v-model="pwdVisible" title="修改密码" width="420px">
@@ -244,7 +152,7 @@
              （否则会等待 21s 超时并弹「连接失败」，掩盖真实原因）。集群管理页不受此限制。 -->
         <el-card v-else-if="clusterDown" shadow="never" class="cluster-down-card">
           <div class="cd-head">
-            <el-icon :size="40" color="#E6A23C"><Warning /></el-icon>
+            <el-icon :size="40" color="var(--el-color-warning)"><Warning /></el-icon>
             <div class="cd-body">
               <div class="cd-title">集群「{{ clusterStore.currentCluster?.name }}」当前不可达</div>
               <div class="cd-desc">{{ clusterStore.currentCluster?.errorMessage || '网络异常或集群 API Server 未启动' }}</div>
@@ -275,7 +183,7 @@ import { authApi, tokenApi, type ApiTokenItem } from '../api'
 import GlobalSearch from '../components/GlobalSearch.vue'
 import NamespaceSelect from '../components/NamespaceSelect.vue'
 import { confirmDelete } from '../utils/confirm'
-import { KB_ENGINES, KB_GROUP_ICON, KB_REPO_ICON } from '../utils/kb-engines'
+import { KB_ENGINES, KB_GROUP_ICON } from '../utils/kb-engines'
 
 const route = useRoute()
 const router = useRouter()
@@ -327,11 +235,142 @@ const activeMenu = computed(() => {
   return route.path
 })
 
+// 导航定义：左侧只留一级分组，子项渲染成内容区顶部页签。
+// 菜单键必须与后端能力表一致（canMenu / canGroup），漏登记的键谁都看不见。
+type NavItem = { path: string; label: string }
+type NavGroup = { key: string; title: string; icon: string; items: NavItem[] }
+type NavDef = NavGroup & { group?: string }
+
+const NAV_DEFS: NavDef[] = [
+  { key: 'overview', title: '集群总览', icon: 'Odometer', items: [{ path: '/overview', label: '集群总览' }] },
+  { key: 'cluster-group', group: 'cluster-group', title: '集群', icon: 'Connection', items: [
+    { path: '/clusters', label: '集群管理' },
+    { path: '/namespaces', label: '命名空间' },
+    { path: '/nodes', label: '节点' },
+    { path: '/resources', label: '自定义资源' },
+  ] },
+  { key: 'workload-group', group: 'workload-group', title: '工作负载', icon: 'Suitcase', items: [
+    { path: '/workloads/matrix', label: '矩阵视图' },
+    { path: '/workloads/deployments', label: 'Deployment' },
+    { path: '/workloads/statefulsets', label: 'StatefulSet' },
+    { path: '/workloads/daemonsets', label: 'DaemonSet' },
+    { path: '/workloads/cronjobs', label: 'CronJob' },
+    { path: '/workloads/jobs', label: 'Job' },
+    { path: '/workloads/pods', label: 'Pod' },
+    { path: '/resources/horizontalpodautoscalers', label: 'HPA' },
+  ] },
+  { key: 'network-group', group: 'network-group', title: '服务与网络', icon: 'Share', items: [
+    { path: '/resources/services', label: '服务' },
+    { path: '/resources/endpointslices', label: 'EndpointSlice' },
+    { path: '/resources/routes', label: '路由' },
+    { path: '/resources/ingresses', label: 'Ingress 类' },
+    { path: '/resources/gatewayclasses', label: '网关类' },
+    { path: '/resources/gateways', label: '网关' },
+    { path: '/resources/httproutes', label: 'HTTP 路由' },
+    { path: '/resources/tcproutes', label: 'TCP 路由' },
+    { path: '/resources/tlsroutes', label: 'TLS 路由' },
+    { path: '/resources/udproutes', label: 'UDP 路由' },
+    { path: '/resources/grpcroutes', label: 'GRPC 路由' },
+    { path: '/resources/referencegrants', label: '跨命名空间引用' },
+    { path: '/resources/networkpolicies', label: 'NetworkPolicy' },
+  ] },
+  { key: 'config-group', group: 'config-group', title: '配置中心', icon: 'Setting', items: [
+    { path: '/resources/configmaps', label: 'ConfigMap' },
+    { path: '/resources/secrets', label: 'Secret' },
+    { path: '/resources/serviceaccounts', label: 'ServiceAccount' },
+  ] },
+  { key: 'storage-group', group: 'storage-group', title: '存储', icon: 'Coin', items: [
+    { path: '/resources/persistentvolumeclaims', label: 'PVC' },
+    { path: '/resources/persistentvolumes', label: 'PV' },
+    { path: '/resources/storageclasses', label: 'StorageClass' },
+  ] },
+  { key: 'observe-group', group: 'observe-group', title: '可观测性', icon: 'TrendCharts', items: [
+    { path: '/monitor', label: '监控' },
+    { path: '/monitor/controlplane', label: '控制平面组件' },
+    { path: '/monitor/alerts', label: '告警' },
+    { path: '/monitor/grafana', label: 'Grafana 面板' },
+    { path: '/events', label: '事件中心' },
+    { path: '/logsearch', label: '日志检索' },
+  ] },
+  { key: 'cicd-group', group: 'cicd-group', title: 'CI / CD', icon: 'Promotion', items: [
+    { path: '/ci', label: 'CI 流水线' },
+    { path: '/argocd', label: 'ArgoCD 应用' },
+    { path: '/argocd/repos', label: 'ArgoCD 仓库' },
+    { path: '/helm/releases', label: 'Helm Releases' },
+    { path: '/helm/repos', label: 'Chart 仓库' },
+  ] },
+  { key: 'micro-group', group: 'micro-group', title: '微服务', icon: 'Connection', items: [
+    { path: '/micro/services', label: '服务发现' },
+    { path: '/micro/configs', label: '配置管理' },
+  ] },
+  { key: 'kb-group', group: 'kb-group', title: '数据库', icon: KB_GROUP_ICON, items: [] },
+  { key: 'security-group', group: 'security-group', title: '安全 (RBAC)', icon: 'UserFilled', items: [
+    { path: '/resources/roles', label: 'Role' },
+    { path: '/resources/rolebindings', label: 'RoleBinding' },
+    { path: '/resources/clusterroles', label: 'ClusterRole' },
+    { path: '/resources/clusterrolebindings', label: 'ClusterRoleBinding' },
+  ] },
+  { key: 'quota-group', group: 'quota-group', title: '配额', icon: 'ScaleToOriginal', items: [
+    { path: '/quotas', label: 'ResourceQuota' },
+    { path: '/resources/limitranges', label: 'LimitRange' },
+  ] },
+  { key: 'platform-group', group: 'platform-group', title: '平台管理', icon: 'Tools', items: [
+    { path: '/users', label: '用户管理' },
+    { path: '/authz', label: '授权管理' },
+    { path: '/roles', label: '角色管理' },
+    { path: '/audit', label: '审计日志' },
+    { path: '/notify', label: '通知管理' },
+    { path: '/nacos', label: 'Nacos 管理' },
+    { path: '/registry', label: '镜像仓库' },
+    { path: '/usage', label: '用量报表' },
+    { path: '/backups', label: '备份概览' },
+  ] },
+]
+
+const navGroups = computed<NavGroup[]>(() => {
+  // 数据库分组跟着引擎能力走：读不到 KubeBlocks 就不给这些入口
+  const kbItems: NavItem[] = [
+    ...KB_ENGINES.map((e) => ({ path: `/kb/${e.key}`, label: e.label })),
+    { path: '/kb/repos', label: '备份仓库' },
+  ]
+  return NAV_DEFS
+    .filter((d) => !d.group || perm.canGroup(d.group))
+    .map((d) => ({
+      key: d.key,
+      title: d.title,
+      icon: d.icon,
+      items: (d.key === 'kb-group' ? kbItems : d.items).filter((i) => perm.canMenu(i.path)),
+    }))
+    .filter((d) => d.items.length > 0)
+})
+
+// 点详情页（/nodes/xxx、/pods/<ns>/<name>）时也要把分组和页签点亮：
+// 先精确匹配，再退到"路径前缀最长的那个子项"
+const lastGroupKey = ref('')
+const activeGroup = computed<NavGroup | undefined>(() => {
+  const path = activeMenu.value
+  const groups = navGroups.value
+  const exact = groups.find((g) => g.items.some((i) => i.path === path))
+  if (exact) return exact
+  const prefixed = groups
+    .flatMap((g) => g.items.filter((i) => path.startsWith(`${i.path}/`)).map((i) => ({ g, len: i.path.length })))
+    .sort((a, b) => b.len - a.len)[0]
+  if (prefixed) return prefixed.g
+  return groups.find((g) => g.key === lastGroupKey.value) || groups[0]
+})
+const activeGroupKey = computed(() => activeGroup.value?.key || '')
+const subItems = computed(() => activeGroup.value?.items || [])
+
+function onGroupClick(g: NavGroup) {
+  lastGroupKey.value = g.key
+  router.push(g.items[0].path)
+}
+function onTabClick(tab: { paneName?: string | number; props?: { name?: string | number } }) {
+  const path = String(tab?.paneName ?? tab?.props?.name ?? '')
+  if (path.startsWith('/')) router.push(path)
+}
+
 // 平台管理菜单：platform-admin 全量；platform-viewer 只读子集（授权/角色/审计/报表）
-const canMenu = perm.canMenu
-const canGroup = perm.canGroup
-// 引擎子菜单跟着能力走：读不到 KubeBlocks 的 Cluster 就不给这六个入口
-const visibleEngines = computed(() => KB_ENGINES.filter((e) => perm.canMenu(`/kb/${e.key}`)))
 
 // 直接敲 URL 也要挡：菜单藏了的页面进不去，落到用户真能看的第一个菜单上
 function guardRoute() {
@@ -470,80 +509,104 @@ async function savePassword() {
   height: 56px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   padding: 0 16px;
   color: var(--kc-title);
+  font-family: var(--kc-font-display);
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: -0.01em;
   border-bottom: 1px solid var(--kc-sidebar-border);
 }
 .logo-icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 11px;
   background: var(--kc-logo-gradient);
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 6px 14px rgba(23, 184, 154, 0.32);
 }
 .menu-scroll { flex: 1; }
-.menu {
-  border-right: none;
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   padding: 8px;
-  --el-menu-item-height: 42px;
-  /* 关键：EP 菜单默认白底会盖住深色侧边栏，置透明让 aside 底色透出 */
-  --el-menu-bg-color: transparent;
-  --el-menu-hover-bg-color: transparent;
-  background-color: transparent;
 }
-.menu :deep(.el-menu-item) {
-  border-radius: 6px;
-  margin-bottom: 2px;
+.rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 11px;
+  background: none;
   color: var(--kc-sidebar-text);
+  font-family: var(--kc-font-body);
   font-size: 13.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.16s, color 0.16s, transform 0.16s;
 }
-.menu :deep(.el-menu-item .el-icon) {
+.rail-item .el-icon {
   font-size: 15px;
+  flex-shrink: 0;
 }
-.menu :deep(.el-menu-item:hover),
-.menu :deep(.el-sub-menu__title:hover) {
+.rail-item:hover {
   background: var(--kc-sidebar-hover);
   color: var(--kc-title);
+  transform: translateX(2px);
 }
-.menu :deep(.el-menu-item.is-active) {
+.rail-item.is-on {
   background: var(--kc-sidebar-active-bg);
   color: var(--kc-sidebar-text-active);
-  font-weight: 600;
+  font-weight: 700;
 }
-.menu :deep(.el-menu-item.is-active)::before {
+.rail-item.is-on::before {
   content: '';
   position: absolute;
-  left: 0;
-  top: 20%;
-  bottom: 20%;
-  width: 3px;
-  border-radius: 2px;
+  left: -8px;
+  top: 22%;
+  bottom: 22%;
+  width: 4px;
+  border-radius: 0 4px 4px 0;
   background: var(--kc-sidebar-accent);
 }
-.menu :deep(.el-sub-menu__title) {
-  border-radius: 6px;
-  color: #3d4c66;
-  font-weight: 600;
-  font-size: 13.5px;
+/* 顶部二级导航：与 CI 流水线页的 el-tabs 同一观感，只借它的页签头 */
+.subnav {
+  flex-shrink: 0;
+  background: var(--kc-header-bg);
+  border-bottom: 1px solid var(--kc-line);
+  padding: 0 18px;
 }
-.menu :deep(.el-sub-menu .el-menu-item) {
-  min-width: 212px;
-  padding-left: 48px !important;
+.subnav :deep(.el-tabs__header) { margin: 0; }
+.subnav :deep(.el-tabs__content) { display: none; }
+.subnav :deep(.el-tabs__nav-wrap::after) { display: none; }
+.subnav :deep(.el-tabs__item) {
+  height: 44px;
+  line-height: 44px;
+  font-family: var(--kc-font-display);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--kc-ink-2);
 }
-/* 三级菜单（服务与网络 → 子分组 → 项）进一步缩进 */
-.menu :deep(.el-sub-menu .el-sub-menu .el-menu-item) {
-  padding-left: 72px !important;
+.subnav :deep(.el-tabs__item:hover) { color: var(--kc-primary-deep); }
+.subnav :deep(.el-tabs__item.is-active) { color: var(--kc-primary-deep); }
+.subnav :deep(.el-tabs__active-bar) {
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background-color: var(--kc-primary);
 }
-.sub-title { font-size: 13px; color: var(--kc-sidebar-text); font-weight: 400; }
 .header {
   background: var(--kc-header-bg);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--kc-shadow);
   display: flex;
   align-items: center;
   height: 56px;
@@ -557,7 +620,7 @@ async function savePassword() {
   align-items: center;
   gap: 6px;
   cursor: pointer;
-  color: #4b5563;
+  color: var(--kc-ink-2);
   font-size: 14px;
 }
 .user-avatar {
@@ -565,14 +628,14 @@ async function savePassword() {
   color: #fff;
   font-weight: 600;
 }
-.main { background: var(--kc-bg); padding: 16px; overflow-y: auto; }
+.main { background: var(--kc-bg); padding: 18px; overflow-y: auto; }
 .main-loading {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
   height: 60vh;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 14px;
 }
 .cluster-down-card {
@@ -588,19 +651,19 @@ async function savePassword() {
 .cd-title {
   font-size: 16px;
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
   margin-bottom: 8px;
 }
 .cd-desc {
   font-size: 13px;
-  color: #e6a23c;
+  color: var(--el-color-warning);
   line-height: 1.5;
   word-break: break-all;
 }
 .cd-tip {
   margin-top: 8px;
   font-size: 13px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   line-height: 1.6;
 }
 .cd-actions {

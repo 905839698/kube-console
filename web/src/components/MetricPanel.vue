@@ -46,5 +46,5 @@ const noData = computed(() => {
 </script>
 
 <style scoped>
-.chart-title { font-size: 13px; color: #606266; font-weight: 600; margin-bottom: 6px; }
+.chart-title { font-size: 13px; color: var(--el-text-color-regular); font-weight: 600; margin-bottom: 6px; }
 </style>

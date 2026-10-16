@@ -52,7 +52,7 @@
         <template #default="{ row }">{{ row.storageClass || '-' }}</template>
       </el-table-column>
       <el-table-column prop="createdAt" label="创建时间" width="160" />
-      <el-table-column label="操作" width="190" fixed="right">
+      <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
           <el-button size="small" text :disabled="!canWrite" @click="openEdit(row)">编辑</el-button>
           <el-button size="small" text type="danger" :disabled="!canWrite" @click="del(row)">删除</el-button>
@@ -383,11 +383,11 @@ function phaseType(phase: string): 'success' | 'info' | 'danger' | 'warning' {
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .title { font-weight: 600; margin-right: 10px; }
-.tip { font-size: 13px; color: #909399; }
-.sub-tip { font-size: 13px; color: #909399; line-height: 1.6; }
-.warn-text { color: #e6a23c; }
-.warn-icon { color: #e6a23c; vertical-align: -2px; margin-left: 4px; cursor: help; }
-.opt-tip { float: right; font-size: 13px; color: #a8abb2; margin-left: 20px; }
+.tip { font-size: 13px; color: var(--el-text-color-secondary); }
+.sub-tip { font-size: 13px; color: var(--el-text-color-secondary); line-height: 1.6; }
+.warn-text { color: var(--el-color-warning); }
+.warn-icon { color: var(--el-color-warning); vertical-align: -2px; margin-left: 4px; cursor: help; }
+.opt-tip { float: right; font-size: 13px; color: var(--kc-mute); margin-left: 20px; }
 .sec-title { font-weight: 600; margin-bottom: 6px; }
 .mono { font-family: var(--el-font-family-mono, monospace); font-size: 13px; }
 </style>

@@ -138,6 +138,6 @@ function onSaved() {
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .header-right { display: flex; gap: 8px; align-items: center; }
-.quota-values { font-size: 13px; color: #606266; }
-.gray { color: #c0c4cc; }
+.quota-values { font-size: 13px; color: var(--el-text-color-regular); }
+.gray { color: var(--el-text-color-disabled); }
 </style>

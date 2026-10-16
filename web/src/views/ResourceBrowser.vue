@@ -33,7 +33,7 @@
             <el-table-column label="短名" width="120">
               <template #default="{ row }">{{ (row.shortNames || []).join(', ') }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="90">
+            <el-table-column label="操作" width="84">
               <template #default="{ row }">
                 <el-button size="small" @click="openResource(g, row)">浏览</el-button>
               </template>

@@ -260,7 +260,7 @@ function kindTitle(kind: string): string {
 <style scoped>
 .diff-box { max-height: 56vh; overflow: auto; border: 1px solid var(--kc-border); border-radius: 4px; font: 12px/1.6 ui-monospace, Consolas, monospace; }
 .diff-row { display: flex; }
-.diff-no { flex: 0 0 42px; text-align: right; padding-right: 8px; color: #909399; user-select: none; }
+.diff-no { flex: 0 0 42px; text-align: right; padding-right: 8px; color: var(--el-text-color-secondary); user-select: none; }
 .diff-text { flex: 1; margin: 0; white-space: pre-wrap; word-break: break-all; }
 .diff-add { background: rgba(103, 194, 58, 0.12); }
 .diff-del { background: rgba(245, 108, 108, 0.12); text-decoration: line-through; }
@@ -269,6 +269,6 @@ function kindTitle(kind: string): string {
 /* YAML 编辑器高度自适应（随视口） */
 .yaml-pane { height: calc(100vh - 360px); min-height: 320px; }
 .editor-footer { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
-.yaml-error { color: #f56c6c; font-size: 13px; }
-.empty-hint { color: #909399; font-size: 13px; padding: 20px 0; text-align: center; }
+.yaml-error { color: var(--el-color-danger); font-size: 13px; }
+.empty-hint { color: var(--el-text-color-secondary); font-size: 13px; padding: 20px 0; text-align: center; }
 </style>

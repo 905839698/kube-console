@@ -31,7 +31,7 @@
           <span v-if="row.level === 'platform'">平台（全部集群）</span>
           <span v-else>{{ row.cluster }}
             <template v-if="row.level === 'project'">
-              / <span v-if="row.namespaces.includes('*')" style="color: #e6a23c">全部命名空间</span>
+              / <span v-if="row.namespaces.includes('*')" style="color: var(--kc-warn-text)">全部命名空间</span>
               <span v-else>{{ row.namespaces.join(', ') }}</span>
             </template>
           </span>
@@ -43,7 +43,7 @@
           <span v-else>权限管理</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="90" fixed="right">
+      <el-table-column label="操作" width="76" fixed="right">
         <template #default="{ row }">
           <el-button v-if="userStore.isAdmin" size="small" text type="danger" @click="revoke(row)">回收</el-button>
         </template>
@@ -378,10 +378,10 @@ onMounted(() => {
 
 <style scoped>
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
-.hint { color: #909399; font-size: 13px; }
-.sec-title { margin: 6px 0 8px; font-size: 13px; color: #303133; }
+.hint { color: var(--el-text-color-secondary); font-size: 13px; }
+.sec-title { margin: 6px 0 8px; font-size: 13px; color: var(--el-text-color-primary); }
 .level-group, .role-group { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .level-radio, .role-radio { height: auto; align-items: flex-start; padding: 6px 0; white-space: normal; }
 .level-radio :deep(.el-radio__label), .role-radio :deep(.el-radio__label) { line-height: 1.5; }
-.sub { color: #909399; font-size: 13px; font-weight: 400; }
+.sub { color: var(--el-text-color-secondary); font-size: 13px; font-weight: 400; }
 </style>

@@ -264,7 +264,7 @@ watch(() => props.modelValue, (v) => {
 </script>
 
 <style scoped>
-.hint { color: #909399; font-size: 13px; line-height: 1.5; }
+.hint { color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.5; }
 .yaml-toolbar { display: flex; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
-.yaml-wrap { height: 420px; border: 1px solid var(--kc-border, #dcdfe6); border-radius: 4px; overflow: hidden; }
+.yaml-wrap { height: 420px; border: 1px solid var(--kc-border, var(--el-border-color)); border-radius: 4px; overflow: hidden; }
 </style>

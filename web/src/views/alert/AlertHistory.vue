@@ -176,15 +176,15 @@ onMounted(load)
 <style scoped>
 .stat-card { text-align: center; }
 .stat-num { font-size: 30px; font-weight: 700; line-height: 1.2; }
-.stat-num.danger { color: #f56c6c; }
-.stat-num.success { color: #67c23a; }
-.stat-label { color: #909399; font-size: 13px; margin-top: 6px; }
-.stat-card.stat-firing { border-color: #f56c6c; }
+.stat-num.danger { color: var(--el-color-danger); }
+.stat-num.success { color: var(--el-color-success); }
+.stat-label { color: var(--el-text-color-secondary); font-size: 13px; margin-top: 6px; }
+.stat-card.stat-firing { border-color: var(--el-color-danger); }
 .stat-top { min-height: 36px; display: flex; flex-direction: column; justify-content: center; }
 .top-row { display: flex; justify-content: space-between; font-size: 13px; line-height: 1.7; }
 .top-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90px; }
-.top-count { color: #909399; }
-.muted { color: #c0c4cc; font-size: 13px; }
+.top-count { color: var(--el-text-color-secondary); }
+.muted { color: var(--el-text-color-disabled); font-size: 13px; }
 .sub-note { margin-left: 8px; }
 .sync-err-row { font-size: 13px; line-height: 1.8; }
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }

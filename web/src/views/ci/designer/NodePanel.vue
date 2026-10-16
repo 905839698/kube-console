@@ -61,19 +61,19 @@ export default { name: 'CiNodePanel' }
 
 <style scoped>
 .node-panel {
-  width: 200px; border: 1px solid #ebeef5; border-radius: 8px;
+  width: 200px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px;
   padding: 8px; overflow-y: auto; flex-shrink: 0; background: #fff;
 }
 .title { font-weight: 600; margin-bottom: 4px; }
-.hint { font-size: 12px; color: #909399; margin-bottom: 8px; }
-.empty { text-align: center; padding: 12px 0; font-size: 13px; color: #909399; }
-.empty.err { color: #f56c6c; }
+.hint { font-size: 12px; color: var(--el-text-color-secondary); margin-bottom: 8px; }
+.empty { text-align: center; padding: 12px 0; font-size: 13px; color: var(--el-text-color-secondary); }
+.empty.err { color: var(--el-color-danger); }
 .group { margin-bottom: 12px; }
-.cat { font-size: 13px; color: #909399; margin-bottom: 4px; }
+.cat { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 4px; }
 .item {
-  cursor: grab; border: 1px dashed #dcdfe6; border-radius: 6px;
-  padding: 4px 8px; margin-bottom: 4px; font-size: 13px; background: #fafafa;
+  cursor: grab; border: 1px dashed var(--el-border-color); border-radius: 6px;
+  padding: 4px 8px; margin-bottom: 4px; font-size: 13px; background: var(--kc-surface-2);
 }
-.item:hover { border-color: #409eff; background: #ecf5ff; }
+.item:hover { border-color: var(--kc-primary); background: var(--kc-tint-mint); }
 .icon { margin-right: 6px; }
 </style>

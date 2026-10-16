@@ -138,7 +138,7 @@
         </el-table-column>
         <el-table-column prop="chart" label="Chart" min-width="160" />
         <el-table-column prop="age" label="更新时间" width="110" align="center" />
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="110" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" plain :disabled="row.status !== 'superseded' && row.status !== 'uninstalled'" @click="rollback(row)">回滚到此</el-button>
           </template>
@@ -478,10 +478,10 @@ async function uninstall(row: HelmReleaseItem) {
 <style scoped>
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .header-right { display: flex; gap: 8px; align-items: center; }
-.desc { color: #909399; font-size: 13px; line-height: 1.4; }
+.desc { color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.4; }
 .status-tabs { margin-bottom: 8px; }
 .mb12 { margin-bottom: 12px; }
 .ns-check { margin-left: 12px; }
-.unit { margin-left: 6px; color: #909399; font-size: 13px; }
-.editor-wrap { width: 100%; height: 260px; border: 1px solid #dcdfe6; border-radius: 4px; overflow: hidden; }
+.unit { margin-left: 6px; color: var(--el-text-color-secondary); font-size: 13px; }
+.editor-wrap { width: 100%; height: 260px; border: 1px solid var(--el-border-color); border-radius: 4px; overflow: hidden; }
 </style>

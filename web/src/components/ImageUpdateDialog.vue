@@ -161,9 +161,9 @@ watch(() => props.modelValue, (v) => {
 </script>
 
 <style scoped>
-.img-row { border: 1px dashed var(--kc-border, #dcdfe6); border-radius: 4px; padding: 10px; margin-bottom: 8px; }
+.img-row { border: 1px dashed var(--kc-border, var(--el-border-color)); border-radius: 4px; padding: 10px; margin-bottom: 8px; }
 .img-row-head { display: flex; align-items: center; gap: 6px; }
 .img-name { font-weight: 600; font-size: 13px; }
-.img-repo { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: #606266; margin: 4px 0 6px; word-break: break-all; }
-.img-hint { font-size: 13px; color: #e6a23c; }
+.img-repo { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--el-text-color-regular); margin: 4px 0 6px; word-break: break-all; }
+.img-hint { font-size: 13px; color: var(--el-color-warning); }
 </style>

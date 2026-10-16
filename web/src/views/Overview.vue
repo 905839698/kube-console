@@ -21,32 +21,32 @@
     <!-- 监控使用率 -->
     <el-row :gutter="16" style="margin-top: 16px">
       <el-col :span="6">
-        <MetricCard label="CPU 使用率" :value="monitor?.cpuUsagePct ?? null" unit="%" :decimals="1" color="#409eff" :trend="monitor?.cpuUsageTrend" />
+        <MetricCard label="CPU 使用率" :value="monitor?.cpuUsagePct ?? null" unit="%" :decimals="1" :color="MC.primary" :trend="monitor?.cpuUsageTrend" />
       </el-col>
       <el-col :span="6">
-        <MetricCard label="内存使用率" :value="monitor?.memUsagePct ?? null" unit="%" :decimals="1" color="#67c23a" :trend="monitor?.memUsageTrend" />
+        <MetricCard label="内存使用率" :value="monitor?.memUsagePct ?? null" unit="%" :decimals="1" :color="MC.sky" :trend="monitor?.memUsageTrend" />
       </el-col>
       <el-col :span="6">
-        <MetricCard label="磁盘使用率" :value="monitor?.diskUsagePct ?? null" unit="%" :decimals="1" color="#e6a23c" :trend="monitor?.diskUsageTrend" />
+        <MetricCard label="磁盘使用率" :value="monitor?.diskUsagePct ?? null" unit="%" :decimals="1" :color="MC.coral" :trend="monitor?.diskUsageTrend" />
       </el-col>
       <el-col :span="6">
-        <MetricCard label="网络接收" :value="monitor?.netRxMBs ?? null" unit="MB/s" :decimals="1" color="#f56c6c" :sub="netTxText" :trend="monitor?.netRxTrend" />
+        <MetricCard label="网络接收" :value="monitor?.netRxMBs ?? null" unit="MB/s" :decimals="1" :color="MC.sun" :sub="netTxText" :trend="monitor?.netRxTrend" />
       </el-col>
     </el-row>
 
     <!-- Request/Limit 配额视角（kube-state-metrics 未采集时隐藏） -->
     <el-row v-if="quotaVisible" :gutter="16" style="margin-top: 16px">
-      <el-col :span="6"><MetricCard label="CPU Requests" :value="monitor?.cpuRequestsCores ?? null" unit="核" :decimals="2" color="#409eff" :sub="allocSub('cpu', monitor?.cpuRequestsCores)" /></el-col>
-      <el-col :span="6"><MetricCard label="CPU Limits" :value="monitor?.cpuLimitsCores ?? null" unit="核" :decimals="2" color="#337ecc" :sub="allocSub('cpu', monitor?.cpuLimitsCores)" /></el-col>
-      <el-col :span="6"><MetricCard label="内存 Requests" :value="monitor?.memRequestsGi ?? null" unit="Gi" :decimals="2" color="#67c23a" :sub="allocSub('mem', monitor?.memRequestsGi)" /></el-col>
-      <el-col :span="6"><MetricCard label="内存 Limits" :value="monitor?.memLimitsGi ?? null" unit="Gi" :decimals="2" color="#4d9e57" :sub="allocSub('mem', monitor?.memLimitsGi)" /></el-col>
+      <el-col :span="6"><MetricCard label="CPU Requests" :value="monitor?.cpuRequestsCores ?? null" unit="核" :decimals="2" :color="MC.primary" :sub="allocSub('cpu', monitor?.cpuRequestsCores)" /></el-col>
+      <el-col :span="6"><MetricCard label="CPU Limits" :value="monitor?.cpuLimitsCores ?? null" unit="核" :decimals="2" :color="MC.grape" :sub="allocSub('cpu', monitor?.cpuLimitsCores)" /></el-col>
+      <el-col :span="6"><MetricCard label="内存 Requests" :value="monitor?.memRequestsGi ?? null" unit="Gi" :decimals="2" :color="MC.sky" :sub="allocSub('mem', monitor?.memRequestsGi)" /></el-col>
+      <el-col :span="6"><MetricCard label="内存 Limits" :value="monitor?.memLimitsGi ?? null" unit="Gi" :decimals="2" :color="MC.mute" :sub="allocSub('mem', monitor?.memLimitsGi)" /></el-col>
     </el-row>
 
     <!-- PV 存储用量（数量/总容量走 kube-state-metrics 的 PV 容量，已用率走 kubelet volume stats） -->
     <el-row v-if="pvVisible" :gutter="16" style="margin-top: 16px">
-      <el-col :span="6"><MetricCard label="PV 数量" :value="monitor?.pvCount ?? null" unit="个" :decimals="0" color="#9254de" sub="集群内 PersistentVolume 总数" /></el-col>
-      <el-col :span="6"><MetricCard label="PV 总容量" :value="monitor?.pvTotalGi ?? null" unit="Gi" :decimals="1" color="#409eff" sub="各 PV spec.capacity 之和" /></el-col>
-      <el-col :span="6"><MetricCard label="卷已用率" :value="monitor?.pvUsedPct ?? null" unit="%" :decimals="1" color="#e6a23c" sub="kubelet 挂载点口径" /></el-col>
+      <el-col :span="6"><MetricCard label="PV 数量" :value="monitor?.pvCount ?? null" unit="个" :decimals="0" :color="MC.grape" sub="集群内 PersistentVolume 总数" /></el-col>
+      <el-col :span="6"><MetricCard label="PV 总容量" :value="monitor?.pvTotalGi ?? null" unit="Gi" :decimals="1" :color="MC.sky" sub="各 PV spec.capacity 之和" /></el-col>
+      <el-col :span="6"><MetricCard label="卷已用率" :value="monitor?.pvUsedPct ?? null" unit="%" :decimals="1" :color="MC.coral" sub="kubelet 挂载点口径" /></el-col>
       <el-col :span="6">
         <el-card shadow="never" class="pv-rank-card">
           <template #header>
@@ -106,6 +106,7 @@
 import { computed, defineComponent, h, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { k8sApi, type OverviewStats, type MonitorOverview, type RankItem } from '../api'
+import { METRIC_COLORS as MC } from '../utils/chart-palette'
 import { QuestionFilled, Refresh } from '@element-plus/icons-vue'
 import StatusTag from '../components/StatusTag.vue'
 import MetricCard from '../components/MetricCard.vue'
@@ -120,10 +121,10 @@ const loading = ref(false)
 const rankTab = ref('cpu')
 
 const cards = computed(() => [
-  { label: '节点', value: stats.value?.nodes ?? '-', icon: 'Monitor', color: '#409eff' },
-  { label: 'Pod', value: stats.value ? `${stats.value.podsRunning}/${stats.value.pods}` : '-', icon: 'Grid', color: '#67c23a' },
-  { label: '工作负载', value: stats.value ? stats.value.deployments + stats.value.statefulSets + stats.value.daemonSets : '-', icon: 'Box', color: '#e6a23c' },
-  { label: '命名空间', value: stats.value?.namespaces ?? '-', icon: 'FolderOpened', color: '#f56c6c' },
+  { label: '节点', value: stats.value?.nodes ?? '-', icon: 'Monitor', color: MC.primary },
+  { label: 'Pod', value: stats.value ? `${stats.value.podsRunning}/${stats.value.pods}` : '-', icon: 'Grid', color: MC.sky },
+  { label: '工作负载', value: stats.value ? stats.value.deployments + stats.value.statefulSets + stats.value.daemonSets : '-', icon: 'Box', color: MC.sun },
+  { label: '命名空间', value: stats.value?.namespaces ?? '-', icon: 'FolderOpened', color: MC.coral },
 ])
 
 const netTxText = computed(() =>
@@ -161,9 +162,9 @@ const RankTable = defineComponent({
         { class: 'rank-list' },
         rows.map((r, i) =>
           h('div', { class: 'rank-row' }, [
-            h('span', { class: 'rank-idx', style: { color: i < 3 ? '#f56c6c' : '#909399' } }, String(i + 1)),
+            h('span', { class: 'rank-idx' }, String(i + 1)),
             h('span', { class: 'rank-name' }, r.name),
-            h('div', { class: 'rank-bar-wrap' }, [h('div', { class: 'rank-bar', style: { width: Math.min(100, r.value) + '%' } })]),
+            h('div', { class: 'rank-bar-wrap' }, [h('div', { class: ['rank-bar', r.value >= 80 ? 'hot' : ''], style: { width: Math.min(100, r.value) + '%' } })]),
             h('span', { class: 'rank-value' }, r.value.toFixed(1) + props.unit),
           ]),
         ),
@@ -209,18 +210,8 @@ onMounted(load)
 .page-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 .stat-card { cursor: default; }
 .stat-inner { display: flex; align-items: center; gap: 14px; }
-.stat-value { font-size: 26px; font-weight: 600; color: #303133; }
-.stat-label { font-size: 13px; color: #909399; }
+.stat-value { font-family: var(--kc-font-display); font-size: 28px; font-weight: 800; letter-spacing: -0.035em; color: var(--kc-ink); }
+.stat-label { font-size: 13px; color: var(--kc-mute); }
 .pv-rank-card :deep(.rank-list) { max-height: 120px; }
-.pv-tip { font-size: 13px; color: #c0c4cc; vertical-align: -2px; margin-left: 4px; cursor: help; }
-</style>
-
-<style>
-.rank-list { max-height: 400px; overflow-y: auto; }
-.rank-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
-.rank-idx { width: 20px; font-weight: 600; flex-shrink: 0; }
-.rank-name { width: 160px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
-.rank-bar-wrap { flex: 1; background: #f0f2f5; border-radius: 3px; height: 8px; min-width: 40px; }
-.rank-bar { height: 8px; border-radius: 3px; background: linear-gradient(90deg, #2fbf71, #00aa55); }
-.rank-value { width: 64px; text-align: right; font-size: 13px; color: #606266; flex-shrink: 0; }
+.pv-tip { font-size: 13px; color: var(--kc-mute); vertical-align: -2px; margin-left: 4px; cursor: help; }
 </style>

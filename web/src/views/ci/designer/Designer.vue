@@ -106,7 +106,7 @@
           </template>
         </el-table-column>
         <el-table-column label="最近错误" min-width="140" show-overflow-tooltip>
-          <template #default="{ row }"><span :style="{ color: row.lastError ? '#f56c6c' : '' }">{{ row.lastError || '—' }}</span></template>
+          <template #default="{ row }"><span :style="{ color: row.lastError ? 'var(--kc-crit-text)' : '' }">{{ row.lastError || '—' }}</span></template>
         </el-table-column>
         <el-table-column label="操作" width="70" align="center">
           <template #default="{ row }">
@@ -551,17 +551,17 @@ function goBack() {
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
 .t-title { font-weight: 700; margin-right: 4px; }
 .body { display: flex; flex: 1; min-height: 0; gap: 8px; }
-.canvas-box { flex: 1; border: 1px solid #ebeef5; border-radius: 8px; overflow: hidden; }
+.canvas-box { flex: 1; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; overflow: hidden; }
 .footer { margin-top: 8px; display: flex; gap: 8px; }
 .yaml-box {
-  flex: 1; margin: 0; background: #fafafa; padding: 8px; border-radius: 8px;
+  flex: 1; margin: 0; background: var(--kc-surface-2); padding: 8px; border-radius: 8px;
   max-height: 160px; overflow: auto; font-size: 13px; white-space: pre-wrap; word-break: break-all;
 }
-.err-box { width: 280px; background: #fef0f0; padding: 8px; border-radius: 8px; max-height: 160px; overflow: auto; }
-.err-line { color: #cf1322; font-size: 13px; }
-.run-tip { margin-bottom: 10px; color: #606266; font-size: 13px; }
-.run-err { margin-top: 8px; color: #e6a23c; font-size: 13px; }
-.dup-tip { font-size: 13px; color: #909399; margin-bottom: 12px; }
+.err-box { width: 280px; background: var(--kc-tint-coral); padding: 8px; border-radius: 8px; max-height: 160px; overflow: auto; }
+.err-line { color: var(--kc-crit-text); font-size: 13px; }
+.run-tip { margin-bottom: 10px; color: var(--el-text-color-regular); font-size: 13px; }
+.run-err { margin-top: 8px; color: var(--el-color-warning); font-size: 13px; }
+.dup-tip { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 12px; }
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
-.cfg-tip { color: #909399; font-size: 13px; }
+.cfg-tip { color: var(--el-text-color-secondary); font-size: 13px; }
 </style>

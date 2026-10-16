@@ -73,7 +73,7 @@
           <el-table-column prop="name" label="组名" min-width="160" />
           <el-table-column prop="description" label="描述" min-width="220" />
           <el-table-column prop="users" label="成员数" width="90" align="center" />
-          <el-table-column label="操作" width="140" fixed="right">
+          <el-table-column label="操作" width="80" fixed="right">
             <template #default="{ row }">
               <el-button size="small" text type="danger" @click="removeGroup(row)">删除</el-button>
             </template>

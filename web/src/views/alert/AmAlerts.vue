@@ -303,20 +303,20 @@ onMounted(load)
 
 <style scoped>
 .empty-actions { display: flex; align-items: center; gap: 12px; }
-.muted { color: #c0c4cc; }
+.muted { color: var(--el-text-color-disabled); }
 .sub { font-size: 13px; margin-top: 2px; }
 .stat-card { text-align: center; }
 .stat-num { font-size: 30px; font-weight: 700; line-height: 1.2; }
-.stat-num.danger { color: #f56c6c; }
-.stat-num.warning { color: #e6a23c; }
-.stat-label { color: #909399; font-size: 13px; margin-top: 6px; }
-.stat-card.stat-firing { border-color: #f56c6c; }
+.stat-num.danger { color: var(--el-color-danger); }
+.stat-num.warning { color: var(--el-color-warning); }
+.stat-label { color: var(--el-text-color-secondary); font-size: 13px; margin-top: 6px; }
+.stat-card.stat-firing { border-color: var(--el-color-danger); }
 .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 .header-left { display: flex; align-items: center; gap: 12px; }
 .header-right { display: flex; align-items: center; flex-wrap: wrap; }
 .eval-tag { margin-left: 4px; }
 .alert-name { font-weight: 600; display: flex; align-items: center; gap: 6px; }
-.fire-icon { color: #f56c6c; }
+.fire-icon { color: var(--el-color-danger); }
 .matcher-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 8px; }
 .pager { margin-top: 14px; display: flex; justify-content: flex-end; }
 </style>

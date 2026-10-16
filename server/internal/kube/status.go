@@ -1,6 +1,7 @@
 package kube
 
 import (
+	"fmt"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -77,16 +78,43 @@ type ContainerStatusInfo struct {
 	State        string `json:"state"` // Running | Waiting | Terminated
 	Reason       string `json:"reason"`
 	Message      string `json:"message"`
+	// spec 侧补充（Pod 详情的容器卡片用；其他列表场景为空不序列化）
+	ImagePullPolicy string   `json:"imagePullPolicy,omitempty"`
+	Ports           []string `json:"ports,omitempty"`     // 如 "9080/TCP(http)"
+	StartedAt       string   `json:"startedAt,omitempty"` // 运行/终止的起止时间
+}
+
+// containerSpecIndex 按容器名索引 spec 的拉取策略与端口
+func containerSpecIndex(containers []corev1.Container) map[string]ContainerStatusInfo {
+	idx := make(map[string]ContainerStatusInfo, len(containers))
+	for _, c := range containers {
+		var ports []string
+		for _, p := range c.Ports {
+			label := fmt.Sprintf("%d/%s", p.ContainerPort, p.Protocol)
+			if p.Name != "" {
+				label += "(" + p.Name + ")"
+			}
+			ports = append(ports, label)
+		}
+		idx[c.Name] = ContainerStatusInfo{ImagePullPolicy: string(c.ImagePullPolicy), Ports: ports}
+	}
+	return idx
 }
 
 // ContainerStatuses 计算容器状态列表（含未启动的 Init 容器之外的普通容器）
 func ContainerStatuses(pod *corev1.Pod) []ContainerStatusInfo {
+	specIdx := containerSpecIndex(pod.Spec.Containers)
 	statuses := make([]ContainerStatusInfo, 0, len(pod.Status.ContainerStatuses))
 	for _, cs := range pod.Status.ContainerStatuses {
 		s := ContainerStatusInfo{Name: cs.Name, Image: cs.Image, Ready: cs.Ready, RestartCount: cs.RestartCount}
+		if spec, ok := specIdx[cs.Name]; ok {
+			s.ImagePullPolicy = spec.ImagePullPolicy
+			s.Ports = spec.Ports
+		}
 		switch {
 		case cs.State.Running != nil:
 			s.State = "Running"
+			s.StartedAt = cs.State.Running.StartedAt.Format("2006-01-02 15:04:05")
 		case cs.State.Waiting != nil:
 			s.State = "Waiting"
 			s.Reason = cs.State.Waiting.Reason
@@ -95,6 +123,7 @@ func ContainerStatuses(pod *corev1.Pod) []ContainerStatusInfo {
 			s.State = "Terminated"
 			s.Reason = cs.State.Terminated.Reason
 			s.Message = cs.State.Terminated.Message
+			s.StartedAt = cs.State.Terminated.FinishedAt.Format("2006-01-02 15:04:05")
 		}
 		statuses = append(statuses, s)
 	}

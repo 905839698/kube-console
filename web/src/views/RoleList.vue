@@ -42,7 +42,7 @@
           <span v-else class="hint">跟随 K8s 内置 ClusterRole</span>
         </template>
       </el-table-column>
-      <el-table-column v-if="userStore.isAdmin" label="操作" width="130" fixed="right">
+      <el-table-column v-if="userStore.isAdmin" label="操作" width="118" fixed="right">
         <template #default="{ row }">
           <template v-if="!row.builtin">
             <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
@@ -274,5 +274,5 @@ onMounted(async () => {
 
 <style scoped>
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
-.hint { color: #909399; font-size: 13px; }
+.hint { color: var(--el-text-color-secondary); font-size: 13px; }
 </style>

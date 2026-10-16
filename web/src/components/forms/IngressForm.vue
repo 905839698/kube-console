@@ -150,7 +150,7 @@ function addTls() {
 </script>
 
 <style scoped>
-.rule-card { border: 1px solid #e4e7ed; border-radius: 6px; padding: 12px; width: 100%; margin-bottom: 8px; }
+.rule-card { border: 1px solid var(--el-border-color-light); border-radius: 6px; padding: 12px; width: 100%; margin-bottom: 8px; }
 .rule-header { display: flex; justify-content: space-between; margin-bottom: 8px; font-weight: 600; }
 .kv-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
 </style>

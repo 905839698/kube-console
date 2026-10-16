@@ -54,7 +54,7 @@
       <el-table-column prop="createdAt" label="创建" width="160" />
       <el-table-column prop="completedAt" label="完成" width="160" />
       <el-table-column prop="expiration" label="过期" width="160" />
-      <el-table-column label="操作" width="130" fixed="right">
+      <el-table-column label="操作" width="118" fixed="right">
         <template #default="{ row }">
           <el-button size="small" text type="primary" @click="showDetail(row)">详情</el-button>
           <el-button size="small" text type="danger" :disabled="!writable" @click="delBackup(row)">删除</el-button>
@@ -388,9 +388,9 @@ async function delBackup(row: KBBackupView) {
 
 <style scoped>
 .ops-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.tip { font-size: 13px; color: #909399; }
+.tip { font-size: 13px; color: var(--el-text-color-secondary); }
 .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
 .sec-title { font-weight: 600; margin: 14px 0 6px; font-size: 13px; }
 .sched-line { display: flex; align-items: center; gap: 6px; line-height: 22px; }
-.err-box { background: #fef0f0; color: #c45656; padding: 8px 10px; border-radius: 4px; font-size: 13px; white-space: pre-wrap; }
+.err-box { background: var(--kc-tint-coral); color: var(--kc-crit-text); padding: 8px 10px; border-radius: 4px; font-size: 13px; white-space: pre-wrap; }
 </style>
